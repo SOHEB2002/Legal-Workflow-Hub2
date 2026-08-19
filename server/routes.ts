@@ -92,6 +92,9 @@ import {
   CollectionTaskTitlePrefix,
   ExecutionTaskTitlePrefix,
   getReopenTargetStages,
+  AdminCaseSubType,
+  GrievanceNumberUnavailable,
+  adminTrackSchema,
   stageNumberRequirement,
   reopenCaseSchema,
   recordJudgmentDeedSchema,
@@ -9075,6 +9078,137 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating violation details:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث تفاصيل المخالفة" });
+    }
+  });
+
+  // ==================== POST /api/cases/:id/admin-track ====================
+  // The «مسار التظلم» / «مسار الدعوى» choice, made once at استلام. Writes
+  // admin_case_sub_type — which is what getStagesForClassification's إداري arm
+  // routes on — and, for the lawsuit track, the التظلم وجوبي answer plus the
+  // objection number/date the lawyer has to hand.
+  //
+  // 🔴 IT DOES NOT TOUCH currentStage, AND THAT IS THE POINT. Choosing a track
+  // says which path the case is on, not that it has moved along it. The case
+  // stays at استلام and then advances by the ordinary «المرحلة التالية» /
+  // «تجاوز الاستكمال» controls — which start working the instant the track is
+  // set, with no code here, because the path stops resolving to
+  // AdminUnroutedStages (["استلام"]): canGoNext is `currentIndex < length - 1`
+  // and canSkip tests `stagesOrder[currentIndex + 1] === "استكمال_البيانات"`,
+  // and both become true on their own.
+  //
+  // A DEDICATED ENDPOINT rather than the generic PATCH, for three reasons that
+  // each matter on their own: PATCH's gate is canModifyCase, which admits
+  // cases_review_head, consultations_review_head and viewer UNCONDITIONALLY —
+  // wider than the owner's tier for admin work; PATCH writes no activity row, and
+  // the choice has to be auditable; and the لا/نعم answer writes three columns
+  // that must land together or not at all.
+  //
+  // GATE = canEditCaseViolationDetails — branch_manager | admin_support |
+  // own-dept department_head | assigned lawyer. Reused rather than cloned because
+  // this IS the same authority as the violation panel: both are "record the
+  // administrative facts of an إداري case", and the two objection fields written
+  // here are literally the panel's own columns.
+  app.post("/api/cases/:id/admin-track", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      // Department first, then permission — the /violation-details and /mohr
+      // ordering, so a non-admin case reports "wrong kind of case" rather than
+      // "no permission".
+      const department = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      if (department?.name !== "إداري") {
+        return res.status(400).json({ error: "تحديد المسار متاح فقط لقضايا القسم الإداري" });
+      }
+      if (!canEditCaseViolationDetails(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتحديد مسار القضية" });
+      }
+
+      const bodyCheck = adminTrackSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      // The choice is made ONCE, at استلام, on a case that has no track yet.
+      // Re-routing a case that has already moved is a different action with a
+      // different hazard (it would strand the case off its new path — the exact
+      // trap the skip-data-completion fix closed), so it is refused here rather
+      // than quietly allowed. The edit dialog can still change the column; see
+      // the report.
+      if (lawCase.currentStage !== "استلام") {
+        return res.status(400).json({ error: "تحديد المسار متاح فقط في مرحلة الاستلام" });
+      }
+      if (String(lawCase.adminCaseSubType || "").trim()) {
+        return res.status(400).json({ error: "مسار هذه القضية محدد بالفعل" });
+      }
+
+      const track = String(req.body.track || "").trim();
+      if (track !== AdminCaseSubType.GRIEVANCE && track !== AdminCaseSubType.CASE) {
+        return res.status(400).json({ error: "المسار غير صحيح — اختر «مسار التظلم» أو «مسار الدعوى»" });
+      }
+
+      const update: Partial<LawCase> = { adminCaseSubType: track };
+      let logDetail = "";
+
+      if (track === AdminCaseSubType.CASE) {
+        // التظلم وجوبي؟ — a REQUIRED tri-state on the wire, not a checkbox. The
+        // judgment-lifecycle lesson (aa1e5c3): a boolean cannot distinguish "the
+        // lawyer answered no" from "the lawyer did not answer", and that
+        // ambiguity is what produced dead-end cases. Absent → refuse.
+        if (typeof req.body.grievanceRequired !== "boolean") {
+          return res.status(400).json({ error: "حدد ما إذا كان التظلم وجوبياً" });
+        }
+        const grievanceRequired = req.body.grievanceRequired === true;
+        update.grievanceRequired = grievanceRequired;
+
+        if (grievanceRequired) {
+          // 🔴 BLANK IS REFUSED; «غير متوفرة» IS ACCEPTED. The owner's escape
+          // hatch is TYPING that the number is unavailable, which is a recorded
+          // fact, not leaving the field empty, which is indistinguishable from
+          // "the lawyer skipped the question". The date is then required only
+          // when a real number was given — a lawyer who does not have the number
+          // does not have its date either.
+          const number = String(req.body.grievanceNumber || "").trim();
+          if (!number) {
+            return res.status(400).json({
+              error: `أدخل رقم الاعتراض، أو اكتب «${GrievanceNumberUnavailable}» إذا لم يكن متاحاً`,
+            });
+          }
+          const date = String(req.body.grievanceDate || "").trim();
+          if (number !== GrievanceNumberUnavailable && !date) {
+            return res.status(400).json({ error: "أدخل تاريخ الاعتراض" });
+          }
+          update.grievanceNumber = number;
+          if (date) update.grievanceDate = date;
+          logDetail = ` — التظلم وجوبي، رقم الاعتراض: ${number}${date ? `، بتاريخ ${date}` : ""}`;
+        } else {
+          logDetail = " — التظلم غير وجوبي";
+        }
+      }
+
+      const updated = await storage.updateCase(lawCase.id, update);
+      if (!updated) return res.status(500).json({ error: "فشل تحديث القضية" });
+
+      // action_type is free text — no migration.
+      try {
+        await logCaseActivityActing(req, {
+          caseId: lawCase.id,
+          userId: user.id,
+          userName: user.name || user.id,
+          actionType: "admin_track_selected",
+          title: `تحديد مسار القضية الإدارية: ${track === AdminCaseSubType.GRIEVANCE ? "مسار التظلم" : "مسار الدعوى"}${logDetail}`,
+        });
+      } catch (e) {
+        console.error("[cases/admin-track] activity log failed", e);
+      }
+
+      res.json(updated);
+    } catch (error) {
+      console.error("Error selecting admin track:", error);
+      res.status(500).json({ error: "حدث خطأ في تحديد مسار القضية" });
     }
   });
 

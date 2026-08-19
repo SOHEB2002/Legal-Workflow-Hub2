@@ -6822,6 +6822,31 @@ export const updateViolationDetailsSchema = z.object({
   violationAmount: z.string().nullable().optional(),
 }).passthrough();
 
+// ==================== POST /api/cases/:id/admin-track ====================
+// The «مسار التظلم» / «مسار الدعوى» choice made at استلام. Tolerant like every
+// other workflow schema here — the handler owns the Arabic refusals.
+//
+// ⚠ AdminCaseSubType ALREADY EXISTS (search «أنواع القضايا الإدارية» above) with
+// members GRIEVANCE = "تظلم" and CASE = "قضية" — the same two values
+// getStagesForClassification's إداري arm routes on, and the same two the edit
+// dialog's Select has always offered. It is REUSED here rather than redeclared;
+// a second enum with a renamed member would be two names for one concept, which
+// is the trap this file already pays for elsewhere.
+
+// The sentinel a lawyer types into رقم الاعتراض when the objection exists but its
+// number has not reached him yet. Shared so the client's hint, the server's
+// "then the date is not required either" rule and any future reader agree on the
+// exact string — a near-miss like "غير متوفر" would silently be treated as a
+// real number.
+export const GrievanceNumberUnavailable = "غير متوفرة";
+
+export const adminTrackSchema = z.object({
+  track: z.string(),
+  grievanceRequired: z.boolean().optional(),
+  grievanceNumber: z.string().nullable().optional(),
+  grievanceDate: z.string().nullable().optional(),
+}).passthrough();
+
 // POST /api/cases/:id/appeal-ruling — the APPEAL COURT'S ruling on a case at
 // منظورة_استئناف.
 //

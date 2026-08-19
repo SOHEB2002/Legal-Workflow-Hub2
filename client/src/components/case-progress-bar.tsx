@@ -16,6 +16,10 @@ import {
 import { hasEffectiveRole, type ActingIdentity } from "@/lib/acting-identities";
 import { useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
+import { AdminCaseSubType, GrievanceNumberUnavailable } from "@shared/schema";
 
 // ==================== TERMINAL / OFF-PATH STAGE DISPLAY ====================
 // None of the terminal stages belongs to ANY array returned by
@@ -66,6 +70,14 @@ interface CaseProgressBarProps {
   onMoveToNext: (notes: string, internalReviewerId?: string, reviewDecision?: string, extraFields?: Record<string, unknown>, explicitTargetStage?: string) => void;
   onMoveToPrevious: (notes: string, internalReviewerId?: string) => void;
   onSkipDataCompletion?: (notes: string) => void;
+  // The «مسار التظلم» / «مسار الدعوى» choice. POSTs /admin-track, which writes the
+  // sub-type (and the لا/نعم answer) WITHOUT moving the stage.
+  onChooseAdminTrack?: (payload: {
+    track: string;
+    grievanceRequired?: boolean;
+    grievanceNumber?: string;
+    grievanceDate?: string;
+  }) => void;
   onInternalReviewSendBack?: (notes: string) => void;
   onReturnToCommittee?: (notes: string) => void;
   // Committee-review (إحالة_للجنة_المراجعة) decisions, surfaced here so the
@@ -151,6 +163,7 @@ export function CaseProgressBar({
   onMoveToNext,
   onMoveToPrevious,
   onSkipDataCompletion,
+  onChooseAdminTrack,
   onInternalReviewSendBack,
   onReturnToCommittee,
   onReviewCommitteeApprove,
@@ -190,6 +203,14 @@ export function CaseProgressBar({
   const userRole = (typeof userRoleRaw === "string" ? userRoleRaw.trim() : userRoleRaw) as UserRoleType;
   const [notes, setNotes] = useState("");
   const [skipNotes, setSkipNotes] = useState("");
+  // مسار الدعوى dialog. grievanceObligatory is a TRI-STATE ("" = unanswered), not
+  // a boolean — the aa1e5c3 lesson: a checkbox cannot tell "the lawyer answered
+  // no" from "the lawyer did not answer", and the confirm button stays disabled
+  // until it is genuinely answered.
+  const [lawsuitTrackOpen, setLawsuitTrackOpen] = useState(false);
+  const [grievanceObligatory, setGrievanceObligatory] = useState<"" | "نعم" | "لا">("");
+  const [objectionNumber, setObjectionNumber] = useState("");
+  const [objectionDate, setObjectionDate] = useState("");
   const [selectedReviewerId, setSelectedReviewerId] = useState("");
   const [sendBackNotes, setSendBackNotes] = useState("");
   const [platformNumber, setPlatformNumber] = useState("");
@@ -378,6 +399,25 @@ export function CaseProgressBar({
   const isAtReception = normalizedStage === "استلام";
   const nextStageIsDataCompletion = stagesOrder[currentIndex + 1] === "استكمال_البيانات";
   const canSkip = isAtReception && nextStageIsDataCompletion && !!onSkipDataCompletion && !disabled;
+
+  // 🔴 THE TRACK CHOICE — إداري + استلام + no track yet. All three terms matter:
+  // the department (this is an إداري-only question), the stage (the choice is
+  // made once, at intake — the endpoint enforces the same), and the EMPTY
+  // sub-type, which is what makes the buttons disappear the moment one is
+  // pressed. Nothing hides them explicitly; the case simply stops matching.
+  //
+  // And the ordinary controls take over on their own, with no code here: an
+  // unrouted admin case resolves to AdminUnroutedStages (["استلام"]), so
+  // canGoNext (`currentIndex < length - 1`) is false and nextStageIsDataCompletion
+  // is false, hiding «المرحلة التالية» and «تجاوز الاستكمال». The instant the
+  // track is set the path re-resolves to a 6- or 9-stage array and both become
+  // true — which is exactly "after the choice, استلام behaves like any other".
+  const needsAdminTrack =
+    isAtReception
+    && departmentName === "إداري"
+    && !String(adminCaseSubType || "").trim()
+    && !!onChooseAdminTrack
+    && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
     if (terminalState) {
@@ -1392,6 +1432,146 @@ export function CaseProgressBar({
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+        )}
+
+        {/* ==================== إداري — THE TRACK CHOICE ====================
+            Sits in the SAME action row as «المرحلة التالية» and «تجاوز
+            الاستكمال», which is where every other stage decision on this bar is
+            made (the مداولة_الصلح outcome pair is the closest precedent: two
+            buttons, one of them opening a dialog that asks a follow-up question
+            before committing). No new surface. */}
+        {needsAdminTrack && (
+          <>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="default" size="sm" data-testid="button-admin-track-grievance">
+                  مسار التظلم
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>مسار التظلم</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    ستسلك القضية مسار التظلم: استلام ← استكمال البيانات ← تحرير صيغة التظلم
+                    ← مراجعة داخلية ← جاهزة للرفع ← مقفلة. لن تتحرك المرحلة الآن — تبقى القضية
+                    في الاستلام وتتقدّم بالأزرار المعتادة.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => onChooseAdminTrack!({ track: AdminCaseSubType.GRIEVANCE })}
+                    data-testid="button-admin-track-grievance-confirm"
+                  >
+                    تأكيد
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={lawsuitTrackOpen} onOpenChange={setLawsuitTrackOpen}>
+              <AlertDialogTrigger asChild>
+                <Button variant="default" size="sm" data-testid="button-admin-track-case">
+                  مسار الدعوى
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>مسار الدعوى</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    ستسلك القضية مسار الدعوى حتى «منظورة». لن تتحرك المرحلة الآن.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+
+                <div className="space-y-3" dir="rtl">
+                  <div className="space-y-1">
+                    <Label>التظلم وجوبي؟</Label>
+                    <div className="flex gap-2">
+                      {(["نعم", "لا"] as const).map((answer) => (
+                        <Button
+                          key={answer}
+                          type="button"
+                          variant={grievanceObligatory === answer ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setGrievanceObligatory(answer)}
+                          data-testid={`button-grievance-obligatory-${answer === "نعم" ? "yes" : "no"}`}
+                        >
+                          {answer}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {grievanceObligatory === "نعم" && (
+                    <>
+                      <div className="space-y-1">
+                        <Label>رقم الاعتراض</Label>
+                        <Input
+                          value={objectionNumber}
+                          onChange={(e) => setObjectionNumber(e.target.value)}
+                          placeholder={`اكتب «${GrievanceNumberUnavailable}» إذا لم يكن الرقم متاحاً`}
+                          data-testid="input-admin-track-grievance-number"
+                        />
+                      </div>
+                      {/* Asked only when a REAL number was given: a lawyer who
+                          does not have the number does not have its date either.
+                          Mirrors the server rule exactly. */}
+                      {objectionNumber.trim() !== GrievanceNumberUnavailable && (
+                        <div className="space-y-1">
+                          <Label>تاريخ الاعتراض</Label>
+                          <HijriDatePicker
+                            value={objectionDate}
+                            onChange={setObjectionDate}
+                            data-testid="input-admin-track-grievance-date"
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {grievanceObligatory === "لا" && (
+                    <p className="text-xs text-muted-foreground">
+                      ستظهر حقول الاعتراض بعلامة «التظلم غير وجوبي» وتبقى قابلة للتعديل — يمكن
+                      تسجيل تظلم لاحقاً إن وُجد.
+                    </p>
+                  )}
+                </div>
+
+                <AlertDialogFooter>
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <Button
+                    // Client mirror of the server's three refusals, so the button
+                    // is disabled rather than clicked-then-400'd: the question
+                    // must be answered; with نعم the number is mandatory (blank
+                    // is NOT the "unavailable" answer — typing «غير متوفرة» is);
+                    // and the date is mandatory unless the number says otherwise.
+                    disabled={
+                      grievanceObligatory === ""
+                      || (grievanceObligatory === "نعم" && !objectionNumber.trim())
+                      || (grievanceObligatory === "نعم"
+                        && objectionNumber.trim() !== GrievanceNumberUnavailable
+                        && !objectionDate.trim())
+                    }
+                    onClick={() => {
+                      onChooseAdminTrack!({
+                        track: AdminCaseSubType.CASE,
+                        grievanceRequired: grievanceObligatory === "نعم",
+                        grievanceNumber: objectionNumber.trim() || undefined,
+                        grievanceDate: objectionDate.trim() || undefined,
+                      });
+                      setLawsuitTrackOpen(false);
+                      setGrievanceObligatory("");
+                      setObjectionNumber("");
+                      setObjectionDate("");
+                    }}
+                    data-testid="button-admin-track-case-confirm"
+                  >
+                    تأكيد
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </>
         )}
 
         {canSkip && (

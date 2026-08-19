@@ -404,6 +404,36 @@ export function CaseStagePanel({
           }
         } : undefined
       }
+      // 🔴 GATE MIRRORS THE SERVER'S canEditCaseViolationDetails EXACTLY —
+      // branch_manager | admin_support | own-dept department_head | assigned
+      // lawyer, delegation-aware through actingIdentities. Same shape as the
+      // skip mirror directly below, so visibility === authorization and the
+      // buttons can never render for someone the endpoint will 403.
+      onChooseAdminTrack={
+        user && (
+          hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") ||
+          isDeptHeadFor(actingIdentities, caseItem.departmentId) ||
+          anyIdentity(actingIdentities, (_r, id) =>
+            caseItem.primaryLawyerId === id ||
+            caseItem.responsibleLawyerId === id ||
+            (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(id)))
+        ) ? async (payload) => {
+          setStageTransitioning(true);
+          try {
+            await apiRequest("POST", `/api/cases/${caseItem.id}/admin-track`, payload);
+            toast({
+              title: "تم تحديد مسار القضية",
+              description: "بقيت القضية في مرحلة الاستلام — تابع بالأزرار المعتادة",
+            });
+            await refreshCases();
+            onChanged?.();
+          } catch (err) {
+            toast({ title: "تعذّر تحديد المسار", description: extractApiError(err), variant: "destructive" });
+          } finally {
+            setStageTransitioning(false);
+          }
+        } : undefined
+      }
       onSkipDataCompletion={
         // Delegation-aware as of the server batch: POST /api/cases/:id/skip-data-completion
         // now resolves through canActOnCaseWorkflowState(…, req.actingContext),
