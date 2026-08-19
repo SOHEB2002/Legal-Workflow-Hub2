@@ -6082,6 +6082,65 @@ export function isFirmFuture(day: string | null | undefined): boolean {
   return !!d && d > firmToday();
 }
 
+// ==================== "الجلسة القادمة" — ONE DEFINITION ====================
+// 🔴 THIS IS THE ONLY DEFINITION OF "UPCOMING HEARING" IN THE CODEBASE, AND IT
+// LIVES HERE SO IT CANNOT DRIFT. It has two consumers that MUST agree:
+//   • the CLIENT sort — cases.tsx buildNextHearingRanks (eb70ea0);
+//   • the SERVER recompute — recomputeCaseNextHearingDate (routes.ts), which
+//     maintains the stored law_cases.next_hearing_date column.
+// If those two ever disagreed, the list's ORDER and every surface reading the
+// COLUMN would contradict each other with nothing on screen to explain it —
+// invisible by construction, because each looks self-consistent. A shared
+// constant or a pair of matching comments would not have been enough: the rule
+// is three clauses, and any of them could be edited on one side only. It is
+// expressed ONCE, as a function, and both sides call it.
+//
+// THE THREE CLAUSES, each load-bearing:
+//   • NOT CANCELLED — a ملغية session is not going to happen;
+//   • NO RESULT RECORDED — a resulted session has already happened, even if it
+//     is dated today. Any continuation exists as its OWN hearing row with its
+//     own date, which the scan picks up instead;
+//   • DATE >= TODAY IN THE FIRM'S CALENDAR — owner ruling: a hearing TODAY
+//     counts as upcoming.
+// Hearing TYPE is deliberately NOT filtered: تراضي / تسوية_ودية are sessions the
+// firm attends and diarises like any other. (The ضبط rules exempt them because
+// those sessions issue no minutes — a different question from "is it upcoming".)
+//
+// 🔴 THE COMPARISON IS LEXICOGRAPHIC, NEVER `new Date(day)`. hearing_date is a
+// stored calendar day in "YYYY-MM-DD" and firmToday() is the same shape resolved
+// through Intl at Asia/Riyadh, so string >= IS the calendar comparison and no
+// timezone can shift it. Parsing would make it UTC midnight — the documented
+// date-boundary bug class (60a4d79).
+
+/** The only fields the upcoming-hearing rule reads. Structural on purpose, so
+ *  both the client's enriched hearing rows and the server's plain ones fit. */
+export type UpcomingHearingCandidate = Pick<Hearing, "hearingDate" | "status" | "result">;
+
+/** True when a hearing is a session still ahead of the firm. `today` is passed
+ *  in (not read here) so one scan resolves the day ONCE and every row in it is
+ *  judged against the same boundary. */
+export function isUpcomingHearing(h: UpcomingHearingCandidate, today: string): boolean {
+  if (h.status === HearingStatus.CANCELLED) return false;
+  if (String(h.result || "").trim()) return false;
+  const day = String(h.hearingDate || "").trim();
+  return !!day && day >= today;
+}
+
+/** The soonest upcoming session's "YYYY-MM-DD", or null when there is none.
+ *  This is exactly what law_cases.next_hearing_date is supposed to hold. */
+export function nearestUpcomingHearingDate(
+  hearings: UpcomingHearingCandidate[],
+  today: string = firmToday(),
+): string | null {
+  let nearest: string | null = null;
+  for (const h of hearings) {
+    if (!isUpcomingHearing(h, today)) continue;
+    const day = String(h.hearingDate).trim();
+    if (!nearest || day < nearest) nearest = day;
+  }
+  return nearest;
+}
+
 // The offset Asia/Riyadh was running at a given instant, in milliseconds.
 // Derived from Intl rather than hard-coded to +03:00 so this stays correct if
 // the zone's rules ever change — the same reason firmToday goes through Intl
