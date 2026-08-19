@@ -5042,19 +5042,65 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // ==================== UNASSIGNED-WORK OWNERSHIP ====================
+    // 🔴 A DEPARTMENT MAY HAVE MORE THAN ONE HEAD, AND ALL OF THEM OWN THE WORK.
+    // The map used to be Map<deptId, headId> filled with `.set` in a loop, so the
+    // LAST row of an unordered query silently overwrote every earlier head: a
+    // department with two heads had exactly one owner, picked arbitrarily (heap
+    // order, so it could even change when the winning head's profile was edited).
+    // The second head saw those rows only as somebody else's work, filed under
+    // his co-head's roster card. Production hit this on عمالي.
+    //
+    // 🔴 WHY THIS IS RESOLVED PER VIEWER AND NOT BY EMITTING ONE ROW PER HEAD:
+    // the task id is `case_unassigned:<recordId>`, and getMyTasks dedupes on
+    // exactly that id (`byId`). Pushing one row per head would collapse back to a
+    // single row and change nothing. computeTasksForIdentity already runs ONCE
+    // PER VIEWER, so "every head sees it as his own" is expressed by resolving
+    // ownership relative to the viewer — which is what ownerFor does.
+    const deptHeadsByDept = new Map<string, string[]>();
+
+    // Who an unassigned record in `deptId` files under, FROM THIS VIEWER'S SEAT.
+    // Returns null when the department has no active head — the caller skips the
+    // row, exactly as before (dormant, reappears once a head is appointed).
+    //
+    // THE THREE CASES, and why the middle one is written the way it is:
+    //   • The viewer IS one of that department's heads → himself. scopeOf then
+    //     stamps "self", so EVERY head of the department gets the row as his own
+    //     work, in his own region — and, because it is "self" for him, it is
+    //     never "team", so a head never appears inside his co-head's roster card
+    //     as though he were a subordinate.
+    //   • Exactly ONE head and the viewer is not him → that head. This is
+    //     BYTE-IDENTICAL to the previous behaviour and is why every department
+    //     but عمالي sees no change at all: a firm-wide viewer still finds the row
+    //     under the one head's roster card.
+    //   • SEVERAL heads and the viewer is not one of them → "" — the UNASSIGNED
+    //     POOL, an existing first-class owner the client already renders as its
+    //     own card at the top of the team region (my-tasks.tsx: teamByMember
+    //     .get(""), and leftoverMembers explicitly skips ""). Attributing shared
+    //     work to one arbitrarily chosen head is the bug being fixed here, so it
+    //     is not re-created for the manager's view; the pool says what is true,
+    //     which is that the record belongs to the department, not to a person.
+    const ownerForUnassigned = (deptId: string | null | undefined): string | null => {
+      const headIds = deptId ? deptHeadsByDept.get(deptId) : undefined;
+      if (!headIds || headIds.length === 0) return null;
+      if (headIds.includes(uid)) return uid;
+      return headIds.length === 1 ? headIds[0] : "";
+    };
+
     // ---- 2. case_unassigned — unassigned case in dept (dept_head assigns) ----
     if (teamScoped) {
-      // Resolve each department's head so an unassigned case files UNDER that
-      // head (ownerScope via scopeOf): for a dept_head viewer the head is
-      // himself → "self" (byte-identical to before); for the firm-wide manager
-      // it's the case-dept's head → "team". A department with NO active head
-      // emits NO task — it stays dormant and reappears on that head's own
-      // getMyTasks run once a head is assigned (single-head enforced in product).
+      // ONE query for all three unassigned blocks. It used to run twice — block
+      // 2b's comment already claimed the lookup was "shared with block 2 … rather
+      // than re-queried", which was not true; now it is.
       const heads = await db.select({ id: users.id, departmentId: users.departmentId })
         .from(users)
         .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
-      const deptHeadByDept = new Map<string, string>();
-      for (const h of heads) if (h.departmentId) deptHeadByDept.set(h.departmentId, h.id);
+      for (const h of heads) {
+        if (!h.departmentId) continue;
+        const list = deptHeadsByDept.get(h.departmentId) ?? [];
+        list.push(h.id);
+        deptHeadsByDept.set(h.departmentId, list);
+      }
       // Paused cases excluded too: ASSIGNING a case is work on it, and a head
       // told to staff a case that was deliberately parked would be acting
       // against the pause decision. It returns to the head's list on lift.
@@ -5073,8 +5119,11 @@ export class DatabaseStorage implements IStorage {
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })
         .from(lawCases).where(unassignedWhere);
       for (const r of rows) {
-        const deptHeadId = r.departmentId ? deptHeadByDept.get(r.departmentId) : undefined;
-        if (!deptHeadId) continue; // no active head → dormant; surfaces when a head is assigned
+        const deptHeadId = ownerForUnassigned(r.departmentId);
+        // null ONLY when the department has no active head → dormant; surfaces
+        // when one is appointed. Note `!deptHeadId` would be wrong here: "" is a
+        // legitimate owner (the shared-heads pool), so the test is on null.
+        if (deptHeadId === null) continue;
         tasks.push({
           id: `case_unassigned:${r.id}`, kind: MyTaskKind.CASE_UNASSIGNED,
           title: `قضية غير مُسندة بحاجة لإسناد — ${r.caseNumber}`,
@@ -5092,7 +5141,9 @@ export class DatabaseStorage implements IStorage {
     //
     // Mirrors block 2 exactly: same head-per-department resolution, same
     // "no active head → stay dormant" rule, same scopeOf ownership. The head
-    // lookup is shared with block 2 via deptHeadFor below rather than re-queried.
+    // lookup IS now genuinely shared with block 2 — both call ownerForUnassigned
+    // over the single deptHeadsByDept map built there. (This comment previously
+    // claimed that and was wrong: the query ran a second time right here.)
     //
     // 🔴 "UNASSIGNED" IS NOT THE SAME TEST AS FOR CASES. A case is unassigned
     // when BOTH lawyer columns are empty (hasNoLawyer). Consultations and
@@ -5112,12 +5163,6 @@ export class DatabaseStorage implements IStorage {
     // consultations as active, so without this a finished consultation would be
     // reported as needing an assignee.
     if (teamScoped) {
-      const heads = await db.select({ id: users.id, departmentId: users.departmentId })
-        .from(users)
-        .where(and(eq(users.role, "department_head"), eq(users.isActive, true)));
-      const deptHeadFor = new Map<string, string>();
-      for (const h of heads) if (h.departmentId) deptHeadFor.set(h.departmentId, h.id);
-
       // NULL *or* "" — see the note above.
       const consultationUnassigned = sql`(${consultations.assignedTo} IS NULL OR ${consultations.assignedTo} = '')`;
       const consultWhere = firmWideScoped
@@ -5130,8 +5175,9 @@ export class DatabaseStorage implements IStorage {
         departmentId: consultations.departmentId,
       }).from(consultations).where(consultWhere);
       for (const r of consultRows) {
-        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
-        if (!deptHeadId) continue; // head-less department → dormant, exactly like block 2
+        const deptHeadId = ownerForUnassigned(r.departmentId);
+        // === null, not falsy — "" is the shared-heads pool, a real owner.
+        if (deptHeadId === null) continue; // head-less department → dormant, exactly like block 2
         tasks.push({
           id: `consultation_unassigned:${r.id}`, kind: MyTaskKind.CONSULTATION_UNASSIGNED,
           title: `استشارة غير مُسندة بحاجة لإسناد — ${r.consultationNumber}`,
@@ -5151,8 +5197,9 @@ export class DatabaseStorage implements IStorage {
         departmentId: contracts.departmentId,
       }).from(contracts).where(contractWhere);
       for (const r of contractRows) {
-        const deptHeadId = r.departmentId ? deptHeadFor.get(r.departmentId) : undefined;
-        if (!deptHeadId) continue;
+        const deptHeadId = ownerForUnassigned(r.departmentId);
+        // === null, not falsy — "" is the shared-heads pool, a real owner.
+        if (deptHeadId === null) continue;
         tasks.push({
           id: `contract_unassigned:${r.id}`, kind: MyTaskKind.CONTRACT_UNASSIGNED,
           title: `عقد غير مُسند بحاجة لإسناد — ${r.contractNumber}`,
