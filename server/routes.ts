@@ -1375,7 +1375,38 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   { from: "بانتظار_رفع_العميل_للتسوية", to: "مداولة_الصلح", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
   { from: "أغلق_طلب_الصلح", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
 
+  // ==================== ADMIN: مسار التظلم (the grievance track) ====================
+  // The three edges the grievance path needs that did not exist. Every other
+  // edge on BOTH new admin paths already existed — the lawsuit track needs ZERO
+  // new edges, because دراسة absorbing تحرير_صحيفة_الدعوى makes it the General
+  // spine with معين in place of ناجز.
+  //
+  // 🔴 THE PERMISSIVENESS EACH ONE INTRODUCES, stated plainly (owner-accepted,
+  // the same trade as dd3d27c / 04062da / 8ab56e3). ALLOWED_CASE_TRANSITIONS is
+  // FLAT and PATH-BLIND: it is keyed on (from, to) alone and never consults the
+  // case's department or track. So each edge below becomes reachable by direct
+  // API for ANY case in ANY department that happens to sit on the `from` stage.
+  // The frontend never offers them — it renders only the case's own resolved
+  // path — so this is an API-only surface. The path guard closes all three at
+  // once when it ships; it is not a prerequisite here.
+  { from: "استكمال_البيانات", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
+  //   ↑ any case at استكمال_البيانات (every path has that stage) could be driven
+  //     onto grievance drafting.
+  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
+  //   ↑ narrow in practice: تحرير_صيغة_التظلم is admin-only, so the only cases
+  //     that can take this edge are already on the grievance track.
+  { from: "مراجعة_داخلية", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
+  //   ↑ the send-back. The widest of the three: مراجعة_داخلية is on every path,
+  //     so any case under internal review could be returned to grievance
+  //     drafting — a stage most of them have no business on.
+
   // ==================== ADMIN PATH (prescription date + grievance) ====================
+  // ⚠ THE FOUR STAGES BELOW LEFT THE PATH ARRAYS AND THEIR EDGES STAY. Nothing
+  // routes through تحديد_تاريخ_التقادم / مراجعة_داخلية_للتظلم / تقديم_التظلم /
+  // انتظار_رد_التظلم any more, so these rules are unreachable from the UI — kept
+  // because a case that historically walked them must still be able to move,
+  // and because removing a rule is how a live workflow breaks silently. Same
+  // rule as the stage VALUES and labels: history keeps working.
   { from: "استلام", to: "تحديد_تاريخ_التقادم", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
@@ -2179,6 +2210,11 @@ function validateStageTransition(
           entityData.clientRole as string | undefined,
           !!entityData.memoRequired,
           !!entityData.isSettlementCase,
+          // The admin track. `entityData` is the case MERGED with the incoming
+          // body (see the note above), so a request that sets the sub-type and
+          // moves the stage in one PATCH resolves against the NEW track — which
+          // is exactly what batch 2's track buttons will send.
+          (entityData.adminCaseSubType as string | null | undefined) ?? null,
         )
       : null;
   const caseCurrentIdx = casePath ? casePath.indexOf(currentStage as CaseStageValue) : -1;
@@ -9052,6 +9088,7 @@ export async function registerRoutes(
         lawCase.clientRole || undefined,
         !!lawCase.memoRequired,
         !!lawCase.isSettlementCase,
+        lawCase.adminCaseSubType,
       );
       if (!allowedTargets.includes(targetStage as CaseStageValue)) {
         return res.status(400).json({ error: "المرحلة المختارة ليست ضمن مسار هذه القضية" });
@@ -12433,6 +12470,7 @@ export async function registerRoutes(
         lawCase.clientRole ?? undefined,
         !!lawCase.memoRequired,
         !!lawCase.isSettlementCase,
+        lawCase.adminCaseSubType,
       ) as string[]);
 
       // 2D'-V2a Pattern-A gate: type check only.
@@ -14224,6 +14262,10 @@ export async function registerRoutes(
           settlementProbeCase.clientRole ?? undefined,
           !!settlementProbeCase.memoRequired,
           !!settlementProbeCase.isSettlementCase,
+          // Passed for correctness rather than effect: neither admin track
+          // contains مداولة_الصلح, so this probe answers false for an admin case
+          // whichever array it resolves to.
+          settlementProbeCase.adminCaseSubType,
         );
         if (!settlementCasePath.includes("مداولة_الصلح")) {
           return res.status(400).json({

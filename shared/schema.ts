@@ -1939,27 +1939,87 @@ export const UnderStudyLaborStages: CaseStageValue[] = [
   "منظورة",
 ];
 
-export const UnderStudyAdminStages: CaseStageValue[] = [
+// ==================== إداري — TWO PATHS, CHOSEN AT استلام ====================
+// 🔴 UnderStudyAdminStages IS GONE, REPLACED BY THE TWO ARRAYS BELOW. The single
+// 15-stage admin path tried to be both tracks at once — it ran the grievance
+// stages and the lawsuit stages in series, so every admin case walked through
+// تحرير_صيغة_التظلم / تقديم_التظلم / انتظار_رد_التظلم on its way to a lawsuit it
+// may never have needed, and the two were never really one workflow.
+//
+// DELETED rather than left in place: it had exactly TWO consumers (the switch
+// arm in getStagesForClassification and the UniversalCaseStages union), both
+// rewritten here, so leaving it would have created a third admin array that
+// resolves for nobody — the PostTrialStages trap, an abandoned first attempt
+// kept alive next to its replacement. Every stage VALUE it named still exists in
+// CaseStagesOrder and CaseStageLabels; this removes an array, not a stage.
+//
+// 🔴 FOUR STAGES ARE DELIBERATELY IN NEITHER ARRAY — تحديد_تاريخ_التقادم,
+// مراجعة_داخلية_للتظلم, تقديم_التظلم, انتظار_رد_التظلم. Their values, labels and
+// existing transition edges ALL STAY, exactly as تحرير did in the consultations
+// merge: a case that historically passed through them still renders its history
+// and its activity log. Being in no path array now also makes them members of
+// UniversalCaseStages below, so they stay filterable — which is what a
+// historical stage needs.
+
+// مسار التظلم — the grievance is the whole matter. Ends at مقفلة: nothing is
+// filed in court, so there is no معين and no منظورة.
+export const AdminGrievanceStages: CaseStageValue[] = [
   "استلام",
-  "تحديد_تاريخ_التقادم",
+  "استكمال_البيانات",
+  "تحرير_صيغة_التظلم",
+  // Plain مراجعة_داخلية, NOT مراجعة_داخلية_للتظلم. The generic stage is treated
+  // as an internal review in nine places (reviewer assignment, the four-eyes
+  // lock, the panel's send-back), and the grievance-specific twin had to be
+  // named in every one of them. Using the generic value inherits all of it.
+  // The send-back target resolves correctly by position: case-stage-panel's
+  // resolveSendBackStage takes stages[indexOf("مراجعة_داخلية") - 1], which is
+  // تحرير_صيغة_التظلم here — the same answer the hard-coded branch gave.
+  "مراجعة_داخلية",
+  "جاهزة_للرفع",
+  "مقفلة",
+];
+
+// مسار الدعوى — the ordinary litigation spine, filed through معين.
+// 🔴 NO تحرير_صحيفة_الدعوى. دراسة ABSORBS IT (owner ruling), the same merge
+// dd3d27c made for General and Commercial — which is why this array is
+// character-for-character the General spine with معين in place of ناجز and no
+// settlement stages.
+export const AdminLawsuitStages: CaseStageValue[] = [
+  "استلام",
   "استكمال_البيانات",
   "دراسة",
-  "تحرير_صيغة_التظلم",
-  "مراجعة_داخلية_للتظلم",
-  "تقديم_التظلم",
-  "انتظار_رد_التظلم",
-  "تحرير_صحيفة_الدعوى",
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
-  // Same missing-stage bug as the labor path above: without جاهزة_للرفع the FE
-  // aimed الأخذ_بالملاحظات → قيد_التدقيق_في_معين, which the server does not allow
-  // (only → جاهزة_للرفع), so an admin case returned with committee notes was
-  // STUCK. The server rules جاهزة_للرفع → قيد_التدقيق_في_معين already existed.
   "جاهزة_للرفع",
   "قيد_التدقيق_في_معين",
   "منظورة",
 ];
+
+// 🔴 THE UNROUTED ADMIN PATH — an admin case whose track has not been chosen.
+// admin_case_sub_type is NULL on every admin case (ef4d221 removed the field
+// from creation), and batch 2 will add the «مسار التظلم» / «مسار الدعوى» buttons
+// that set it. Until one is pressed the case genuinely has no path, and this
+// array says exactly that.
+//
+// WHY A ONE-ELEMENT ARRAY AND NOT AN EMPTY ONE, AND NOT A LONGER STUB — the
+// reasoning is preserved here because all three options look similar and only
+// one is right:
+//   • [] would put the case OFF-PATH: indexOf(currentStage) === -1 collapses the
+//     progress bar to index 0 (the 3fcd4e3 class) and wakes the two first-match
+//     scanners, which scan تجاري FIRST and would rescue an admin case onto the
+//     COMMERCIAL path — تراضي, مداولة_الصلح, the lot. Silently wrong, and the
+//     failure mode this whole design is trying to avoid.
+//   • ["استلام", "استكمال_البيانات"] keeps the generic «المرحلة التالية» button
+//     live, which is precisely what must NOT happen: advancing on the shared
+//     edge would move the case forward with its track still unchosen, and the
+//     buttons would then have nowhere to live.
+//   • ["استلام"] — the case is ON-path (index 0 of 1), the bar draws one
+//     completed step and no more, and canGoNext (`currentIndex < length - 1`)
+//     is FALSE, so the advance button is ABSENT rather than present-and-broken.
+//     The case is not stuck: batch 2's track buttons are its exit, and they are
+//     the only correct one.
+export const AdminUnroutedStages: CaseStageValue[] = ["استلام"];
 
 // In-court case paths. The firm is handling a case that's already filed in
 // court. The path branches on whether the firm is drafting a response
@@ -2051,7 +2111,14 @@ export const UniversalCaseStages: CaseStageValue[] = (() => {
     ...UnderStudyGeneralStages,
     ...UnderStudyCommercialStages,
     ...UnderStudyLaborStages,
-    ...UnderStudyAdminStages,
+    // Both admin tracks. Their union is NARROWER than the old 15-stage array, so
+    // the four stages that left the arrays (تحديد_تاريخ_التقادم,
+    // مراجعة_داخلية_للتظلم, تقديم_التظلم, انتظار_رد_التظلم) now fall OUT of
+    // inSomePath and INTO UniversalCaseStages below — i.e. they become
+    // filterable from every department rather than from إداري alone. That is the
+    // correct home for a stage that is in no path but still appears in history.
+    ...AdminGrievanceStages,
+    ...AdminLawsuitStages,
     ...InCourtDefendantMemoStages,
     ...InCourtPlaintiffMemoStages,
     ...InCourtNoMemoStages,
@@ -2317,6 +2384,13 @@ export function getStagesForClassification(
   clientRole?: string,
   memoRequired?: boolean,
   isSettlementCase?: boolean,
+  // 🔴 THE SECOND AXIS, AND IT IS LAST AND OPTIONAL ON PURPOSE. Admin is the only
+  // department whose path is not decided by its name alone: تظلم and قضية are
+  // different workflows. Appending the parameter rather than inserting it means
+  // every existing call site keeps compiling untouched — and every one that does
+  // NOT pass it lands on AdminUnroutedStages, which is the honest answer for a
+  // caller that cannot know the track (see the two named at the call sites).
+  adminCaseSubType?: string | null,
 ): CaseStageValue[] {
   if (classification === "منظورة_بالمحكمة") {
     if (isSettlementCase) {
@@ -2335,7 +2409,14 @@ export function getStagesForClassification(
       case "عام": return UnderStudyGeneralStages;
       case "تجاري": return UnderStudyCommercialStages;
       case "عمالي": return UnderStudyLaborStages;
-      case "إداري": return UnderStudyAdminStages;
+      // The only two-axis arm. An unrecognised value falls to the unrouted stub
+      // rather than to a guess — the two tracks diverge immediately after
+      // استكمال_البيانات, so guessing one would put half of all admin cases on
+      // the wrong workflow.
+      case "إداري":
+        return adminCaseSubType === "تظلم" ? AdminGrievanceStages
+          : adminCaseSubType === "قضية" ? AdminLawsuitStages
+          : AdminUnroutedStages;
       default: return UnderStudyGeneralStages;
     }
   }
@@ -2405,8 +2486,9 @@ export function getReopenTargetStages(
   clientRole?: string,
   memoRequired?: boolean,
   isSettlementCase?: boolean,
+  adminCaseSubType?: string | null,
 ): CaseStageValue[] {
-  const path = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase);
+  const path = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase, adminCaseSubType);
   return path.indexOf("منظورة") >= 0 ? [...path] : [...path, "منظورة"];
 }
 

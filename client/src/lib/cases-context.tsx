@@ -103,7 +103,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     const clientRole = (lawCase as any).clientRole as string | undefined;
     const memoRequired = !!(lawCase as any).memoRequired;
     const isSettlementCase = !!(lawCase as any).isSettlementCase;
-    const primary = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase);
+    const adminCaseSubType = lawCase.adminCaseSubType ?? null;
+    const primary = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase, adminCaseSubType);
     if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
     // IN_COURT has multiple variants keyed on clientRole/memoRequired/isSettlementCase,
     // not on department. Fall back across all IN_COURT variants if the current stage
@@ -120,11 +121,18 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       }
       return primary;
     }
+    // 🔴 THE ADMIN ARM IS NOW TWO CANDIDATES, NOT ONE. Passing "إداري" with no
+    // sub-type resolves to AdminUnroutedStages (just ["استلام"]), so a routed
+    // admin case that fell through `primary` would have been scanned against a
+    // one-element array and then rescued onto whichever NON-admin path matched
+    // first — تجاري is scanned first here, and it ends in تراضي/مداولة_الصلح.
+    // Both tracks are named explicitly so the scanner can actually find them.
     const candidates = [
       getStagesForClassification(classification, "تجاري", clientRole, memoRequired),
       getStagesForClassification(classification, "عام", clientRole, memoRequired),
       getStagesForClassification(classification, "عمالي", clientRole, memoRequired),
-      getStagesForClassification(classification, "إداري", clientRole, memoRequired),
+      getStagesForClassification(classification, "إداري", clientRole, memoRequired, false, "تظلم"),
+      getStagesForClassification(classification, "إداري", clientRole, memoRequired, false, "قضية"),
     ];
     for (const c of candidates) {
       if (c.indexOf(lawCase.currentStage) >= 0) return c;
