@@ -5770,7 +5770,7 @@ export class DatabaseStorage implements IStorage {
       const rows = firmWideScoped
         ? await db.select(cols).from(fieldTasks).where(ftActionable)
         : deptHeadScoped
-        // LEFT join (was INNER) + an OR covering three head-visible sources:
+        // LEFT join (was INNER) + an OR covering FOUR head-visible sources:
         //  (1) assignedTo=uid — the head's own tasks (incl. PATH-2 tasks routed
         //      to them whose caseId is null/elsewhere);
         //  (2) lawCases.departmentId=userDept — team supervisory view (unchanged);
@@ -5778,11 +5778,58 @@ export class DatabaseStorage implements IStorage {
         //      including HEAD-LESS ones (assignedTo="") created before a head
         //      existed: the moment this head is appointed they surface here for
         //      distribution, with no migration or re-assignment needed.
-        ? await db.select(cols).from(fieldTasks).leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+        //  (4) 🔴 NEW — the ASSIGNEE's own department, for GENERAL (عام) tasks.
+        //
+        // WHY (4) EXISTS. Terms (2) and (3) both resolve "department" through
+        // something OTHER than the person doing the work: (2) through the parent
+        // CASE, (3) through an explicit path-2 route. A general task created FOR
+        // A PERSON carries neither — the create dialog sends `assignedTo` and
+        // deliberately does NOT send routedDepartmentId ("the department, if also
+        // chosen, only filtered the person list"), and a general task usually has
+        // no case link at all. So a task assigned to a head's own team member was
+        // invisible to him on EVERY surface. Measured in production: five
+        // consecutive tasks for one employee, none reaching either head of his
+        // department. This term resolves the department through the ASSIGNEE,
+        // which is the only thing those rows carry.
+        //
+        // OWNER RULING, overriding the earlier "no widening — that would
+        // duplicate rows across every viewer who can act" decision FOR THE
+        // HEAD-OF-DEPARTMENT CASE ONLY. That decision still stands everywhere
+        // else, which is why this term lives inside the deptHeadScoped arm and
+        // touches neither the firmWideScoped arm above nor the plain-user arm
+        // below.
+        //
+        // NARROWED TWO WAYS ON PURPOSE:
+        //  • taskType = عام only. Auto-created field tasks (hearing follow-ups,
+        //    najiz chasers, agency issuance…) are machine-generated per case and
+        //    already reach the head through (2); adding them here would flood the
+        //    page with rows nobody asked to supervise.
+        //  • the بانتظار_* lifecycle states are EXCLUDED. In those states
+        //    assigned_to has been flipped to whoever must act next (the requester
+        //    for بانتظار_الاطلاع, the head for بانتظار_التوزيع / بانتظار_الاعتماد),
+        //    so the row is already routed to its real actor by term (1) and would
+        //    arrive here as a DIFFERENT kind (GENERAL_TASK_REVIEW / _DISTRIBUTE /
+        //    _APPROVE) whose server gates are keyed on originalRequesterId and
+        //    routedDepartmentId — predicates the client's canActingUserAct does
+        //    NOT model. Restricting to the two working states means the only new
+        //    kind this term can produce is GENERAL_TASK, so exactly one kind
+        //    needed an authority gate on the client. See my-tasks.tsx.
+        //
+        // The join is on users.id (a PRIMARY KEY), so it can add at most one row
+        // per task and can never fan out. An unassigned ("") task matches no user
+        // and is unaffected.
+        ? await db.select(cols).from(fieldTasks)
+            .leftJoin(lawCases, eq(fieldTasks.caseId, lawCases.id))
+            .leftJoin(users, eq(fieldTasks.assignedTo, users.id))
             .where(and(ftActionable, or(
               eq(fieldTasks.assignedTo, uid),
               eq(lawCases.departmentId, userDept!),
               eq(fieldTasks.routedDepartmentId, userDept!),
+              and(
+                eq(fieldTasks.taskType, FieldTaskType.GENERAL),
+                eq(users.departmentId, userDept!),
+                sql`${fieldTasks.status} IN (${FieldTaskStatus.PENDING}, ${FieldTaskStatus.IN_PROGRESS})`,
+              ),
             )))
         : await db.select(cols).from(fieldTasks).where(and(eq(fieldTasks.assignedTo, uid), ftActionable));
       // The separate ""-pool query that used to run here is GONE, and its removal

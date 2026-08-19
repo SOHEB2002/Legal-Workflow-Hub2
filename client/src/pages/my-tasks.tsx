@@ -272,6 +272,9 @@ const AUTHORITY_GATED_KINDS = new Set<MyTaskKindValue>([
   MyTaskKind.CASE_UNASSIGNED,
   MyTaskKind.CONSULTATION_UNASSIGNED,
   MyTaskKind.CONTRACT_UNASSIGNED,
+  // ⚠ GENERAL_TASK IS DELIBERATELY *NOT* IN THIS SET — see
+  // teamGeneralTaskBlockedReason below for the head's gate and for why reusing
+  // this one would have silently taken a capability away from admin_support.
 ]);
 
 // 🔴 THE SAME RULE, KEYED ON THE SPLIT TYPE KEY INSTEAD OF THE KIND — and that
@@ -319,6 +322,38 @@ const AUTHORITY_BLOCKED_REASON: Partial<Record<MyTaskKindValue, string>> = {
   [MyTaskKind.CONSULTATION_UNASSIGNED]: "الإسناد من صلاحية رئيس القسم أو مدير الفرع",
   [MyTaskKind.CONTRACT_UNASSIGNED]: "الإسناد من صلاحية رئيس القسم أو مدير الفرع",
 };
+
+// 🔴 THE HEAD'S TEAM VIEW OF A MEMBER'S GENERAL (عام) TASK — its own predicate,
+// NOT an entry in AUTHORITY_GATED_KINDS above, and that separation is the whole
+// point rather than a style choice.
+//
+// The server gate is PATCH /api/field-tasks/:id:
+//     if (assignedTo !== user.id && !canModifyParent && !isUnassignedAssign) → 403
+// `canModifyParent` runs canModifyCase / canModifyConsultation on the task's
+// PARENT — and a person-direct general task usually has no parent at all, which
+// is exactly why these rows were invisible until now. So the head is refused on
+// almost every row this commit surfaces, and an enabled button would 403.
+//
+// ⚠ WHY NOT REUSE AUTHORITY_GATED_KINDS: its predicate canActingUserAct models
+// "designated actor | branch_manager | own-dept head". canModifyCase's admin
+// list is WIDER — admin_support, cases_review_head, consultations_review_head
+// and viewer all pass it unconditionally. Adding GENERAL_TASK to that set would
+// therefore have DISABLED a button admin_support legitimately holds today on
+// every case-linked general task: a silent capability loss, in a commit whose
+// remit is a department head's visibility. This predicate can only ever fire for
+// a department_head, so nobody else's page changes by one pixel.
+//
+// The four outcomes, each matching the server:
+//   • the ASSIGNEE                        → ownerScope "self" → not blocked.
+//   • firm-wide viewer (mgr/admin_support)→ excluded here; unchanged behaviour.
+//   • head, task linked to a case in HIS  → canModifyCase passes server-side, and
+//     departmentId is stamped from the PARENT CASE, so isDeptHeadFor agrees.
+//   • head, no link or another dept's     → server 403 → blocked, with a reason.
+//
+// NOTE the server's [task-owner-check] guard (8482ad1) is WARN-ONLY and refuses
+// nothing; it is not what blocks the head. The 403 above is.
+const TEAM_GENERAL_TASK_BLOCKED_REASON =
+  "إكمال المهمة من صلاحية المُسند إليه — تابعها معه";
 
 // The department filter's sentinel for "this record belongs to no department".
 // A literal rather than "" because Radix SelectItem rejects an empty value, and
@@ -788,7 +823,20 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   // SPLIT TYPE KEY for the two CASE_WORK variants that share their kind with
   // ordinary case work. canActingUserAct is evaluated once and answers both.
   const authorityTypeKey = taskTypeKey(task);
-  const authorityBlockedReason = canActingUserAct(task, actingIdentities)
+  // A department head looking at a TEAM member's general task. Narrow by
+  // construction: only heads and firm-wide viewers ever receive ownerScope
+  // "team", and the two firm-wide roles are excluded, so this can fire for
+  // nobody else. See TEAM_GENERAL_TASK_BLOCKED_REASON for the server gate it
+  // mirrors and for why it is not folded into AUTHORITY_GATED_KINDS.
+  const teamGeneralTaskBlocked =
+    task.kind === MyTaskKind.GENERAL_TASK
+    && task.ownerScope === "team"
+    && !hasEffectiveRole(actingIdentities, "branch_manager")
+    && !hasEffectiveRole(actingIdentities, "admin_support")
+    && !isDeptHeadFor(actingIdentities, task.departmentId);
+  const authorityBlockedReason = teamGeneralTaskBlocked
+    ? TEAM_GENERAL_TASK_BLOCKED_REASON
+    : canActingUserAct(task, actingIdentities)
     ? null
     : AUTHORITY_GATED_KINDS.has(task.kind)
       ? (AUTHORITY_BLOCKED_REASON[task.kind] ?? null)
