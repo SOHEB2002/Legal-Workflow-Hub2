@@ -919,7 +919,12 @@ export function CaseDetailsDialog({
                       <div>
                         <Label className="text-muted-foreground">مهلة الرد</Label>
                         <p className="font-medium">
-                          <DualDateDisplay date={selectedCase.responseDeadline} compact />
+                          {/* NO `compact` — a DEADLINE must show both calendars.
+                              compact renders Hijri only and hides the Gregorian in a
+                              hover title, which on a date the firm is measured against
+                              is not a display at all. Timestamps and table cells keep
+                              compact deliberately; deadlines do not. */}
+                          <DualDateDisplay date={selectedCase.responseDeadline} />
                         </p>
                       </div>
                     )}
@@ -1112,6 +1117,36 @@ export function CaseDetailsDialog({
                       التقادم as mandatory fields and then never displayed either.
                       Now keyed exactly like the تجاري and عمالي workflow panels
                       immediately below, so capture and display cannot drift. */}
+                  {/* 🔴 THIS PANEL RENDERS FOR NO CASE IN THE SYSTEM TODAY. IT LOOKS
+                      LIKE WORKING CODE AND IS DEAD IN PRACTICE.
+                      Read the gate below: it requires a TRUTHY adminCaseSubType, and
+                      that column is NULL on every case — ef4d221 removed نوع القضية
+                      الإدارية from the create dialog (owner ruling: the تظلم/دعوى
+                      choice is made at استلام, by two buttons, not at creation), so
+                      nothing has SET it at intake since.
+
+                      ⚠ BUT IT IS NOT UNWRITABLE — do not read the paragraph above as
+                      "unreachable by construction". The EDIT dialog's نوع القضية
+                      الإدارية select is a live writer (cases.tsx, the إداري block,
+                      which as of da70666 renders on EVERY admin case rather than only
+                      under-study ones). Set the type through edit on a case that is
+                      still UNDER_STUDY and this panel comes back. Nobody does, which
+                      is why it is dead rather than merely rare — and the استلام flow
+                      populating the column at intake is what would revive it for real.
+
+                      DELIBERATELY LEFT IN PLACE, not deleted:
+                        • تاريخ التقادم appears here AND in لوحة تفاصيل المخالفة below.
+                          That duplication is UNREACHABLE while this gate is false, so
+                          removing the row would be a no-op today that silently deletes
+                          a display if this panel is ever revived. If you fix this gate,
+                          drop the تاريخ التقادم row here at the same time — the
+                          violation panel is now its prominent home (7254d54).
+                        • Its caseClassification === UNDER_STUDY term is ALSO wrong, for
+                          the same reason it was dropped from the violation panel and
+                          the edit dialog: نوع القضية الإدارية is a routing fact that
+                          survives a case going in-court. Left as-is pending a ruling,
+                          because fixing that term alone still would not make the panel
+                          render — the adminCaseSubType term is what kills it. */}
                   {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && selectedCase.adminCaseSubType && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
@@ -1137,8 +1172,16 @@ export function CaseDetailsDialog({
                       panel above is: the facts of the violation exist before any
                       تظلم/دعوى routing decision is made at استلام, so gating on
                       that would hide the panel exactly when it is first needed.
-                      Department name, never caseType — the L5 precedent. */}
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
+                      Department name, never caseType — the L5 precedent.
+
+                      🔴 AND NOT ON CLASSIFICATION EITHER (owner correction). The
+                      UNDER_STUDY term that stood here was wrong for the same
+                      reason: the decision number, the fine amount, إيفاء and the
+                      اعتراض are FACTS ABOUT THE VIOLATION, true whether the case
+                      is قيد_الدراسة or منظورة_بالمحكمة. An in-court admin case had
+                      no panel at all — the owner hit exactly that. Department is
+                      the only thing that decides whether these fields apply. */}
+                  {getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
                     <div className="border-t pt-4" data-testid="panel-violation-details">
                       <div className="flex items-center justify-between mb-3 gap-2">
                         <h4 className="font-semibold">تفاصيل المخالفة</h4>
@@ -1165,6 +1208,49 @@ export function CaseDetailsDialog({
                         )}
                       </div>
 
+                      {/* ==================== تاريخ التقادم ====================
+                          🔴 MOVED HERE because it was UNREACHABLE. It displayed only
+                          inside the d821c67 «تفاصيل القضية الإدارية» panel, whose gate
+                          requires a truthy adminCaseSubType — and that column has been
+                          NULL on every case since ef4d221 took the field off the create
+                          form. So the panel never rendered and the prescription date
+                          could be written (edit form) but never seen.
+
+                          PROMINENT BY DESIGN, not one of the twelve grid cells below.
+                          It is the only field here that is a DEADLINE: miss it and the
+                          case dies, whereas every other field is a reference number or
+                          a record of something that already happened. So it gets its
+                          own full-width bordered block above the grid, an amber tone,
+                          text-2xl and an icon — the same visual weight the dialog gives
+                          its other "this will hurt you" banners. Empty reads «لم يُحدَّد
+                          بعد» in the same tone rather than the neutral «غير مُضاف»,
+                          because an unset prescription date is not merely missing data.
+
+                          🔴 READ-ONLY. No edit control here, deliberately: this panel
+                          must NOT become a second writer. The استلام batch will COMPUTE
+                          this date, and a hand-typed value contradicting a computed one
+                          is precisely the two-writers trap. Today's single writer stays
+                          the edit dialog. ⚠ See the report — that writer is itself
+                          gated on UNDER_STUDY, so on an IN-COURT admin case this value
+                          is currently visible-but-unsettable; that is a one-term fix in
+                          cases.tsx awaiting the owner's word, not something to paper
+                          over by adding an input here. */}
+                      <div
+                        className="mb-4 rounded-lg border-2 border-amber-500/60 bg-amber-500/10 px-4 py-3"
+                        dir="rtl"
+                        data-testid="violation-prescription-date"
+                      >
+                        <div className="flex items-center gap-2 mb-1">
+                          <AlertTriangle className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0" />
+                          <Label className="text-amber-800 dark:text-amber-300 font-semibold">تاريخ التقادم</Label>
+                        </div>
+                        <div className="text-2xl font-bold text-amber-900 dark:text-amber-200">
+                          {selectedCase.prescriptionDate
+                            ? <DualDateDisplay date={selectedCase.prescriptionDate} />
+                            : <span className="text-base font-medium text-amber-700 dark:text-amber-400">لم يُحدَّد بعد</span>}
+                        </div>
+                      </div>
+
                       {!violationEditing ? (
                         <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                           {VIOLATION_PANEL_FIELDS.map((f) => {
@@ -1181,7 +1267,15 @@ export function CaseDetailsDialog({
                                     // rather than as a broken one.
                                     <span className="text-muted-foreground text-sm italic">غير مُضاف</span>
                                   ) : f.kind === "date" ? (
-                                    <DualDateDisplay date={raw} compact />
+                                    // 🔴 NO `compact` — that flag is what was hiding the
+                                    // Gregorian half. DualDateDisplay's compact branch
+                                    // renders ONLY dual.hijri and buries the Gregorian
+                                    // in a title tooltip; the default branch stacks both
+                                    // (Hijri bold on top, Gregorian + «م» beneath).
+                                    // Matches hearing-details-dialog.tsx:612
+                                    // (<DualDateDisplay date={...objectionDeadline} />) —
+                                    // a deadline in a details dialog, the same shape.
+                                    <DualDateDisplay date={raw} />
                                   ) : f.kind === "select" ? (
                                     // 🔴 TOLERANT READ. grievance_result is
                                     // varchar(50) free text and may hold a legacy
@@ -1191,28 +1285,27 @@ export function CaseDetailsDialog({
                                     // is a lookup, never assumed total.
                                     <>{GrievanceResultLabels[raw as GrievanceResultValue] ?? raw}</>
                                   ) : f.kind === "amount" ? (
-                                    // 🔴 ONE TEXT RUN, NO LtrInline — this is the fix.
-                                    // The previous markup wrapped the number in
-                                    // LtrInline (display:inline-block) and left «ريال»
-                                    // as a SIBLING element. An inline-block is an
-                                    // ATOMIC box that the bidi algorithm treats as a
-                                    // NEUTRAL, so the number's position relative to the
-                                    // unit was decided by neutral resolution against
-                                    // whatever surrounded it — not by this markup. It
-                                    // was also the ONLY number+Arabic-unit in the app
-                                    // written that way: every other one ({days} يوم,
-                                    // {durationDays} يوم, ${daysLeft} أيام) is a single
-                                    // interpolated run, and they all render correctly.
+                                    // 🔴 COPIED VERBATIM FROM A SITE THAT DEMONSTRABLY
+                                    // RENDERS CORRECTLY — case-tabs.tsx:604,
+                                    //     <span>المدة: {deadline.durationDays} يوم</span>
+                                    // — rather than derived again from bidi reasoning.
                                     //
-                                    // As one run the ordering is no longer negotiable:
-                                    // Latin digits are European numbers, which bidi
-                                    // already lays out left-to-right INSIDE the RTL
-                                    // line, so the number reads correctly and «ريال»
-                                    // sits after it in reading order. LtrInline is for
-                                    // a string that must be FORCED ltr internally (an
-                                    // ISO date, a slashed identifier) — the dd34e43
-                                    // lesson — not for a decimal in an Arabic phrase.
-                                    <>{formatAmount(raw)} <span className="text-muted-foreground text-sm">ريال</span></>
+                                    // 2a91ead removed LtrInline and was still wrong,
+                                    // which means the inline-block was not the whole
+                                    // story. The remaining difference from the six
+                                    // working sites was structural and is the one thing
+                                    // left to remove: the UNIT WAS ITS OWN ELEMENT
+                                    // (<span className="text-muted-foreground text-sm">
+                                    // ريال</span>) instead of plain text in the SAME run
+                                    // as the number. Every working site — case-tabs 604
+                                    // /484/607, reports 203/359/888 — puts the number
+                                    // and its Arabic unit in ONE text node inside ONE
+                                    // element, with nothing between them but a space.
+                                    // This line now does exactly that; the muted styling
+                                    // is dropped because it is what required the extra
+                                    // element, and no working site styles its unit
+                                    // separately either.
+                                    <span>{formatAmount(raw)} ريال</span>
                                   ) : (
                                     <LtrInline>{raw}</LtrInline>
                                   )}
@@ -1917,7 +2010,10 @@ export function CaseDetailsDialog({
                                   put a deadline on screen that nobody is owed. */}
                               {j.opensWindow && !!String(j.objectionDeadline || "").trim() && (
                                 <div className="text-sm text-muted-foreground">
-                                  مهلة الاعتراض حتى <DualDateDisplay date={j.objectionDeadline} compact />
+                                  {/* NO `compact` — same rule as مهلة الرد above: a
+                                      deadline shows both calendars. j.supersededAt
+                                      below stays compact; it is a timestamp. */}
+                                  مهلة الاعتراض حتى <DualDateDisplay date={j.objectionDeadline} />
                                 </div>
                               )}
                               {j.supersededAt && (

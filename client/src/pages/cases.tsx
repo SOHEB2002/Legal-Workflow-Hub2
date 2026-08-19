@@ -3767,9 +3767,20 @@ export default function CasesPage() {
               </div>
             </div>
 
-            {/* === UNDER_STUDY + إداري specific === */}
-            {editFormData.caseClassification === CaseClassification.UNDER_STUDY &&
-              getDepartmentName(editFormData.departmentId) === "إداري" && (
+            {/* === إداري specific ===
+                🔴 DEPARTMENT ONLY — the caseClassification === UNDER_STUDY term
+                that stood here is GONE (owner ruling), for the same reason it was
+                dropped from the violation panel in 7254d54: all three fields below
+                — نوع القضية الإدارية, تاريخ التقادم, مطلوب تظلم — are ROUTING FACTS
+                that survive a case going in-court. They do not stop being true at
+                منظورة_بالمحكمة.
+
+                It was also the last writability gap on تاريخ التقادم: 7254d54 made
+                that date visible on every admin case, but this block was its ONLY
+                writer and was hidden for in-court ones, so the value was
+                visible-but-unsettable exactly where the owner first noticed it
+                missing. All three are now settable on any admin case. */}
+            {getDepartmentName(editFormData.departmentId) === "إداري" && (
                 <div className="border-t pt-4 space-y-3">
                   <h4 className="font-semibold">بيانات القضية الإدارية</h4>
                   <div>
