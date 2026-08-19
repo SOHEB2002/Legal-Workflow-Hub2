@@ -79,6 +79,7 @@ import {
   ClosureReason,
   firmToday,
   firmDateTimeToInstant,
+  nearestUpcomingHearingDate,
   HearingRingTierLeadMinutes,
   resolveHearingRingTier,
   type HearingRingItem,
@@ -2928,6 +2929,53 @@ async function clearOpponentResponseFlag(
   } catch (e) {
     console.error("[clearOpponentResponseFlag] failed:", e);
     return 0;
+  }
+}
+
+// ==================== law_cases.next_hearing_date — THE RECOMPUTE ====================
+// 🔴 THE ONE PLACE THE COLUMN IS MAINTAINED. Every point at which a case's set of
+// hearings can change calls THIS — never an inline computation:
+//   POST /api/hearings · PATCH /api/hearings/:id · POST /api/hearings/:id/cancel
+//   · DELETE /api/hearings/:id · POST /api/hearings/:id/result
+//
+// WHY IT EXISTS: the column is a real data channel with server-side readers that
+// cannot derive — recalculateCasePriorities (scheduler.ts, daily 08:00) feeds it
+// to calculateSmartPriority and WRITES the case's priority from the result, and
+// the opponent-response flow anchors an auto-memo's DEADLINE on it. But only
+// three paths ever wrote it (case create, case edit, the موعد_جديد result branch
+// — and that one only when a date was supplied), NOTHING cleared it, and none of
+// the five hearing mutations above touched it at all. So it held "the last date
+// somebody typed", and the nightly priority job re-derived priorities from a date
+// that was frequently cancelled, rescheduled or long past — actively overwriting
+// the CORRECT priority that POST/PATCH /api/hearings had just computed from the
+// real hearing date.
+//
+// 🔴 THE RULE IS NOT RESTATED HERE. It is nearestUpcomingHearingDate in
+// shared/schema.ts, which the cases-page sort calls too — one definition, so the
+// stored column and the list's order cannot disagree. Asia/Riyadh comes from
+// firmToday() inside that helper (Intl-based; never toISOString).
+//
+// TOTAL BY CONSTRUCTION, like the notification helpers: the whole body is in one
+// try/catch that only logs. A hearing must never fail to save because its case's
+// denormalised convenience column could not be refreshed. Always call it AFTER
+// the hearing write has committed, so the query sees the new state.
+//
+// Writes only on a real change, so an unchanged case keeps its updated_at — this
+// runs on every hearing mutation and must not churn the timestamp that the
+// cases-list default ordering sorts by.
+async function recomputeCaseNextHearingDate(caseId: string | null | undefined): Promise<void> {
+  const id = String(caseId || "").trim();
+  // "none" is the sentinel POST /api/hearings uses for a case-less hearing.
+  if (!id || id === "none") return;
+  try {
+    const existing = await storage.getCaseById(id);
+    if (!existing) return;
+    const hearings = await storage.getHearingsByCase(id);
+    const next = nearestUpcomingHearingDate(hearings);
+    if ((existing.nextHearingDate || null) === next) return;
+    await storage.updateCase(id, { nextHearingDate: next });
+  } catch (e) {
+    console.error("[recomputeCaseNextHearingDate] failed for case", caseId, e);
   }
 }
 
@@ -13668,6 +13716,12 @@ export async function registerRoutes(
         }
       }
 
+      // The case's set of hearings just changed — refresh the stored column.
+      // A NEARER session overwrites a later one, and a first real session
+      // overwrites a hand-typed intake date; a session added BEHIND the current
+      // one correctly changes nothing. See recomputeCaseNextHearingDate.
+      await recomputeCaseNextHearingDate(validatedData.caseId);
+
       res.status(201).json({ ...newHearing, createdMemos });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -13726,6 +13780,14 @@ export async function registerRoutes(
         }
       }
 
+      // A RESCHEDULE lands here (this route is what edits hearingDate), and so
+      // does the generic `{ status: "ملغية" }` cancel that other callers still
+      // use. Recompute unconditionally rather than only when hearingDate is in
+      // the body: a status change alone can remove the session from the upcoming
+      // set. Uses `existing.caseId` — the case a hearing belongs to is not
+      // editable here, and `updated` may be undefined on a lost race.
+      await recomputeCaseNextHearingDate(existing.caseId);
+
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في تحديث الجلسة" });
@@ -13734,7 +13796,12 @@ export async function registerRoutes(
 
   app.delete("/api/hearings/:id", requireAuth, requireRole("branch_manager", "admin_support"), async (req, res) => {
     try {
+      // Read the parent BEFORE deleting — afterwards there is no row to ask.
+      const doomed = await storage.getHearingById(String(req.params.id));
       await storage.deleteHearing(String(req.params.id));
+      // Deleting the only upcoming session CLEARS the column, which is the whole
+      // point: previously it kept naming a hearing that no longer existed.
+      await recomputeCaseNextHearingDate(doomed?.caseId);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الجلسة" });
@@ -13807,6 +13874,11 @@ export async function registerRoutes(
           console.error("[hearings/cancel] logCaseActivity failed", e);
         }
       }
+
+      // Cancelling drops this session out of the upcoming set. If it was the
+      // only one, the column is CLEARED — before this, a cancelled hearing left
+      // the case advertising a session that had been called off.
+      await recomputeCaseNextHearingDate(hearing.caseId);
 
       res.json(updated);
     } catch (error) {
@@ -15213,6 +15285,17 @@ export async function registerRoutes(
       const finalHearing = clearedOpponentResponse > 0
         ? ((await storage.getHearingById(hearingId)) || updatedHearing)
         : updatedHearing;
+
+      // 🔴 ONE CALL FOR EVERY RESULT BRANCH, placed after all of them — not per
+      // branch. Recording ANY result removes this session from the upcoming set
+      // (it now has a result), and the موعد_جديد branch may have created the next
+      // one; a judgment, صلح, شطب or عدم اختصاص leaves nothing upcoming and the
+      // column is CLEARED. The pre-existing `caseUpdate.nextHearingDate` write in
+      // PATH A is deliberately left in place: it is the same value this
+      // recompute lands on, it keeps that branch's own update atomic with its
+      // other case fields, and this call is what makes the OTHER branches — which
+      // wrote nothing and cleared nothing — correct.
+      await recomputeCaseNextHearingDate(effectiveCaseId);
 
       // cancelledMemos is returned for the same reason clearedOpponentResponse is:
       // the cancelled rows are NOT in this response, and the cases-list badge is

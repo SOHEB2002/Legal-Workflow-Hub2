@@ -113,6 +113,7 @@ import {
   caseNotificationRecipientId,
   HearingStatus,
   firmToday,
+  isUpcomingHearing,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue, Hearing } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -347,32 +348,19 @@ type NextHearingRank = {
   lastPast: string | null;
 };
 
-// A session counts as UPCOMING when all three hold:
-//   • not cancelled — a ملغية session is not going to happen;
-//   • no result recorded — a resulted session has happened, even if it is dated
-//     today. Once it is resulted, any continuation exists as its OWN hearing row
-//     with its own date, which this scan picks up instead;
-//   • its day is today or later IN THE FIRM'S CALENDAR.
-// Hearing TYPE is deliberately not filtered: تراضي / تسوية_ودية are sessions the
-// firm attends and diarises like any other. (The ضبط rules exempt them because
-// those sessions issue no minutes — a different question from "is it upcoming".)
-function isUpcomingSession(h: Hearing, today: string): boolean {
-  if (h.status === HearingStatus.CANCELLED) return false;
-  if (String(h.result || "").trim()) return false;
-  const day = String(h.hearingDate || "").trim();
-  // 🔴 STRING COMPARISON AGAINST firmToday(), NEVER `new Date(day)`. hearing_date
-  // is a stored calendar day in "YYYY-MM-DD" and firmToday() is the same shape
-  // resolved through Intl at Asia/Riyadh, so lexicographic >= IS the calendar
-  // comparison and no timezone can shift it. Parsing the string would make it
-  // UTC midnight — the documented date-boundary bug class (60a4d79), which is
-  // still live in this very context's getTodayHearings/getUpcomingHearings
-  // (toISOString / browser-local midnight). Those are not reused here for
-  // precisely that reason. ">= today" is also the owner's ruling that a hearing
-  // TODAY counts as upcoming.
-  return !!day && day >= today;
-}
-
+// 🔴 THE "UPCOMING" RULE IS NO LONGER DEFINED HERE. It moved to
+// shared/schema.ts (isUpcomingHearing) when the server gained a recompute for
+// law_cases.next_hearing_date, because that column and this sort MUST answer the
+// question identically — if they drifted, the list's ORDER and every surface
+// reading the column would contradict each other with nothing on screen to
+// explain it. The three clauses, the Asia/Riyadh string comparison and the
+// reason hearing TYPE is not filtered are all documented at the shared
+// declaration; this file no longer carries a second copy that could be edited
+// on its own. (This page still deliberately avoids hearings-context's
+// getTodayHearings / getUpcomingHearings, which use toISOString and
+// browser-local midnight — the 60a4d79 class.)
 function buildNextHearingRanks(hearings: Hearing[]): Map<string, NextHearingRank> {
+  // Resolved ONCE so every row in the scan is judged against the same boundary.
   const today = firmToday();
   const ranks = new Map<string, NextHearingRank>();
   for (const h of hearings) {
@@ -381,7 +369,7 @@ function buildNextHearingRanks(hearings: Hearing[]): Map<string, NextHearingRank
     const day = String(h.hearingDate || "").trim();
     if (!day) continue;
     const entry = ranks.get(caseId) || { upcoming: null, lastPast: null };
-    if (isUpcomingSession(h, today)) {
+    if (isUpcomingHearing(h, today)) {
       // Soonest wins.
       if (!entry.upcoming || day < entry.upcoming) entry.upcoming = day;
     } else if (h.status !== HearingStatus.CANCELLED && day < today) {
