@@ -67,7 +67,7 @@ import { anyIdentity, hasEffectiveRole, isDeptHeadFor, type ActingIdentity } fro
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
-import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate, gregorianToHijri } from "@/lib/date-utils";
 import { extractApiError, formatAmount } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -100,6 +100,7 @@ import {
   prescriptionArrivedTimeBarred,
   grievanceWasFiled,
   firmDayOf,
+  validateViolationDateOrder,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment, GrievanceResultValue } from "@shared/schema";
 
@@ -345,10 +346,24 @@ const PRESCRIPTION_READONLY_EXCLUDED = new Set(["prescriptionDate"]);
 // Uses formatDualDate — the SAME formatter DualDateDisplay itself calls, so the
 // two can never render a different day. No new conversion code. Note its `hijri`
 // already ends in «هـ», so only «م» is appended here.
+// 🔴 NUMERIC HIJRI, BLOCK-LOCAL. Elsewhere on the site the Hijri half is month
+// NAMES («7 ربيع الأول 1448 هـ») and that is unchanged — formatDualDate,
+// DualDateDisplay and every other formatter are untouched. Here the two calendars
+// sit side by side in one sentence, so digits in the SAME order and separators
+// («07/03/1448 هـ الموافق 20/08/2026 م») let the reader match them at a glance.
+//
+// Derived from gregorianToHijri — the SAME conversion formatDualDate itself calls
+// — so the numeric and named forms can never disagree about a day. No new
+// conversion code.
 function InlineDualDate({ date }: { date: string | Date | null | undefined }) {
   const dual = formatDualDate(date ?? null);
   if (dual.hijri === "—") return <span>—</span>;
-  return <span>{dual.hijri} الموافق {dual.gregorian} م</span>;
+  const d = date instanceof Date ? date : new Date(String(date));
+  if (Number.isNaN(d.getTime())) return <span>—</span>;
+  const h = gregorianToHijri(d);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const hijriNumeric = `${pad(h.day)}/${pad(h.month)}/${h.year}`;
+  return <span>{hijriNumeric} هـ الموافق {dual.gregorian} م</span>;
 }
 
 // 🔴 «التظلم غير وجوبي» — a LABEL SUFFIX, never a disable. When the lawyer
@@ -1310,27 +1325,59 @@ export function CaseDetailsDialog({
                             and the scheduler compute with, so the panel can never
                             explain a date differently from the one that was
                             stored. */}
-                        <div className="text-2xl font-bold text-amber-900 dark:text-amber-200">
+                        {/* ITEM 3 — one step down the scale (text-2xl → text-xl).
+                            The block now carries whole sentences rather than a bare
+                            date, and at 2xl a three-clause sentence wrapped into a
+                            wall. Amber styling, icon and heading are unchanged. */}
+                        <div className="text-xl font-bold text-amber-900 dark:text-amber-200">
                           {(() => {
                             const p = computePrescriptionDate(selectedCase);
                             const small = "text-base font-medium text-amber-700 dark:text-amber-400";
-                            // STOPPED — the value is frozen at filing (R3). Show it
-                            // WITH the note: the date is the record of what the firm
-                            // was working to, which is what matters if timeliness is
-                            // ever argued.
+
+                            // ==================== ONE SENTENCE, COMPOSED ====================
+                            // 🔴 THE TWO FACTS ARE INDEPENDENT AND CAN BOTH BE TRUE.
+                            // These used to be separate early-return branches in this
+                            // order — stopped first — so a case that ARRIVED
+                            // time-barred and was LATER FILED showed only «تم الرفع»
+                            // and silently lost the fact that its deadline had
+                            // already gone before the file existed. That is exactly
+                            // the case where both facts matter most.
+                            //
+                            // Composed from the clauses that apply rather than from a
+                            // fixed template, so every combination reads as one
+                            // sentence and no combination needs its own branch.
+                            const arrivedBarred = prescriptionArrivedTimeBarred(selectedCase);
+                            // Reuses the 3b derivation — the stop-stage stageHistory
+                            // timestamp. Null when the case is not filed OR when that
+                            // entry carries no usable timestamp, and the clause is
+                            // simply dropped in both cases rather than rendering
+                            // something wrong.
+                            const filedDay = p.reason === "stopped"
+                              ? prescriptionFilingDate(selectedCase)
+                              : null;
+
+                            if (arrivedBarred) {
+                              const enteredDay = firmDayOf(selectedCase.createdAt);
+                              return (
+                                <div>
+                                  دخلت القضية بتاريخ <InlineDualDate date={enteredDay} />
+                                  {" "}وهي متقادمة منذ <InlineDualDate date={selectedCase.prescriptionDate} />
+                                  {filedDay && (
+                                    <> وتم الرفع بتاريخ <InlineDualDate date={filedDay} /></>
+                                  )}
+                                </div>
+                              );
+                            }
+
+                            // STOPPED, and NOT arrived-barred — the ordinary filing.
+                            // The stored deadline is frozen at filing (R3) and stays
+                            // above the note: it is the record of what the firm was
+                            // working to, which is what matters if timeliness is ever
+                            // argued.
                             if (p.reason === "stopped") {
-                              // ITEM 2 — name the FILING DATE, read from the
-                              // stageHistory entry for the track's stop stage (the
-                              // same entry the stop test itself reads). No column,
-                              // no input. Falls back to the bare text when that
-                              // entry carries no usable timestamp, rather than
-                              // rendering something wrong.
-                              const filed = prescriptionFilingDate(selectedCase);
-                              // SENTENCE → InlineDualDate, so «تم الرفع بتاريخ …»
-                              // stays one line at one size.
-                              const note = filed ? (
+                              const note = filedDay ? (
                                 <div className={small}>
-                                  تم الرفع بتاريخ <InlineDualDate date={filed} />
+                                  تم الرفع بتاريخ <InlineDualDate date={filedDay} />
                                 </div>
                               ) : (
                                 <div className={small}>تم الرفع — لا يسري التقادم</div>
@@ -1341,30 +1388,6 @@ export function CaseDetailsDialog({
                                   {note}
                                 </>
                               ) : note;
-                            }
-                            // ITEM 3 — ARRIVED ALREADY TIME-BARRED. Checked before
-                            // the ok/missing arms because such a case HAS a valid
-                            // computed date; what distinguishes it is that the date
-                            // was already past on the day the file was opened. The
-                            // scheduler applies the SAME shared predicate and stays
-                            // silent, so the label and the silence agree by
-                            // construction rather than by two matching conditions.
-                            if (prescriptionArrivedTimeBarred(selectedCase)) {
-                              // Names BOTH dates, so the reader can see at a glance
-                              // that the deadline predates the file rather than
-                              // having to compare two numbers elsewhere. The entry
-                              // day is the SAME firmDayOf(created_at) the predicate
-                              // itself compares against — not a second derivation.
-                              const enteredDay = firmDayOf(selectedCase.createdAt);
-                              // The longest sentence in the block, and the one the
-                              // stacked form fragmented worst — two dates, four
-                              // lines, two font sizes. Now one flowing line.
-                              return (
-                                <div>
-                                  دخلت القضية بتاريخ <InlineDualDate date={enteredDay} />
-                                  {" "}وهي متقادمة منذ <InlineDualDate date={selectedCase.prescriptionDate} />
-                                </div>
-                              );
                             }
                             if (p.reason === "no-rule") {
                               const cause =
@@ -1553,12 +1576,40 @@ export function CaseDetailsDialog({
                                   });
                                   return;
                                 }
+                                // The body the request will actually send, built
+                                // BEFORE the chronology check so the check sees
+                                // exactly what the server will.
+                                const body: Record<string, string> = {};
+                                for (const f of VIOLATION_PANEL_FIELDS) {
+                                  body[f.key] = (violationForm[f.key] || "").trim();
+                                }
+                                // 🔴 CHRONOLOGY — the SAME shared validator the
+                                // endpoint runs, so the dialog can never allow a
+                                // combination the server refuses. Convenience only;
+                                // routes.ts is the real gate.
+                                //
+                                // ⚠ The form seeds every field from the case, so
+                                // this body "touches" all four dates — meaning an
+                                // ALREADY-BROKEN row is caught here the moment the
+                                // lawyer opens edit and saves. That is the intended
+                                // outcome for a deliberate edit of this panel: he is
+                                // shown which pair is impossible and fixes it. The
+                                // untouched-pair exemption protects saves through
+                                // OTHER routes, which do not resend these fields.
+                                const orderError = validateViolationDateOrder(
+                                  selectedCase as unknown as Record<string, unknown>,
+                                  body,
+                                );
+                                if (orderError) {
+                                  toast({
+                                    title: "ترتيب التواريخ غير صحيح",
+                                    description: orderError,
+                                    variant: "destructive",
+                                  });
+                                  return;
+                                }
                                 setViolationSaving(true);
                                 try {
-                                  const body: Record<string, string> = {};
-                                  for (const f of VIOLATION_PANEL_FIELDS) {
-                                    body[f.key] = (violationForm[f.key] || "").trim();
-                                  }
                                   await apiRequest("PATCH", `/api/cases/${selectedCase.id}/violation-details`, body);
                                   // refreshCases repopulates the dialog's own case
                                   // from the server; the activity tab is invalidated

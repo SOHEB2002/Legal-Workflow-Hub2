@@ -96,6 +96,7 @@ import {
   computePrescriptionDate,
   prescriptionClockStopped,
   prescriptionInputsChanged,
+  validateViolationDateOrder,
   // GrievanceNumberUnavailable is deliberately NOT imported here any more: with
   // blank and «غير متوفرة» both accepted, the server records whatever it is given
   // verbatim and has no reason to know the sentinel. It stays exported for the
@@ -9159,6 +9160,26 @@ export async function registerRoutes(
           continue;
         }
         updateData[field] = trimmed.substring(0, MAX_LEN[field]);
+      }
+
+      // 🔴 CHRONOLOGY GATE — THE REAL ONE. The client mirrors it for convenience;
+      // this is what actually refuses. A grievance RESULT date four months before
+      // the grievance date was accepted and the prescription rule then computed a
+      // deadline from it — impossible data, plausible-looking answer.
+      //
+      // Compares `updateData` (only the fields this request is writing) against
+      // `lawCase` (the row as it stands), and the shared helper checks ONLY pairs
+      // this patch touches — which is what keeps an already-broken row editable.
+      // Refuses and reports; it never auto-corrects, clears or recomputes.
+      // Placed BEFORE the write, so a rejected save changes nothing at all.
+      {
+        const orderError = validateViolationDateOrder(
+          lawCase as unknown as Record<string, unknown>,
+          updateData,
+        );
+        if (orderError) {
+          return res.status(400).json({ error: orderError });
+        }
       }
 
       if (Object.keys(updateData).length === 0) {
