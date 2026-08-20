@@ -1976,22 +1976,16 @@ export const AdminGrievanceStages: CaseStageValue[] = [
   // تحرير_صيغة_التظلم here — the same answer the hard-coded branch gave.
   "مراجعة_داخلية",
   "جاهزة_للرفع",
-  // 🔴 RESTORED (batch 4b). Batch 1 removed this stage from BOTH admin arrays,
-  // which left مقفلة as the LINEAR next stage after جاهزة_للرفع — the only array
-  // in the system where that is true. «المرحلة التالية» therefore targeted مقفلة,
-  // tripped the early-close guard (routes.ts, isEarlyCloseStage) and 400'd with
-  // «يجب تحديد سبب الإغلاق», which the advance path has no way to supply. The
-  // four reasons that dialog offers all describe commercial or judicial endings;
-  // none fits a filed grievance.
+  // 🔴 مقفلة IS THE LINEAR SUCCESSOR OF جاهزة_للرفع, and this is the ONLY array
+  // in the system where that is true. Batch 4b tried inserting انتظار_رد_التظلم
+  // here as a waiting stage; the owner REVERSED it — the case advanced straight
+  // through, so the stage added a step without adding information.
   //
-  // It is also the honest state: the صيغة is filed and the firm is waiting. The
-  // case auto-closes to مقفلة after 7 days (checkGrievanceAwaitingExpiry) —
-  // closure here means "our work is done", since chasing the authority's reply is
-  // the client's job and the owner wants the case off the active board.
-  //
-  // ⚠ GRIEVANCE ARRAY ONLY. AdminLawsuitStages is untouched — that track reaches
-  // court through معين and has no grievance-waiting step.
-  "انتظار_رد_التظلم",
+  // The closure-reason problem that shape was meant to solve is fixed instead at
+  // the transition itself: جاهزة_للرفع → مقفلة on this track supplies its own
+  // reason (تم_تزويد_العميل_بصيغة_التظلم) server-side, so «المرحلة التالية» is a
+  // complete action and never demands a dialog the advance path cannot open.
+  // See isEarlyCloseStage in routes.ts.
   "مقفلة",
 ];
 
@@ -2594,18 +2588,20 @@ export const ClosureReason = {
   // NOT تنازل_العميل — a waiver is a decision the client made; non-response is
   // the absence of one, and the two must stay distinguishable in reporting.
   DATA_NOT_COMPLETED: "عدم_استكمال_البيانات",
-  // The صيغة التظلم was filed and the firm's work on it is finished. Written ONLY
-  // by checkGrievanceAwaitingExpiry (server/scheduler.ts), which closes a
-  // grievance case 7 days after it enters انتظار_رد_التظلم. Deliberately NOT
-  // offered in the manual early-close dialog, exactly like تم_التحصيل and
-  // عدم_استكمال_البيانات above: that dialog is for closing a case that still had
-  // work left, and this closure means the opposite — the filing happened and
-  // chasing the authority's reply is the client's responsibility.
+  // مسار التظلم's own ending: the grievance TEXT was drafted, reviewed and handed
+  // to the client, whose responsibility filing and follow-up then are. That is the
+  // whole of the firm's engagement on this track, so the case closes having DONE
+  // what it set out to do.
   //
-  // NOT شطب_بدون_إعادة_قيد and NOT تنازل_العميل: nothing lapsed and nobody waived.
-  // The case closes having DONE what it set out to do, and the reporting must be
-  // able to tell that apart from an abandonment.
-  GRIEVANCE_FILED_AWAITING_REPLY: "رفع_التظلم_بانتظار_الرد",
+  // Written ONLY by the جاهزة_للرفع → مقفلة transition on a case whose
+  // adminCaseSubType is تظلم (PATCH /api/cases/:id) — exactly like تم_التحصيل and
+  // عدم_استكمال_البيانات above, each of which has a single writer. Deliberately
+  // NOT offered in the manual early-close dialog: that dialog is for closing a
+  // case that still had work left, and this means the opposite.
+  //
+  // NOT شطب_بدون_إعادة_قيد and NOT تنازل_العميل — nothing lapsed and nobody waived.
+  // Reporting has to be able to tell a completed grievance from an abandonment.
+  GRIEVANCE_TEXT_DELIVERED: "تم_تزويد_العميل_بصيغة_التظلم",
   OTHER: "أخرى",
 } as const;
 
@@ -2629,7 +2625,7 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "لم_يتم_الصلح": "لم يتم الصلح",
   "تم_التحصيل": "تم التحصيل",
   "عدم_استكمال_البيانات": "عدم استكمال البيانات",
-  "رفع_التظلم_بانتظار_الرد": "رُفع التظلم — بانتظار رد الجهة",
+  "تم_تزويد_العميل_بصيغة_التظلم": "تم تزويد العميل بصيغة التظلم",
   "أخرى": "أخرى",
 };
 
@@ -6905,8 +6901,6 @@ export function prescriptionFilingDate(c: PrescriptionCaseInput): string | null 
   return firmDayEnteredStage(c, stopStage);
 }
 
-/** How many days a grievance case waits at انتظار_رد_التظلم before auto-closing. */
-export const GrievanceAwaitingAutoCloseDays = 7;
 
 /**
  * 🔴 DID THE VIOLATION ARRIVE ALREADY TIME-BARRED?
