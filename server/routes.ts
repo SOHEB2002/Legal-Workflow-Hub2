@@ -93,6 +93,8 @@ import {
   ExecutionTaskTitlePrefix,
   getReopenTargetStages,
   AdminCaseSubType,
+  computePrescriptionDate,
+  prescriptionClockStopped,
   // GrievanceNumberUnavailable is deliberately NOT imported here any more: with
   // blank and «غير متوفرة» both accepted, the server records whatever it is given
   // verbatim and has no reason to know the sentinel. It stays exported for the
@@ -3022,6 +3024,53 @@ async function recomputeCaseNextHearingDate(caseId: string | null | undefined): 
   }
 }
 
+// ==================== التقادم — RECOMPUTE ====================
+// 🔴 ONE WRITER FOR law_cases.prescription_date. Every route that can change an
+// input calls THIS; none of them computes a date itself. The rule lives in
+// shared/schema (computePrescriptionDate) so the panel, this and the scheduler
+// cannot disagree.
+//
+// 🔴 THE CLOCK FREEZES AT FILING (owner ruling R3). Once the case has reached its
+// filing stage the stored value is whatever it was at that moment and is NEVER
+// touched again — so the record still shows the deadline the firm was working to,
+// which is what matters in any later argument about timeliness. That check comes
+// FIRST, before the rule is even evaluated.
+//
+// NO OVERRIDE CONCEPT (R3): a recompute overwrites whatever is there, computed or
+// hand-typed. There is no flag column and no "manual" state to preserve.
+//
+// NULL IS A REAL ANSWER. When the rule yields no clock (accepted grievance,
+// outcome not yet known, track unchosen) or an input is missing, the column is
+// CLEARED — a stale date left behind after the facts changed is worse than an
+// empty one, because it looks authoritative.
+//
+// Total by construction: the whole body is one try/catch that only logs. A case
+// must never fail to save because a derived date could not be refreshed.
+// Returns whether it wrote, for the sweep's changed-row count.
+async function recomputeCasePrescriptionDate(caseId: string | null | undefined): Promise<boolean> {
+  const id = String(caseId || "").trim();
+  if (!id) return false;
+  try {
+    const existing = await storage.getCaseById(id);
+    if (!existing) return false;
+    return await recomputePrescriptionForCase(existing);
+  } catch (e) {
+    console.error("[recomputeCasePrescriptionDate] failed for case", caseId, e);
+    return false;
+  }
+}
+
+// The same logic against a case row the caller already holds — used by the
+// nightly sweep, which reads every case once and must not re-fetch each one.
+export async function recomputePrescriptionForCase(existing: LawCase): Promise<boolean> {
+  if (prescriptionClockStopped(existing)) return false;
+  const result = computePrescriptionDate(existing);
+  const next = result.date;
+  if ((existing.prescriptionDate || null) === next) return false;
+  await storage.updateCase(existing.id, { prescriptionDate: next });
+  return true;
+}
+
 // Recording a judgment MEANS the case is in court, so a case found on any other
 // stage is repaired in place rather than refused. Mirrors the hearing-creation
 // promotion field-for-field (POST /api/hearings): منظورة, and for a قيد_الدراسة
@@ -5198,11 +5247,15 @@ export async function registerRoutes(
           if (!gDate) return res.status(400).json({ error: "يجب تحديد تاريخ التظلم" });
         }
 
-        // From تحديد_تاريخ_التقادم to next: require prescriptionDate
-        if (existing.currentStage === "تحديد_تاريخ_التقادم") {
-          const pDate = req.body.prescriptionDate || existing.prescriptionDate;
-          if (!pDate) return res.status(400).json({ error: "يجب تحديد تاريخ التقادم" });
-        }
+        // ⚠ THE "require prescriptionDate when leaving تحديد_تاريخ_التقادم" GATE
+        // WAS DELETED HERE (batch 3). It became unreachable in batch 1, which
+        // removed تحديد_تاريخ_التقادم from both admin path arrays — no case can
+        // sit on that stage any more, so `existing.currentStage === …` can never
+        // be true. It is also superseded in substance: the prescription date is
+        // no longer typed by a lawyer at a dedicated stage, it is COMPUTED from
+        // the violation/grievance dates (computePrescriptionDate) and recomputed
+        // on every route that can change an input. The stage VALUE, its label and
+        // its two transition edges all survive for historical cases.
 
         // When الأخذ_بالملاحظات to جاهزة_للرفع: require reviewDecision describing
         // how the lawyer addressed the committee notes (one of three values).
@@ -5775,7 +5828,24 @@ export async function registerRoutes(
         await cancelOpenCaseChildrenOnClose(String(req.params.id));
       }
 
-      res.json(updated);
+      // RECOMPUTE POINT 3 of 3 — the catch-all. This route can write
+      // prescriptionDate directly (it is in caseDataFields), adminCaseSubType,
+      // grievanceRequired and the stage. Recomputing unconditionally means a
+      // hand-typed prescriptionDate submitted here is immediately replaced by the
+      // computed one — which is exactly ruling R3: there is no override concept,
+      // and a recompute overwrites whatever is there.
+      //
+      // ⚠ IT ALSO CATCHES THE STAGE MOVE THAT STOPS THE CLOCK. When this PATCH is
+      // the write that reaches قيد_التدقيق_في_معين (or مقفلة on the grievance
+      // track), the recompute runs AFTER the stage is stored, sees the clock
+      // stopped, and declines to write — freezing whatever value was there. That
+      // is why the freeze needs no separate hook: the last recompute before
+      // filing is the value that survives.
+      const prescriptionCase = await storage.getCaseById(String(req.params.id));
+      if (prescriptionCase) await recomputePrescriptionForCase(prescriptionCase);
+      const finalCase = await storage.getCaseById(String(req.params.id));
+
+      res.json(finalCase || updated);
     } catch (error) {
       console.error("[PATCH /api/cases/:id] Unhandled error:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث القضية" });
@@ -9116,7 +9186,15 @@ export async function registerRoutes(
         }
       }
 
-      res.json(updated);
+      // RECOMPUTE POINT 1 of 3. This endpoint owns ALL THREE prescription inputs
+      // — violationKnowledgeDate, grievanceDate, grievanceResultDate — plus
+      // grievanceResult, which selects WHICH rule applies. It is the likeliest
+      // place for the deadline to change, and it changed nothing before this.
+      // Re-read after the write so the recompute sees the new values.
+      await recomputeCasePrescriptionDate(lawCase.id);
+      const withPrescription = await storage.getCaseById(lawCase.id);
+
+      res.json(withPrescription || updated);
     } catch (error) {
       console.error("Error updating violation details:", error);
       res.status(500).json({ error: "حدث خطأ في تحديث تفاصيل المخالفة" });
@@ -9247,7 +9325,16 @@ export async function registerRoutes(
         console.error("[cases/admin-track] activity log failed", e);
       }
 
-      res.json(updated);
+      // RECOMPUTE POINT 2 of 3. This route sets BOTH selectors of the rule —
+      // adminCaseSubType (which decides whether any clock runs, and on the
+      // grievance track selects the 60-day rule outright) and grievanceRequired
+      // (which on the lawsuit track chooses between rule 1 and rules 2/3). It can
+      // also write grievanceDate, rule 3's input. So a case acquires its
+      // prescription deadline the moment its track is chosen.
+      await recomputeCasePrescriptionDate(lawCase.id);
+      const withPrescription = await storage.getCaseById(lawCase.id);
+
+      res.json(withPrescription || updated);
     } catch (error) {
       console.error("Error selecting admin track:", error);
       res.status(500).json({ error: "حدث خطأ في تحديد مسار القضية" });

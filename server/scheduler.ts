@@ -1,10 +1,11 @@
 import cron from "node-cron";
 import { storage } from "./storage";
-import { calculateSmartPriority } from "./routes";
+import { calculateSmartPriority, recomputePrescriptionForCase } from "./routes";
 import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotificationRecipientId,
   NotificationType, elapsedDaysLabel, firmToday,
   HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
-  HearingRingTier, HearingRingTierLeadMinutes } from "@shared/schema";
+  HearingRingTier, HearingRingTierLeadMinutes,
+  addDaysToDateString, prescriptionClockStopped, FieldTaskType } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
@@ -48,6 +49,10 @@ export function startScheduler() {
   });
 
   cron.schedule("0 8 * * *", async () => {
+    // FIRST in the run, by instruction: it recomputes prescription_date across
+    // the admin cases before anything else reads it, so a missed write path
+    // cannot leave a stale deadline for the rest of the morning's jobs.
+    await checkPrescriptionDeadlines();
     await checkLegalDeadlines();
     await checkDelegationExpiry();
     await checkContactFollowUps();
@@ -749,6 +754,181 @@ async function autoArchiveClosedCases() {
 // The function name still says Najiz because ناجز was the only stage it covered
 // when it was written; renaming it would touch the cron registration and the
 // error string for no behavioural gain, so the docs carry the correction instead.
+// ==================== التقادم — SWEEP, WARN, LAPSE, CANCEL ====================
+// Daily 08:00. Three jobs in one pass over the admin cases, in a FIXED ORDER:
+// recompute first (so nothing downstream reads a stale date), then warn, then
+// escalate, then cancel.
+//
+// 🔴 EVERY DATE COMPARISON IS A STRING COMPARISON. prescription_date and
+// firmToday() are both "YYYY-MM-DD", which sorts lexicographically, so `<` and
+// `>=` ARE the calendar comparison. Nothing here parses a date-only string —
+// that is the 60a4d79 UTC-midnight class, and it is also the defect in
+// checkLegalDeadlines' own daysLeft (`new Date(deadline.deadlineDate)`), which
+// this job deliberately does not copy. The T-3 boundary is computed by
+// addDaysToDateString, the same integer-in/integer-out helper the rule uses.
+const PRESCRIPTION_WARNING_TITLE = "تنبيه: قرب انتهاء مدة التقادم";
+const PRESCRIPTION_LAPSED_TITLE = "عاجل: انتهت مدة التقادم";
+
+async function checkPrescriptionDeadlines() {
+  try {
+    const [allCases, allTasks, allNotifications, allUsers] = await Promise.all([
+      storage.getAllCases(),
+      storage.getAllFieldTasks(),
+      storage.getAllNotifications(),
+      storage.getAllUsers(),
+    ]);
+
+    // Admin cases only — the rule is administrative. A case with no track has no
+    // clock (computePrescriptionDate returns no-rule), but it is still swept so
+    // that a stale date left by an earlier track choice gets cleared.
+    // Typed callback, NOT (c: any) — getAllCases returns LawCase[], and widening
+    // it here would have forced a cast at the recompute call below.
+    const adminCases = allCases.filter((c) => {
+      const sub = String(c.adminCaseSubType || "").trim();
+      return sub === "تظلم" || sub === "قضية" || !!String(c.prescriptionDate || "").trim();
+    });
+
+    // ---- 1. THE SAFETY-NET SWEEP, FIRST ----
+    // Exists so a missed write path cannot leave a stale deadline sitting on a
+    // case: the three routes are the primary mechanism, this is the backstop.
+    // Skips stopped clocks (R3 — the value is frozen at filing), which is also
+    // what makes the sweep cheap: a filed case is never written again.
+    let recomputed = 0;
+    for (const c of adminCases) {
+      try {
+        if (await recomputePrescriptionForCase(c)) recomputed++;
+      } catch (e) {
+        console.error("[prescription] recompute failed for case", c.id, e);
+      }
+    }
+    if (recomputed > 0) {
+      console.log(`[prescription] nightly sweep updated ${recomputed} case(s)`);
+    }
+
+    // Re-read after the sweep: the warning must evaluate the dates it just wrote,
+    // not the ones it replaced.
+    const refreshed = recomputed > 0 ? await storage.getAllCases() : allCases;
+    const byId = new Map(refreshed.map((c: any) => [c.id, c]));
+
+    const today = firmToday();
+    const warnBoundary = addDaysToDateString(today, 3);
+
+    // Open warning tasks by case, found by TYPE — never by title prefix.
+    const openWarningByCase = new Map<string, any[]>();
+    for (const t of allTasks) {
+      if (!t.caseId) continue;
+      if (t.taskType !== FieldTaskType.PRESCRIPTION_WARNING) continue;
+      if (t.status !== "قيد_الانتظار" && t.status !== "قيد_التنفيذ") continue;
+      const arr = openWarningByCase.get(t.caseId) ?? [];
+      arr.push(t);
+      openWarningByCase.set(t.caseId, arr);
+    }
+
+    for (const stale of adminCases) {
+      const caseItem: any = byId.get(stale.id) ?? stale;
+      const open = openWarningByCase.get(caseItem.id) ?? [];
+
+      // ---- 4. CANCEL ON FILING ----
+      // The clock stopped, so the warning is answered. Cancel any open task and
+      // send NOTHING — the لawyer already knows they filed. Same shape as
+      // checkNajizReviewReminders' auto-cancel arm.
+      if (prescriptionClockStopped(caseItem)) {
+        for (const t of open) {
+          await storage.updateFieldTask(t.id, { status: "ملغي" });
+        }
+        continue;
+      }
+
+      const deadline = String(caseItem.prescriptionDate || "").trim();
+      if (!deadline) continue;
+
+      const recipientId = caseNotificationRecipientId(caseItem);
+
+      // ---- 3. LAPSE — ESCALATE ----
+      // The warning task stays OPEN on purpose: the work (file, or explain why
+      // not) is still outstanding, and cancelling it would erase the only thing
+      // on anyone's list about a case that just lost its deadline.
+      if (deadline < today) {
+        if (!notificationExists(allNotifications, caseItem.id, PRESCRIPTION_LAPSED_TITLE)) {
+          // 🔴 resolveNotificationRecipients, NOT `.find` — checkLegalDeadlines
+          // resolves its department head with `.find` (scheduler.ts, the overdue
+          // arm), which notifies exactly ONE head of a two-head department and is
+          // the bug the notification batch fixed everywhere else. This helper
+          // de-dupes, drops blanks, filters to ACTIVE users and appends EVERY
+          // active head of the department.
+          const managers = allUsers
+            .filter((u: any) => u.role === "branch_manager" && u.isActive)
+            .map((u: any) => u.id);
+          const recipients = resolveNotificationRecipients(
+            [recipientId, ...managers],
+            allUsers as NotificationRecipientUser[],
+            { departmentId: caseItem.departmentId },
+          );
+          for (const rid of recipients) {
+            await storage.createNotification({
+              type: NotificationType.GENERAL_ALERT,
+              title: PRESCRIPTION_LAPSED_TITLE,
+              message: `انتهت مدة التقادم للقضية رقم ${caseItem.caseNumber} بتاريخ ${deadline} ولم يتم الرفع بعد. يرجى المراجعة العاجلة.`,
+              priority: "urgent",
+              status: "pending",
+              senderId: "system",
+              senderName: "النظام التلقائي",
+              recipientId: rid,
+              relatedType: "case",
+              relatedId: caseItem.id,
+              requiresResponse: true,
+            });
+          }
+        }
+        continue;
+      }
+
+      // ---- 2. T-3 WARNING ----
+      // Inclusive window rather than an exact-day equality: an exact match would
+      // miss the warning entirely if the job did not run that morning (an outage,
+      // a deploy), and this is the one alert in the system that must not be
+      // missed. The notification dedupe makes re-entry harmless.
+      if (!warnBoundary || deadline > warnBoundary) continue;
+      if (!recipientId) continue; // no lawyer to warn — nothing to send
+
+      if (!notificationExists(allNotifications, caseItem.id, PRESCRIPTION_WARNING_TITLE, recipientId)) {
+        await storage.createNotification({
+          type: NotificationType.GENERAL_ALERT,
+          title: PRESCRIPTION_WARNING_TITLE,
+          message: `تنتهي مدة التقادم للقضية رقم ${caseItem.caseNumber} بتاريخ ${deadline}. يرجى إتمام الرفع قبل هذا التاريخ.`,
+          priority: "urgent",
+          status: "pending",
+          senderId: "system",
+          senderName: "النظام التلقائي",
+          recipientId,
+          relatedType: "case",
+          relatedId: caseItem.id,
+          requiresResponse: true,
+        });
+      }
+
+      // ONE task per case, found by taskType. `open` was built before this loop,
+      // so a task created on an earlier tick is seen here and not duplicated.
+      if (open.length === 0) {
+        await storage.createFieldTask(
+          {
+            title: `${PRESCRIPTION_WARNING_TITLE} — قضية رقم ${caseItem.caseNumber}`,
+            description: `تنتهي مدة التقادم بتاريخ ${deadline}. يجب إتمام الرفع قبل هذا التاريخ، وإلا سقطت الدعوى.`,
+            taskType: FieldTaskType.PRESCRIPTION_WARNING,
+            caseId: caseItem.id,
+            assignedTo: recipientId,
+            priority: "عاجل",
+            dueDate: deadline,
+          },
+          "system",
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Error checking prescription deadlines:", error);
+  }
+}
+
 async function checkNajizReviewReminders() {
   try {
     const allCases = await storage.getAllCases();

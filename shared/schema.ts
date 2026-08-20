@@ -3298,6 +3298,16 @@ export const FieldTaskType = {
   COURT_FOLLOW_UP: "متابعة_محكمة",
   OTHER: "أخرى",
   GENERAL: "عام",
+  // 🔴 THE PRESCRIPTION WARNING'S OWN TYPE — added so the scheduler can find its
+  // previous task by taskType instead of by TITLE PREFIX, which is how
+  // checkNajizReviewReminders identifies its own rows. That title-matching is a
+  // documented liability there: renaming the title silently breaks both the
+  // recurrence guard and the auto-cancel at once. A dedicated type cannot drift.
+  // No DDL — field_tasks.task_type is a free varchar(50). The
+  // admin_support_task_assignments table is keyed on task_type but needs no row
+  // here: this task goes to the case's LAWYER, and a missing row there simply
+  // means "not an admin_support-routed type".
+  PRESCRIPTION_WARNING: "تنبيه_التقادم",
 } as const;
 
 export type FieldTaskTypeValue = typeof FieldTaskType[keyof typeof FieldTaskType];
@@ -3309,6 +3319,7 @@ export const FieldTaskTypeLabels: Record<FieldTaskTypeValue, string> = {
   "متابعة_محكمة": "متابعة محكمة",
   "أخرى": "أخرى",
   "عام": "مهمة عامة",
+  "تنبيه_التقادم": "تنبيه التقادم",
 };
 
 // ==================== أحداث المهام العامة (general-task activity thread) ====================
@@ -6584,6 +6595,152 @@ function stageWasReached(c: OutcomeCaseInput, stage: string): boolean {
   if (c.currentStage === stage) return true;
   return Array.isArray(c.stageHistory)
     && c.stageHistory.some((entry) => entry?.stage === stage);
+}
+
+// ==================== التقادم — THE ADMIN PRESCRIPTION CLOCK ====================
+// 🔴 ONE DEFINITION, client and server, the isUpcomingHearing precedent. A wrong
+// prescription date loses a case, so there is exactly one place this is computed
+// and both sides call it.
+//
+// 🔴 THE ARITHMETIC NEVER TOUCHES `new Date(str)`. A date-only string parsed that
+// way is UTC MIDNIGHT, and any subsequent local-time read is a different calendar
+// — the 60a4d79 class that already caused a production outage here (hearing
+// results were unrecordable 00:00-03:00 Riyadh every morning). addDays below goes
+// integers-in, integers-out through Date.UTC, so no timezone enters the path at
+// any point and Date.UTC normalises month/year overflow for free.
+//
+// STORED DATES ARE GREGORIAN "YYYY-MM-DD" — verified three ways before this was
+// written: HijriDatePicker's BOTH handlers emit `${getFullYear()}-${mm}-${dd}`
+// (its Hijri tab converts the picked Hijri day to a Gregorian Date first, so
+// Hijri is display-only); the schema's own note at FirmTimeZone says the same;
+// and the seed writes to_char(CURRENT_DATE + n, 'YYYY-MM-DD'). A day is the same
+// length in both calendars, so "+60 days" is calendar-agnostic — only months and
+// years would differ, and none are used here.
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** "YYYY-MM-DD" + N days → "YYYY-MM-DD". Integer in, integer out, no timezone. */
+export function addDaysToDateString(day: string, days: number): string | null {
+  const m = String(day || "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = Date.UTC(y, mo - 1, d + days);
+  if (!Number.isFinite(t)) return null;
+  const out = new Date(t);
+  return `${out.getUTCFullYear()}-${pad2(out.getUTCMonth() + 1)}-${pad2(out.getUTCDate())}`;
+}
+
+export const PrescriptionDaysNoGrievance = 60;
+export const PrescriptionDaysGrievanceRejected = 60;
+export const PrescriptionDaysGrievanceNoResponse = 120;
+
+/** The Arabic label of each input, for the «بانتظار …» display. */
+export const PrescriptionInputLabels: Record<string, string> = {
+  violationKnowledgeDate: "تاريخ العلم بالمخالفة",
+  grievanceResultDate: "تاريخ نتيجة الاعتراض",
+  grievanceDate: "تاريخ الاعتراض",
+};
+
+export type PrescriptionReason = "ok" | "no-rule" | "missing-input" | "stopped";
+export type PrescriptionResult = {
+  date: string | null;
+  reason: PrescriptionReason;
+  /** Only on "missing-input" — the LawCase key whose absence blocked the rule. */
+  missingField?: string;
+  /** Only on "no-rule" — why no clock applies, for the panel's explanation. */
+  noRuleCause?: "accepted" | "outcome-unknown" | "unrouted";
+};
+
+export type PrescriptionCaseInput = {
+  currentStage?: string | null;
+  stageHistory?: Array<{ stage?: string | null } | null> | null;
+  adminCaseSubType?: string | null;
+  grievanceRequired?: boolean | null;
+  grievanceResult?: string | null;
+  violationKnowledgeDate?: string | null;
+  grievanceDate?: string | null;
+  grievanceResultDate?: string | null;
+};
+
+// 🔴 THE CLOCK STOPS AT FILING, AND THE TEST IS stageHistory NOT currentStage.
+// A case moves PAST the filing stage (قيد_التدقيق_في_معين → منظورة), and a
+// currentStage test would restart the clock the moment it did — the same reason
+// caseReachedJudgmentStage tests history. جاهزة_للرفع deliberately does NOT stop
+// it: "ready to file" is not filed, and that window is exactly the dangerous one.
+export function prescriptionClockStopped(c: PrescriptionCaseInput): boolean {
+  const sub = String(c.adminCaseSubType || "").trim();
+  if (sub === AdminCaseSubType.CASE) {
+    return stageWasReached(c as OutcomeCaseInput, "قيد_التدقيق_في_معين");
+  }
+  if (sub === AdminCaseSubType.GRIEVANCE) {
+    // مسار التظلم has no "submitted" stage — after جاهزة_للرفع the only stage is
+    // مقفلة, so closure IS the filing signal on that path (owner ruling; the
+    // array is deliberately not changed).
+    return stageWasReached(c as OutcomeCaseInput, "مقفلة");
+  }
+  return false;
+}
+
+/**
+ * The prescription deadline for an administrative case, or why there isn't one.
+ * Callers write `date` to law_cases.prescription_date — NULL for every non-"ok"
+ * reason, so a rule that stops applying clears the stale date rather than
+ * leaving it to mislead.
+ */
+export function computePrescriptionDate(c: PrescriptionCaseInput): PrescriptionResult {
+  const sub = String(c.adminCaseSubType || "").trim();
+
+  // Track not chosen → nothing to compute. The batch-2 buttons set it.
+  if (sub !== AdminCaseSubType.CASE && sub !== AdminCaseSubType.GRIEVANCE) {
+    return { date: null, reason: "no-rule", noRuleCause: "unrouted" };
+  }
+
+  // FROZEN ONCE FILED (owner ruling R3): the stored value stays exactly as it
+  // was at filing and is never recomputed. Callers check this BEFORE writing, so
+  // this arm is a second line of defence rather than the only one.
+  if (prescriptionClockStopped(c)) {
+    return { date: null, reason: "stopped" };
+  }
+
+  const from = (field: keyof PrescriptionCaseInput, days: number): PrescriptionResult => {
+    const raw = String(c[field] || "").trim();
+    if (!raw) return { date: null, reason: "missing-input", missingField: String(field) };
+    const date = addDaysToDateString(raw, days);
+    // A malformed stored value is reported as missing rather than silently
+    // producing nothing: the lawyer has to fix the input either way.
+    if (!date) return { date: null, reason: "missing-input", missingField: String(field) };
+    return { date, reason: "ok" };
+  };
+
+  // مسار التظلم — the deadline to file THE GRIEVANCE itself. Same rule and same
+  // input as an unobligated lawsuit; only the document at the end differs.
+  if (sub === AdminCaseSubType.GRIEVANCE) {
+    return from("violationKnowledgeDate", PrescriptionDaysNoGrievance);
+  }
+
+  // مسار الدعوى.
+  if (c.grievanceRequired !== true) {
+    return from("violationKnowledgeDate", PrescriptionDaysNoGrievance);
+  }
+
+  const result = String(c.grievanceResult || "").trim();
+  if (result === GrievanceResult.REJECTED) {
+    return from("grievanceResultDate", PrescriptionDaysGrievanceRejected);
+  }
+  if (result === GrievanceResult.NO_RESPONSE) {
+    // 🔴 The 120-day arm keys on the EXACT stored string "لم_يُردّ_عليه" — the
+    // one the GrievanceResult declaration warns must never be renamed casually.
+    return from("grievanceDate", PrescriptionDaysGrievanceNoResponse);
+  }
+  if (result === GrievanceResult.ACCEPTED) {
+    // The decision was overturned; there is no lawsuit to file.
+    return { date: null, reason: "no-rule", noRuleCause: "accepted" };
+  }
+  // NULL, or any unrecognised legacy value: WHICH rule applies depends on the
+  // outcome (60-from-rejection vs 120-from-submission), so computing either
+  // would be a guess.
+  return { date: null, reason: "no-rule", noRuleCause: "outcome-unknown" };
 }
 
 // ==================== THE صك (JUDGMENT DEED) SCOPE TEST ====================
