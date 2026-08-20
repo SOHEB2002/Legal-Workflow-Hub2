@@ -4939,6 +4939,16 @@ export async function registerRoutes(
       // post-update side-effects can see them.
       let shouldCreateCollectionTask = false;
       let shouldCreateSettlementFailedMemo = false;
+      // سجل الأحكام — the ruling this PATCH records, resolved during stage
+      // validation below and WRITTEN only after storage.updateCase returns. Stays
+      // null on every request that is not a move into a judgment stage, which is
+      // what keeps the write off the handler's hot path.
+      let judgmentToRecord: {
+        degree: string;
+        outcome: string;
+        isFinal: boolean;
+        opensWindow: boolean;
+      } | null = null;
 
       // Validate stage transition if changing stage
       if (req.body.currentStage && req.body.currentStage !== existing.currentStage) {
@@ -5378,6 +5388,44 @@ export async function registerRoutes(
               return res.status(400).json({ error: "يجب تحديد ما إذا كانت القضية بحاجة لاعتراض (استئناف)" });
             }
           }
+
+          // 🔴 THE SECOND ENTRY POINT INTO سجل الأحكام, AND UNTIL NOW THE ONLY ONE
+          // THAT RECORDED NOTHING. This branch validated the whole judgment payload
+          // — outcome, finality, needsAppeal — and then moved the case with no row
+          // in case_judgments. Everything downstream keys on that row's EXISTENCE,
+          // so all of it stayed silent: both صك badges (isAwaitingJudgmentDeed /
+          // isAwaitingJudgmentDeedFile, whose FIRST term is hasJudgmentRecord), the
+          // "تابع استلام صك الحكم" مهامي row (gated on EXISTS case_judgments), and
+          // POST /api/cases/:id/judgment-deed itself, whose gate became judgment
+          // existence in batch 2 — so the صك could not be recorded at all.
+          //
+          // Batch 2 hooked the hearing-result handler (PATH B) and audited the
+          // DEED-SCALAR writers, correctly finding two. It never asked the other
+          // question — what else moves a case INTO a judgment stage — and this is
+          // the answer to it.
+          //
+          // RESOLVED HERE, WRITTEN AFTER updateCase: this block still has `return`s
+          // below it, and a ruling must not outlive a stage move that never landed.
+          const judgmentIsAppeal = existing.currentStage === "منظورة_استئناف";
+          judgmentToRecord = {
+            // THE PRE-MOVE STAGE, exactly as PATH B derives it: a ruling's degree
+            // comes from where the case sat when it was pronounced (منظورة →
+            // ابتدائي, منظورة_استئناف → استئنافي), never from the stage it is moving
+            // to. Via the shared helper, not a local copy of its rule.
+            degree: judgmentDegreeForStage(existing.currentStage),
+            outcome: req.body.judgmentType,
+            isFinal: req.body.judgmentFinal,
+            // PATH B computes these two from objectionFeasible:
+            //   isFinal     = isAppealRuling || objectionFeasible === false
+            //   opensWindow = !isAppealRuling && objectionFeasible === true
+            // This path has no objectionFeasible input — it takes judgmentFinal
+            // directly — but the pair inverts exactly: for a non-appeal ruling
+            // "objectionFeasible === true" IS "!isFinal", and an appeal ruling both
+            // opens no window and is final, so either form yields false. This is
+            // PATH B's rule restated in the inputs this path has, NOT a second
+            // policy that could drift from it.
+            opensWindow: !judgmentIsAppeal && req.body.judgmentFinal === false,
+          };
         }
 
         // === REVIEW COMMITTEE DECISION ENFORCEMENT ===
@@ -5699,6 +5747,49 @@ export async function registerRoutes(
           // own endpoint — see createCollectionTaskForCase.
           existing.currentStage === "انتظار_رد_التظلم" ? "grievance-accepted" : "settlement",
         );
+      }
+
+      // === سجل الأحكام — WRITE THE RULING ===
+      // Beside the other post-update side effects and AFTER updateCase returned,
+      // the same shape shouldCreateCollectionTask uses: the stage move is what
+      // makes the ruling real, so an update that failed must leave no row behind.
+      // Through recordJudgment — the single writer — so the row and the law_cases
+      // deed mirror are written in its one transaction, exactly as PATH B and
+      // /appeal-ruling do. Nothing here reimplements it.
+      //
+      // hearingId IS NULL, DELIBERATELY. This path records a ruling that did NOT
+      // arrive through a recorded session, so there is no hearing to name; pointing
+      // at some other hearing on the case would assert that the ruling was
+      // pronounced at that session when nothing says so. It is the shape
+      // POST /api/cases/:id/appeal-ruling already uses, and judgment-record.ts's own
+      // header sanctions it: "A judgment recorded WITHOUT a hearing … has no such
+      // key and is guarded by its endpoint's stage check instead."
+      //
+      // 🔴 WHY A REPEATED PATCH CANNOT DUPLICATE THE ROW. recordJudgment's
+      // idempotency key is hearingId, which is null here, so that guard does NOT
+      // apply — the stage check is the protection, and it is structural rather than
+      // added: judgmentToRecord is only ever assigned inside
+      //   if (req.body.currentStage && req.body.currentStage !== existing.currentStage)
+      // so re-sending the same PATCH to a case ALREADY at محكوم_حكم_ابتدائي never
+      // enters the branch and writes nothing. And ALLOWED_CASE_TRANSITIONS has no
+      // self-edge and no محكوم_حكم_ابتدائي → محكوم_حكم_نهائي edge, so the only ways
+      // in are منظورة → either judgment stage (a first-instance ruling) and
+      // منظورة_استئناف → محكوم_حكم_نهائي (an appeal ruling). Every firing is a
+      // genuinely distinct ruling and correctly takes the next sequence.
+      if (judgmentToRecord) {
+        await recordJudgment({
+          caseId: updated.id,
+          hearingId: null,
+          degree: judgmentToRecord.degree,
+          outcome: judgmentToRecord.outcome,
+          isFinal: judgmentToRecord.isFinal,
+          opensWindow: judgmentToRecord.opensWindow,
+          recordedBy: user.id,
+          // NEVER a remand from here. A quash is recorded only by the hearing-result
+          // handler and by /appeal-ruling, both of which take an explicit remand
+          // input; this path has none, so it can never supersede a prior ruling.
+          supersedesJudgmentId: null,
+        });
       }
 
       // Side effect for مداولة_الصلح → أغلق_طلب_الصلح on a defendant case: the
