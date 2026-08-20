@@ -96,6 +96,8 @@ import {
   GrievanceResultLabels,
   computePrescriptionDate,
   PrescriptionInputLabels,
+  prescriptionFilingDate,
+  prescriptionArrivedTimeBarred,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment, GrievanceResultValue } from "@shared/schema";
 
@@ -312,7 +314,18 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   // panel's field carries the qualifier. The other two rows are untouched.
   { key: "adminExecutionRequestNumber", label: "رقم طلب التنفيذ الإداري", kind: "text" },
   { key: "invoiceNumber", label: "رقم الفاتورة", kind: "text" },
+  // 🔴 THE RESTORED MANUAL تاريخ التقادم (batch 3b). Listed here so the EDIT form
+  // seeds, renders and saves it with no special-casing — the seed loop, the input
+  // loop and the save body all iterate this array.
+  // ⚠ EXCLUDED FROM THE READ-ONLY GRID (see PRESCRIPTION_READONLY_EXCLUDED): the
+  // prominent amber block above the grid already displays it, with the four
+  // computed states the grid's plain «غير مُضاف» cannot express.
+  { key: "prescriptionDate", label: "تاريخ التقادم", kind: "date" },
 ];
+
+// Rendered by the block above the grid, not as a grid cell. Kept as a set rather
+// than an inline `!==` so the reason lives next to the exclusion.
+const PRESCRIPTION_READONLY_EXCLUDED = new Set(["prescriptionDate"]);
 
 // 🔴 «التظلم غير وجوبي» — a LABEL SUFFIX, never a disable. When the lawyer
 // answered لا to «التظلم وجوبي؟» on the مسار الدعوى choice, the two objection
@@ -977,7 +990,7 @@ export function CaseDetailsDialog({
                     )}
                     {selectedCase.moeenNumber && (
                       <div>
-                        <Label className="text-muted-foreground">رقم القيد في معين</Label>
+                        <Label className="text-muted-foreground">رقم الطلب في معين</Label>
                         <p className="font-medium"><LtrInline>{selectedCase.moeenNumber}</LtrInline></p>
                       </div>
                     )}
@@ -1288,13 +1301,41 @@ export function CaseDetailsDialog({
                             // was working to, which is what matters if timeliness is
                             // ever argued.
                             if (p.reason === "stopped") {
+                              // ITEM 2 — name the FILING DATE, read from the
+                              // stageHistory entry for the track's stop stage (the
+                              // same entry the stop test itself reads). No column,
+                              // no input. Falls back to the bare text when that
+                              // entry carries no usable timestamp, rather than
+                              // rendering something wrong.
+                              const filed = prescriptionFilingDate(selectedCase);
+                              const note = filed ? (
+                                <div className={`${small} flex flex-wrap items-center gap-1`}>
+                                  <span>تم الرفع بتاريخ</span>
+                                  <DualDateDisplay date={filed} />
+                                </div>
+                              ) : (
+                                <div className={small}>تم الرفع — لا يسري التقادم</div>
+                              );
                               return selectedCase.prescriptionDate ? (
                                 <>
                                   <DualDateDisplay date={selectedCase.prescriptionDate} />
-                                  <div className={small}>تم الرفع — لا يسري التقادم</div>
+                                  {note}
                                 </>
-                              ) : (
-                                <span className={small}>تم الرفع — لا يسري التقادم</span>
+                              ) : note;
+                            }
+                            // ITEM 3 — ARRIVED ALREADY TIME-BARRED. Checked before
+                            // the ok/missing arms because such a case HAS a valid
+                            // computed date; what distinguishes it is that the date
+                            // was already past on the day the file was opened. The
+                            // scheduler applies the SAME shared predicate and stays
+                            // silent, so the label and the silence agree by
+                            // construction rather than by two matching conditions.
+                            if (prescriptionArrivedTimeBarred(selectedCase)) {
+                              return (
+                                <div className="flex flex-wrap items-center gap-1">
+                                  <span>متقادمة منذ</span>
+                                  <DualDateDisplay date={String(selectedCase.prescriptionDate)} />
+                                </div>
                               );
                             }
                             if (p.reason === "no-rule") {
@@ -1357,7 +1398,7 @@ export function CaseDetailsDialog({
 
                       {!violationEditing ? (
                         <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
-                          {VIOLATION_PANEL_FIELDS.map((f) => {
+                          {VIOLATION_PANEL_FIELDS.filter((f) => !PRESCRIPTION_READONLY_EXCLUDED.has(f.key)).map((f) => {
                             const raw = String((selectedCase as unknown as Record<string, unknown>)[f.key] ?? "");
                             return (
                               <div key={f.key}>

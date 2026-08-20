@@ -2464,7 +2464,7 @@ export function stageNumberRequirement(
     case "قيد_التدقيق_في_ناجز":
       return { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" };
     case "قيد_التدقيق_في_معين":
-      return { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" };
+      return { field: "moeenNumber", label: "رقم الطلب في معين", placeholder: "أدخل رقم الطلب في منصة معين" };
     case "منظورة":
       return { field: "courtCaseNumber", label: "رقم الدعوى في المحكمة", placeholder: "أدخل رقم الدعوى الصادر من المحكمة" };
     default:
@@ -6163,6 +6163,27 @@ export function firmToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: FirmTimeZone }).format(new Date());
 }
 
+/**
+ * The firm's calendar day for an ISO TIMESTAMP (created_at, a stageHistory
+ * timestamp), as "YYYY-MM-DD".
+ *
+ * 🔴 `new Date(iso)` HERE IS CORRECT AND IS NOT THE 60a4d79 TRAP. That bug is
+ * about parsing a DATE-ONLY string ("2026-08-20"), which JS reads as UTC midnight
+ * and which any later local read then reinterprets in a second calendar. The
+ * input here is a FULL instant with a time and a zone designator, so parsing it
+ * is unambiguous — there is exactly one moment it can mean. What would be wrong
+ * is `iso.slice(0, 10)`: that takes the UTC day, so a violation entered at 01:30
+ * Riyadh (22:30 UTC the previous day) would land on YESTERDAY. Intl with the
+ * firm's zone is the only correct read, and it is the same formatter firmToday
+ * uses so the two can never disagree about where a day boundary falls.
+ */
+export function firmDayOf(instant: string | Date | null | undefined): string | null {
+  if (!instant) return null;
+  const d = instant instanceof Date ? instant : new Date(instant);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", { timeZone: FirmTimeZone }).format(d);
+}
+
 /** True when a stored "YYYY-MM-DD" is the firm's TODAY. Never parses the value. */
 export function isFirmToday(day: string | null | undefined): boolean {
   const d = String(day || "").trim();
@@ -6654,14 +6675,116 @@ export type PrescriptionResult = {
 
 export type PrescriptionCaseInput = {
   currentStage?: string | null;
-  stageHistory?: Array<{ stage?: string | null } | null> | null;
+  stageHistory?: Array<{ stage?: string | null; timestamp?: string | null } | null> | null;
   adminCaseSubType?: string | null;
   grievanceRequired?: boolean | null;
   grievanceResult?: string | null;
   violationKnowledgeDate?: string | null;
   grievanceDate?: string | null;
   grievanceResultDate?: string | null;
+  prescriptionDate?: string | null;
+  createdAt?: string | null;
 };
+
+// ==================== THE SIX RULE INPUTS ====================
+// 🔴 RECOMPUTE FIRES ON INPUT CHANGE, NOT ON EVERY WRITE (owner ruling, batch 3b).
+// A prescription_date typed by a lawyer PERSISTS: an ordinary save that touches
+// none of these six leaves it exactly as stored. Only a change to one of them
+// replaces it with a fresh computation.
+//
+// These are precisely the fields computePrescriptionDate READS — three date
+// inputs plus the three selectors that choose WHICH rule applies. Nothing else
+// can change the answer, so nothing else may trigger an overwrite.
+//
+// ⚠ ACCEPTED LIMITATION (owner ruling): with no flag column the system cannot
+// distinguish a typed value from a computed one. There is deliberately no
+// «محسوب»/«مُدخل يدوياً» badge and no "revert to automatic" button. Do NOT add a
+// column to fix this.
+export const PrescriptionRuleInputs = [
+  "violationKnowledgeDate",
+  "grievanceDate",
+  "grievanceResultDate",
+  "grievanceResult",
+  "adminCaseSubType",
+  "grievanceRequired",
+] as const;
+export type PrescriptionRuleInput = typeof PrescriptionRuleInputs[number];
+
+/**
+ * Did an incoming patch actually change one of the six rule inputs?
+ *
+ * Compares ONLY keys PRESENT in `incoming` — a partial patch that omits a field
+ * is not proposing to clear it, and treating an absent key as a change would
+ * make every save recompute, which is the behaviour this replaces.
+ *
+ * Values are normalised to strings before comparison so `null`, `undefined` and
+ * `""` all read as "empty" and cannot register as a spurious change; booleans
+ * compare as "true"/"false" for the same reason.
+ */
+export function prescriptionInputsChanged(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): boolean {
+  const norm = (v: unknown): string =>
+    v === null || v === undefined ? "" : typeof v === "boolean" ? String(v) : String(v).trim();
+  return PrescriptionRuleInputs.some((key) => {
+    if (!Object.prototype.hasOwnProperty.call(incoming, key)) return false;
+    return norm(incoming[key]) !== norm(existing[key]);
+  });
+}
+
+/**
+ * The firm's calendar day on which the case was FILED, read from the stageHistory
+ * entry for its track's stop stage — the same entry prescriptionClockStopped
+ * tests. No new column, no user input.
+ *
+ * Returns null when the case is not stopped, or when the entry carries no usable
+ * timestamp — callers then show the stopped text WITHOUT a date rather than
+ * rendering something wrong.
+ *
+ * Takes the LAST matching entry: a case can re-enter a stage (the reopen flow),
+ * and the filing that matters is the most recent one.
+ */
+export function prescriptionFilingDate(c: PrescriptionCaseInput): string | null {
+  if (!prescriptionClockStopped(c)) return null;
+  const sub = String(c.adminCaseSubType || "").trim();
+  const stopStage = sub === AdminCaseSubType.CASE ? "قيد_التدقيق_في_معين"
+    : sub === AdminCaseSubType.GRIEVANCE ? "مقفلة"
+    : null;
+  if (!stopStage) return null;
+  const history = Array.isArray(c.stageHistory) ? c.stageHistory : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (entry?.stage !== stopStage) continue;
+    const day = firmDayOf(entry?.timestamp ?? null);
+    if (day) return day;
+  }
+  return null;
+}
+
+/**
+ * 🔴 DID THE VIOLATION ARRIVE ALREADY TIME-BARRED?
+ *
+ * The firm receives violations whose prescription date is already in the past on
+ * the day they are entered. Nobody at the firm lost anything, so those must be
+ * SILENT — no T-3 warning, no task, no lapse escalation — while a deadline that
+ * passed ON OUR WATCH escalates exactly as batch 3 built it.
+ *
+ * ONE DEFINITION, used by both the scheduler and the panel, so the alert and the
+ * label can never disagree about which case this is.
+ *
+ * The comparison is lexicographic on "YYYY-MM-DD", consistent with the rest of
+ * the prescription work. created_at is a TIMESTAMP, so its calendar day is taken
+ * through firmDayOf (Asia/Riyadh) — never a UTC slice, which would put a
+ * violation entered late in the evening on the wrong day.
+ */
+export function prescriptionArrivedTimeBarred(c: PrescriptionCaseInput): boolean {
+  const deadline = String(c.prescriptionDate || "").trim();
+  if (!deadline) return false;
+  const created = firmDayOf(c.createdAt ?? null);
+  if (!created) return false;
+  return deadline < created;
+}
 
 // 🔴 THE CLOCK STOPS AT FILING, AND THE TEST IS stageHistory NOT currentStage.
 // A case moves PAST the filing stage (قيد_التدقيق_في_معين → منظورة), and a
@@ -6971,6 +7094,8 @@ export const updateViolationDetailsSchema = z.object({
   // own its refusals (the validation-patterns rule).
   grievanceResult: z.string().nullable().optional(),
   grievanceResultDate: z.string().nullable().optional(),
+  // The restored manual تاريخ التقادم (batch 3b) — writable through this panel.
+  prescriptionDate: z.string().nullable().optional(),
   // 🔴 executionRequestNumber is DELIBERATELY ABSENT. It belongs to the مهامي
   // execution field task and is written only by that route and the pre-existing
   // inline edit. The panel's «رقم طلب التنفيذ» is adminExecutionRequestNumber.

@@ -95,6 +95,7 @@ import {
   AdminCaseSubType,
   computePrescriptionDate,
   prescriptionClockStopped,
+  prescriptionInputsChanged,
   // GrievanceNumberUnavailable is deliberately NOT imported here any more: with
   // blank and «غير متوفرة» both accepted, the server records whatever it is given
   // verbatim and has no reason to know the sentinel. It stays exported for the
@@ -3047,6 +3048,10 @@ async function recomputeCaseNextHearingDate(caseId: string | null | undefined): 
 // Total by construction: the whole body is one try/catch that only logs. A case
 // must never fail to save because a derived date could not be refreshed.
 // Returns whether it wrote, for the sweep's changed-row count.
+// 🔴 CALLED ONLY WHEN A RULE INPUT ACTUALLY CHANGED (batch 3b). The caller must
+// have compared the incoming body against the row FIRST — see
+// prescriptionInputsChanged. This is what lets a lawyer's typed prescription_date
+// survive every save that does not touch the six inputs.
 async function recomputeCasePrescriptionDate(caseId: string | null | undefined): Promise<boolean> {
   const id = String(caseId || "").trim();
   if (!id) return false;
@@ -5135,7 +5140,16 @@ export async function registerRoutes(
         }
         if (targetStage === "قيد_التدقيق_في_معين") {
           const moeen = req.body.moeenNumber || existing.moeenNumber;
-          if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم القيد في معين" });
+          if (!moeen) return res.status(400).json({ error: "يجب إدخال رقم الطلب في معين" });
+          // 4a — THE MISSING SWAP. This block validated the number and wrote no
+          // caseNumber, unlike its ناجز sibling directly above, so an admin case
+          // entering معين kept displaying its intake number. The stage
+          // precondition is COPIED FROM THAT SIBLING verbatim — معين is the admin
+          // track's FIRST platform stage and is reached from جاهزة_للرفع, exactly
+          // as General reaches ناجز, so the same guard carries over unchanged.
+          if (existing.currentStage === "جاهزة_للرفع") {
+            req.body.caseNumber = String(moeen).trim();
+          }
         }
         // General-dept audit (2026-06-14) — General moves najiz → settlement
         // (مداولة_الصلح) directly; the case enters the تراضي/settlement platform
@@ -5830,19 +5844,26 @@ export async function registerRoutes(
 
       // RECOMPUTE POINT 3 of 3 — the catch-all. This route can write
       // prescriptionDate directly (it is in caseDataFields), adminCaseSubType,
-      // grievanceRequired and the stage. Recomputing unconditionally means a
-      // hand-typed prescriptionDate submitted here is immediately replaced by the
-      // computed one — which is exactly ruling R3: there is no override concept,
-      // and a recompute overwrites whatever is there.
+      // grievanceRequired and the stage.
       //
-      // ⚠ IT ALSO CATCHES THE STAGE MOVE THAT STOPS THE CLOCK. When this PATCH is
-      // the write that reaches قيد_التدقيق_في_معين (or مقفلة on the grievance
-      // track), the recompute runs AFTER the stage is stored, sees the clock
-      // stopped, and declines to write — freezing whatever value was there. That
-      // is why the freeze needs no separate hook: the last recompute before
-      // filing is the value that survives.
-      const prescriptionCase = await storage.getCaseById(String(req.params.id));
-      if (prescriptionCase) await recomputePrescriptionForCase(prescriptionCase);
+      // 🔴 GATED ON A RULE-INPUT CHANGE (batch 3b, REVERSING the unconditional
+      // recompute this had). Unconditional meant a lawyer's typed
+      // prescription_date was replaced by the computed one on the very same
+      // PATCH that carried it — the edit field would have looked broken. Now a
+      // save that touches none of the six inputs leaves the stored value alone,
+      // and a save that changes one recomputes from it.
+      // Compared against `existing`, the row as it was BEFORE this write.
+      //
+      // ⚠ IT ALSO CATCHES THE STAGE MOVE THAT STOPS THE CLOCK — and the gate does
+      // not break that. A stage-only PATCH changes no rule input, so the
+      // recompute is skipped entirely and the stored value stands: the same
+      // freeze, reached by skipping rather than by declining. When a stage move
+      // DOES arrive alongside an input change, recomputePrescriptionForCase reads
+      // the already-stored stage, sees the clock stopped and writes nothing.
+      if (prescriptionInputsChanged(existing as unknown as Record<string, unknown>, req.body)) {
+        const prescriptionCase = await storage.getCaseById(String(req.params.id));
+        if (prescriptionCase) await recomputePrescriptionForCase(prescriptionCase);
+      }
       const finalCase = await storage.getCaseById(String(req.params.id));
 
       res.json(finalCase || updated);
@@ -9052,6 +9073,12 @@ export async function registerRoutes(
         "grievanceDate",
         "grievanceResult",
         "grievanceResultDate",
+        // 🔴 THE RESTORED MANUAL تاريخ التقادم (batch 3b). It is writable here and
+        // nowhere else in this panel, and it is NOT one of the six rule inputs —
+        // so saving it does not trigger the recompute that would immediately
+        // overwrite it. That is the whole mechanism: a typed value persists until
+        // one of the six inputs actually changes.
+        "prescriptionDate",
         // 🔴 adminExecutionRequestNumber, NOT executionRequestNumber. The latter
         // was REMOVED from this endpoint's writable set: it belongs to the مهامي
         // execution field task (POST /api/field-tasks/:id/execution-request,
@@ -9075,6 +9102,7 @@ export async function registerRoutes(
         grievanceDate: "تاريخ الاعتراض",
         grievanceResult: "نتيجة الاعتراض",
         grievanceResultDate: "تاريخ نتيجة الاعتراض",
+        prescriptionDate: "تاريخ التقادم",
         adminExecutionRequestNumber: "رقم طلب التنفيذ الإداري",
         invoiceNumber: "رقم الفاتورة",
         violationAmount: "مبلغ المخالفة",
@@ -9186,12 +9214,17 @@ export async function registerRoutes(
         }
       }
 
-      // RECOMPUTE POINT 1 of 3. This endpoint owns ALL THREE prescription inputs
-      // — violationKnowledgeDate, grievanceDate, grievanceResultDate — plus
-      // grievanceResult, which selects WHICH rule applies. It is the likeliest
-      // place for the deadline to change, and it changed nothing before this.
-      // Re-read after the write so the recompute sees the new values.
-      await recomputeCasePrescriptionDate(lawCase.id);
+      // RECOMPUTE POINT 1 of 3. This endpoint owns ALL THREE prescription date
+      // inputs — violationKnowledgeDate, grievanceDate, grievanceResultDate —
+      // plus grievanceResult, which selects WHICH rule applies. It is also where
+      // the lawyer TYPES a prescription_date by hand (the restored field), so the
+      // input-change gate matters most here: saving a hand-typed deadline alone
+      // must not immediately overwrite it with the computed one.
+      // `lawCase` is the row as it was BEFORE the write, which is exactly what the
+      // comparison needs.
+      if (prescriptionInputsChanged(lawCase as unknown as Record<string, unknown>, req.body)) {
+        await recomputeCasePrescriptionDate(lawCase.id);
+      }
       const withPrescription = await storage.getCaseById(lawCase.id);
 
       res.json(withPrescription || updated);
@@ -9331,7 +9364,17 @@ export async function registerRoutes(
       // (which on the lawsuit track chooses between rule 1 and rules 2/3). It can
       // also write grievanceDate, rule 3's input. So a case acquires its
       // prescription deadline the moment its track is chosen.
-      await recomputeCasePrescriptionDate(lawCase.id);
+      //
+      // The gate compares against `update` — the fields this handler decided to
+      // write — rather than req.body, because the body carries `track` while the
+      // COLUMN is adminCaseSubType, and grievanceRequired is normalised from a
+      // possibly-absent boolean. `update` is what actually reaches the row.
+      // In practice this is always true on a first track choice (sub-type moves
+      // from empty to تظلم/قضية), which is the intent: the deadline appears the
+      // moment the track does.
+      if (prescriptionInputsChanged(lawCase as unknown as Record<string, unknown>, update as Record<string, unknown>)) {
+        await recomputeCasePrescriptionDate(lawCase.id);
+      }
       const withPrescription = await storage.getCaseById(lawCase.id);
 
       res.json(withPrescription || updated);
@@ -9417,7 +9460,7 @@ export async function registerRoutes(
             taradiNumber: "يجب إدخال رقم الطلب في تراضي",
             mohrNumber: "يجب إدخال رقم الدعوى في التسوية الودية",
             najizNumber: "يجب إدخال رقم القيد في ناجز",
-            moeenNumber: "يجب إدخال رقم القيد في معين",
+            moeenNumber: "يجب إدخال رقم الطلب في معين",
             courtCaseNumber: "يرجى إدخال رقم الدعوى في المحكمة",
           };
           return res.status(400).json({ error: MISSING_NUMBER_ERRORS[requirement.field] || "يجب إدخال الرقم المطلوب" });

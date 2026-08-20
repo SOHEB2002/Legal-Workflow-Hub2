@@ -821,6 +821,16 @@ function deriveCurrentCaseNumber(dbCase: any): string {
   if (court) return court;
   const najiz = (dbCase.najizNumber || "").trim();
   if (najiz) return najiz;
+  // 4b — معين, the ADMIN track's platform, added after najiz and BEFORE the
+  // settlement numbers (batch 3b). Existence-based like its two neighbours.
+  //
+  // 🔴 POSITION IS LOAD-BEARING: courtCaseNumber stays FIRST, so once the case is
+  // accepted into المحكمة the court number wins over the معين REQUEST number —
+  // which is the owner's ruling that the number معين issues on acceptance IS the
+  // court case number. Putting معين any higher would leave an accepted admin case
+  // displaying its request number forever.
+  const moeen = (dbCase.moeenNumber || "").trim();
+  if (moeen) return moeen;
   const settlement = (dbCase.mohrNumber || dbCase.taradiNumber || "").trim();
   if (settlement && reachedSettlement(dbCase)) return settlement;
   return base;

@@ -457,7 +457,11 @@ export function CaseProgressBar({
       : nextStage === "قيد_التدقيق_في_ناجز"
       ? { field: "najizNumber", label: "رقم القيد في ناجز", placeholder: "أدخل رقم القيد في ناجز" }
       : nextStage === "قيد_التدقيق_في_معين"
-      ? { field: "moeenNumber", label: "رقم القيد في معين", placeholder: "أدخل رقم القيد في معين" }
+      // «رقم الطلب», not «رقم القيد» — matching the تراضي precedent above. What is
+      // captured here is the REQUEST number معين issues on submission; the number
+      // it issues on ACCEPTANCE is the court case number and is captured
+      // separately as «رقم الدعوى في المحكمة» (courtCapture).
+      ? { field: "moeenNumber", label: "رقم الطلب في معين", placeholder: "أدخل رقم الطلب في منصة معين" }
       // General-dept audit (2026-06-14) — General reaches court via
       // أغلق_طلب_الصلح → منظورة (no najiz-accept step that would otherwise
       // capture the court number, since General's najiz precedes conciliation).
