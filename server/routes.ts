@@ -1413,6 +1413,16 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   //   ↑ the send-back. The widest of the three: مراجعة_داخلية is on every path,
   //     so any case under internal review could be returned to grievance
   //     drafting — a stage most of them have no business on.
+  //
+  // 🔴 BATCH 4b — THE EDGE THAT MAKES «المرحلة التالية» A REAL MOVE AGAIN.
+  // Without it, مقفلة was the linear successor to جاهزة_للرفع on this array, so
+  // the advance targeted a CLOSURE and hit the early-close guard, which the
+  // advance payload can never satisfy. Now the advance goes to a genuine workflow
+  // stage and is validated by this rule like any other transition — it does NOT
+  // reach isEarlyCloseStage at all, because that predicate keys on
+  // `req.body.currentStage === "مقفلة"` and this target is not مقفلة.
+  // Same roles as the surrounding grievance edges.
+  { from: "جاهزة_للرفع", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== ADMIN PATH (prescription date + grievance) ====================
   // ⚠ THE FOUR STAGES BELOW LEFT THE PATH ARRAYS AND THEIR EDGES STAY. Nothing
@@ -5113,12 +5123,37 @@ export async function registerRoutes(
         // assigned lawyer). Closures that flow through the normal stage
         // rules (e.g. تحصيل/مشطوبة/post-judgment) come from a terminal
         // stage and don't need a reason.
+        // 🔴 BATCH 4b — انتظار_رد_التظلم JOINS THE EXCLUSION LIST, and without it
+        // this batch would only have MOVED the bug one stage later. Restoring the
+        // waiting stage makes مقفلة the linear successor of انتظار_رد_التظلم, so
+        // «المرحلة التالية» from there targets مقفلة and would hit this guard with
+        // exactly the same unsatisfiable 400 that the restoration exists to fix.
+        //
+        // It belongs here on the list's OWN principle, stated in the comment
+        // above: a closure that "flows through the normal stage rules" is not an
+        // early close. مقفلة IS this array's own next stage from انتظار_رد_التظلم
+        // — the case is not being closed EARLY, it is finishing its path.
+        // (The scheduler's 7-day auto-close reaches مقفلة without passing through
+        // here at all; this covers the lawyer who closes it sooner because the
+        // reply already arrived.)
         const isEarlyCloseStage =
           req.body.currentStage === "مقفلة" &&
           existing.currentStage !== "تحصيل" &&
           existing.currentStage !== "مشطوبة" &&
+          existing.currentStage !== "انتظار_رد_التظلم" &&
           existing.currentStage !== "محكوم_حكم_ابتدائي" &&
           existing.currentStage !== "محكوم_حكم_نهائي";
+        // The manual close from انتظار_رد_التظلم records the SAME reason the
+        // scheduler's auto-close writes, so the two paths to the identical
+        // outcome cannot be told apart in reporting by an accident of timing.
+        // Only defaulted when the caller supplied none — an explicit reason wins.
+        if (
+          req.body.currentStage === "مقفلة" &&
+          existing.currentStage === "انتظار_رد_التظلم" &&
+          !req.body.closureReason
+        ) {
+          req.body.closureReason = ClosureReason.GRIEVANCE_FILED_AWAITING_REPLY;
+        }
         if (isEarlyCloseStage) {
           if (!req.body.closureReason) {
             return res.status(400).json({ error: "يجب تحديد سبب الإغلاق" });
