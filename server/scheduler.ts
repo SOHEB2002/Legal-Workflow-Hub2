@@ -6,6 +6,7 @@ import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotifica
   HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
   HearingRingTier, HearingRingTierLeadMinutes,
   addDaysToDateString, prescriptionClockStopped, prescriptionArrivedTimeBarred,
+  firmDayEnteredStage, GrievanceAwaitingAutoCloseDays, ClosureReason,
   FieldTaskType } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
@@ -59,6 +60,12 @@ export function startScheduler() {
     await checkContactFollowUps();
     await recalculateCasePriorities();
     await checkStruckOffExpiry();
+    // Beside its sibling auto-close, and AFTER checkPrescriptionDeadlines above:
+    // that job reads prescription_date on live cases, and closing one here first
+    // would change what it sees mid-run. Closure does not affect the prescription
+    // value anyway (filing already stopped the clock — مقفلة IS this track's stop
+    // stage), so the order is about determinism, not correctness.
+    await checkGrievanceAwaitingExpiry();
     // BEFORE checkSettlementLinkMissingTimeout on purpose: a pause that lifts
     // today must be gone before the 15-day settlement-link scan looks at the
     // same rows, so one tick can never both lift and close a case.
@@ -1636,6 +1643,76 @@ async function checkUnpreparedHearings() {
     }
   } catch (error) {
     console.error("Error in checkUnpreparedHearings:", error);
+  }
+}
+
+// ==================== انتظار_رد_التظلم → مقفلة AFTER 7 DAYS ====================
+// A grievance case sits at انتظار_رد_التظلم once the صيغة is filed. Seven days
+// later the firm's work on it is finished — chasing the authority's reply is the
+// client's job — so the case comes off the active board.
+//
+// 🔴 IT DOES NOT GO THROUGH PATCH /api/cases/:id, deliberately. That handler's
+// early-close guard requires a closureReason supplied by a USER DIALOG, and the
+// scheduler is not a user and has no dialog. It writes the stage, the reason and
+// the history entry directly — the same mechanism checkStruckOffExpiry uses two
+// functions below, whose closure this mirrors field for field.
+//
+// 🔴 DATES: the 7 days count from ENTRY INTO THE STAGE, read from stageHistory
+// via the SHARED firmDayEnteredStage (the same reader prescriptionFilingDate
+// uses) — never from grievanceDate, and never a second copy of the loop.
+// stageHistory timestamps are full ISO instants, so firmDayOf parses them
+// legitimately and resolves the day in ASIA/RIYADH; the comparison is then
+// lexicographic "YYYY-MM-DD" against a cutoff built by addDaysToDateString.
+// No UTC slice anywhere: `iso.slice(0,10)` would put an entry made at 01:30
+// Riyadh on the previous day and close the case a day early.
+//
+// NO NOTIFICATION (owner ruling): routine housekeeping, not an event anyone must
+// act on.
+async function checkGrievanceAwaitingExpiry() {
+  try {
+    const allCases = await storage.getAllCases();
+    // The cutoff day. A case that entered ON this day has waited exactly 7 days
+    // and closes today; anything later is still inside the window.
+    const cutoff = addDaysToDateString(firmToday(), -GrievanceAwaitingAutoCloseDays);
+    if (!cutoff) return;
+    let closed = 0;
+
+    for (const caseItem of allCases) {
+      if (String(caseItem.adminCaseSubType || "").trim() !== "تظلم") continue;
+      if ((caseItem.currentStage as string) !== "انتظار_رد_التظلم") continue;
+      const enteredDay = firmDayEnteredStage(caseItem, "انتظار_رد_التظلم");
+      // No usable entry → leave it alone rather than guess. A case with no
+      // readable timestamp is a data anomaly, and closing it on a guessed date is
+      // worse than leaving it visible on the board.
+      if (!enteredDay) continue;
+      if (enteredDay > cutoff) continue;
+
+      const nowIso = new Date().toISOString();
+      const stageHistory = Array.isArray(caseItem.stageHistory) ? caseItem.stageHistory : [];
+      await storage.updateCase(caseItem.id, {
+        currentStage: "مقفلة",
+        closureReason: ClosureReason.GRIEVANCE_FILED_AWAITING_REPLY,
+        closedAt: nowIso,
+        status: "مغلق",
+        stageHistory: [
+          ...stageHistory,
+          {
+            stage: "مقفلة",
+            timestamp: nowIso,
+            userId: "system",
+            userName: "النظام",
+            notes: `إغلاق تلقائي — مضى ${GrievanceAwaitingAutoCloseDays} أيام على رفع التظلم`,
+          },
+        ],
+      });
+      closed++;
+    }
+
+    if (closed > 0) {
+      console.log(`[grievance-awaiting] auto-closed ${closed} case(s)`);
+    }
+  } catch (error) {
+    console.error("Error in checkGrievanceAwaitingExpiry:", error);
   }
 }
 

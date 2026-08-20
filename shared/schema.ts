@@ -1976,6 +1976,22 @@ export const AdminGrievanceStages: CaseStageValue[] = [
   // تحرير_صيغة_التظلم here — the same answer the hard-coded branch gave.
   "مراجعة_داخلية",
   "جاهزة_للرفع",
+  // 🔴 RESTORED (batch 4b). Batch 1 removed this stage from BOTH admin arrays,
+  // which left مقفلة as the LINEAR next stage after جاهزة_للرفع — the only array
+  // in the system where that is true. «المرحلة التالية» therefore targeted مقفلة,
+  // tripped the early-close guard (routes.ts, isEarlyCloseStage) and 400'd with
+  // «يجب تحديد سبب الإغلاق», which the advance path has no way to supply. The
+  // four reasons that dialog offers all describe commercial or judicial endings;
+  // none fits a filed grievance.
+  //
+  // It is also the honest state: the صيغة is filed and the firm is waiting. The
+  // case auto-closes to مقفلة after 7 days (checkGrievanceAwaitingExpiry) —
+  // closure here means "our work is done", since chasing the authority's reply is
+  // the client's job and the owner wants the case off the active board.
+  //
+  // ⚠ GRIEVANCE ARRAY ONLY. AdminLawsuitStages is untouched — that track reaches
+  // court through معين and has no grievance-waiting step.
+  "انتظار_رد_التظلم",
   "مقفلة",
 ];
 
@@ -2578,6 +2594,18 @@ export const ClosureReason = {
   // NOT تنازل_العميل — a waiver is a decision the client made; non-response is
   // the absence of one, and the two must stay distinguishable in reporting.
   DATA_NOT_COMPLETED: "عدم_استكمال_البيانات",
+  // The صيغة التظلم was filed and the firm's work on it is finished. Written ONLY
+  // by checkGrievanceAwaitingExpiry (server/scheduler.ts), which closes a
+  // grievance case 7 days after it enters انتظار_رد_التظلم. Deliberately NOT
+  // offered in the manual early-close dialog, exactly like تم_التحصيل and
+  // عدم_استكمال_البيانات above: that dialog is for closing a case that still had
+  // work left, and this closure means the opposite — the filing happened and
+  // chasing the authority's reply is the client's responsibility.
+  //
+  // NOT شطب_بدون_إعادة_قيد and NOT تنازل_العميل: nothing lapsed and nobody waived.
+  // The case closes having DONE what it set out to do, and the reporting must be
+  // able to tell that apart from an abandonment.
+  GRIEVANCE_FILED_AWAITING_REPLY: "رفع_التظلم_بانتظار_الرد",
   OTHER: "أخرى",
 } as const;
 
@@ -2601,6 +2629,7 @@ export const ClosureReasonLabels: Record<ClosureReasonValue, string> = {
   "لم_يتم_الصلح": "لم يتم الصلح",
   "تم_التحصيل": "تم التحصيل",
   "عدم_استكمال_البيانات": "عدم استكمال البيانات",
+  "رفع_التظلم_بانتظار_الرد": "رُفع التظلم — بانتظار رد الجهة",
   "أخرى": "أخرى",
 };
 
@@ -6839,6 +6868,33 @@ export function prescriptionInputsChanged(
  * Takes the LAST matching entry: a case can re-enter a stage (the reopen flow),
  * and the filing that matters is the most recent one.
  */
+/**
+ * The firm's calendar day on which a case LAST entered `stage`, from
+ * stageHistory. Null when it never did, or when the entry carries no usable
+ * timestamp — callers decide what an unreadable entry means rather than
+ * inheriting a wrong default.
+ *
+ * LAST, not first: a case can re-enter a stage (the reopen flow, a send-back),
+ * and the entry that matters is the most recent one.
+ *
+ * Extracted from prescriptionFilingDate (which still calls it) so the batch-4b
+ * grievance auto-close reads stageHistory the SAME way rather than growing a
+ * second reader — the two would drift on exactly this "last vs first" question.
+ */
+export function firmDayEnteredStage(
+  c: PrescriptionCaseInput,
+  stage: string,
+): string | null {
+  const history = Array.isArray(c.stageHistory) ? c.stageHistory : [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (entry?.stage !== stage) continue;
+    const day = firmDayOf(entry?.timestamp ?? null);
+    if (day) return day;
+  }
+  return null;
+}
+
 export function prescriptionFilingDate(c: PrescriptionCaseInput): string | null {
   if (!prescriptionClockStopped(c)) return null;
   const sub = String(c.adminCaseSubType || "").trim();
@@ -6846,15 +6902,11 @@ export function prescriptionFilingDate(c: PrescriptionCaseInput): string | null 
     : sub === AdminCaseSubType.GRIEVANCE ? "مقفلة"
     : null;
   if (!stopStage) return null;
-  const history = Array.isArray(c.stageHistory) ? c.stageHistory : [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    const entry = history[i];
-    if (entry?.stage !== stopStage) continue;
-    const day = firmDayOf(entry?.timestamp ?? null);
-    if (day) return day;
-  }
-  return null;
+  return firmDayEnteredStage(c, stopStage);
 }
+
+/** How many days a grievance case waits at انتظار_رد_التظلم before auto-closing. */
+export const GrievanceAwaitingAutoCloseDays = 7;
 
 /**
  * 🔴 DID THE VIOLATION ARRIVE ALREADY TIME-BARRED?
