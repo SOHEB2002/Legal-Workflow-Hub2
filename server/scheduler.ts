@@ -5,7 +5,8 @@ import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotifica
   NotificationType, elapsedDaysLabel, firmToday,
   HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
   HearingRingTier, HearingRingTierLeadMinutes,
-  addDaysToDateString, prescriptionClockStopped, FieldTaskType } from "@shared/schema";
+  addDaysToDateString, prescriptionClockStopped, prescriptionArrivedTimeBarred,
+  FieldTaskType } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
@@ -789,12 +790,23 @@ async function checkPrescriptionDeadlines() {
     });
 
     // ---- 1. THE SAFETY-NET SWEEP, FIRST ----
-    // Exists so a missed write path cannot leave a stale deadline sitting on a
-    // case: the three routes are the primary mechanism, this is the backstop.
-    // Skips stopped clocks (R3 — the value is frozen at filing), which is also
-    // what makes the sweep cheap: a filed case is never written again.
+    // 🔴 RESTRICTED TO ROWS WHERE prescription_date IS EMPTY (batch 3b). It used
+    // to recompute EVERY non-stopped admin case every morning, which would have
+    // erased every hand-typed deadline overnight and silently defeated the
+    // manual-value feature the routes now protect. Its job is now "FILL IN WHAT
+    // WAS NEVER COMPUTED", not "re-derive everything".
+    //
+    // That is still a real backstop: the failure it exists to catch is a case
+    // that acquired its inputs through a path with no recompute hook and so has
+    // NO date at all. A case that already carries one is either correct (a route
+    // computed it) or deliberate (a lawyer typed it), and this job can no longer
+    // tell those apart — which is precisely why it must not touch either.
+    //
+    // Still skips stopped clocks inside recomputePrescriptionForCase (R3 — frozen
+    // at filing), so a filed case is never written regardless.
     let recomputed = 0;
     for (const c of adminCases) {
+      if (String(c.prescriptionDate || "").trim()) continue;
       try {
         if (await recomputePrescriptionForCase(c)) recomputed++;
       } catch (e) {
@@ -841,6 +853,21 @@ async function checkPrescriptionDeadlines() {
 
       const deadline = String(caseItem.prescriptionDate || "").trim();
       if (!deadline) continue;
+
+      // ---- 5. ARRIVED ALREADY TIME-BARRED → SILENT (batch 3b) ----
+      // 🔴 The firm receives violations whose prescription date is already past
+      // on the day they are entered. NOBODY AT THE FIRM LOST ANYTHING, so these
+      // get no T-3 notification, no warning task and no lapse escalation. An
+      // alert here would be an accusation about something that happened before
+      // the file arrived, and a page full of those is how a real lapse gets
+      // ignored.
+      //
+      // Placed BEFORE both the lapse arm and the T-3 arm, because such a case
+      // satisfies the lapse test by construction (its deadline is in the past)
+      // and would otherwise escalate to three people the morning it is opened.
+      // The panel applies the SAME shared predicate, so the label and the silence
+      // can never disagree.
+      if (prescriptionArrivedTimeBarred(caseItem)) continue;
 
       const recipientId = caseNotificationRecipientId(caseItem);
 
