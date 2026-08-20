@@ -67,7 +67,7 @@ import { anyIdentity, hasEffectiveRole, isDeptHeadFor, type ActingIdentity } fro
 import { useHearings } from "@/lib/hearings-context";
 import { useMemos } from "@/lib/memos-context";
 import { getClientRoleLabel } from "@/lib/client-role";
-import { formatTimeAmPm } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate } from "@/lib/date-utils";
 import { extractApiError, formatAmount } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -328,6 +328,28 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
 // Rendered by the block above the grid, not as a grid cell. Kept as a set rather
 // than an inline `!==` so the reason lives next to the exclusion.
 const PRESCRIPTION_READONLY_EXCLUDED = new Set(["prescriptionDate"]);
+
+// ==================== INLINE DUAL DATE — PRESCRIPTION BLOCK ONLY ====================
+// 🔴 SCOPED TO THE PRESCRIPTION BLOCK. DualDateDisplay is UNMODIFIED and every
+// other site keeps its stacked shape: the grid rows below (تاريخ القرار الإداري,
+// تاريخ العلم بالمخالفة, …) are LABEL + VALUE pairs, where stacking the two
+// calendars under one label reads correctly.
+//
+// THE PROBLEM IT SOLVES is specific to this block: its states are SENTENCES, not
+// labelled values, and DualDateDisplay renders `inline-flex flex-col` with the
+// Gregorian half in `text-xs text-muted-foreground`. Dropping that into running
+// prose breaks the line in two and shrinks half of it, so «دخلت القضية بتاريخ …
+// وهي متقادمة منذ …» arrives as fragments at two sizes.
+//
+// One line, one size, reading order preserved, «الموافق» between the calendars.
+// Uses formatDualDate — the SAME formatter DualDateDisplay itself calls, so the
+// two can never render a different day. No new conversion code. Note its `hijri`
+// already ends in «هـ», so only «م» is appended here.
+function InlineDualDate({ date }: { date: string | Date | null | undefined }) {
+  const dual = formatDualDate(date ?? null);
+  if (dual.hijri === "—") return <span>—</span>;
+  return <span>{dual.hijri} الموافق {dual.gregorian} م</span>;
+}
 
 // 🔴 «التظلم غير وجوبي» — a LABEL SUFFIX, never a disable. When the lawyer
 // answered لا to «التظلم وجوبي؟» on the مسار الدعوى choice, the two objection
@@ -1304,10 +1326,11 @@ export function CaseDetailsDialog({
                               // entry carries no usable timestamp, rather than
                               // rendering something wrong.
                               const filed = prescriptionFilingDate(selectedCase);
+                              // SENTENCE → InlineDualDate, so «تم الرفع بتاريخ …»
+                              // stays one line at one size.
                               const note = filed ? (
-                                <div className={`${small} flex flex-wrap items-center gap-1`}>
-                                  <span>تم الرفع بتاريخ</span>
-                                  <DualDateDisplay date={filed} />
+                                <div className={small}>
+                                  تم الرفع بتاريخ <InlineDualDate date={filed} />
                                 </div>
                               ) : (
                                 <div className={small}>تم الرفع — لا يسري التقادم</div>
@@ -1333,12 +1356,13 @@ export function CaseDetailsDialog({
                               // day is the SAME firmDayOf(created_at) the predicate
                               // itself compares against — not a second derivation.
                               const enteredDay = firmDayOf(selectedCase.createdAt);
+                              // The longest sentence in the block, and the one the
+                              // stacked form fragmented worst — two dates, four
+                              // lines, two font sizes. Now one flowing line.
                               return (
-                                <div className="flex flex-wrap items-center gap-1">
-                                  <span>دخلت القضية بتاريخ</span>
-                                  {enteredDay ? <DualDateDisplay date={enteredDay} /> : <span>—</span>}
-                                  <span>وهي متقادمة منذ</span>
-                                  <DualDateDisplay date={String(selectedCase.prescriptionDate)} />
+                                <div>
+                                  دخلت القضية بتاريخ <InlineDualDate date={enteredDay} />
+                                  {" "}وهي متقادمة منذ <InlineDualDate date={selectedCase.prescriptionDate} />
                                 </div>
                               );
                             }
@@ -1371,38 +1395,12 @@ export function CaseDetailsDialog({
                         </div>
                       </div>
 
-                      {/* ==================== التظلم وجوبي ====================
-                          🔴 A RECORDED FACT, NOT A GATE (owner ruling). Nothing in
-                          the codebase branches on grievance_required — it is
-                          stored, shown here, and that is all. The objection fields
-                          below stay editable whatever it says.
-                          READ-ONLY HERE ON PURPOSE, and NOT a member of
-                          VIOLATION_PANEL_FIELDS: that array is the writable set
-                          for PATCH /violation-details, which does not accept this
-                          column. It is answered once, with the track, at
-                          «مسار الدعوى». Rendering it as an editable panel field
-                          would offer a save the endpoint silently drops.
-                          Shown for ALL THREE states — it previously appeared only
-                          when true, inside a separate «بيانات التظلم» block, so
-                          «لا» and "never answered" were indistinguishable from
-                          each other and from an ordinary non-admin case. */}
-                      <div className="mb-4 text-right">
-                        <Label className="text-muted-foreground">التظلم وجوبي</Label>
-                        <p className="font-medium" data-testid="violation-value-grievanceRequired">
-                          {selectedCase.adminCaseSubType !== "قضية" ? (
-                            // The question belongs to the lawsuit track. On the
-                            // grievance track the objection IS the matter, and on an
-                            // unrouted case it has not been asked yet.
-                            <span className="text-muted-foreground text-sm italic">لا ينطبق</span>
-                          ) : selectedCase.grievanceRequired === true ? (
-                            "نعم"
-                          ) : selectedCase.grievanceRequired === false ? (
-                            "لا"
-                          ) : (
-                            <span className="text-muted-foreground text-sm italic">غير مُحدد</span>
-                          )}
-                        </p>
-                      </div>
+                      {/* ==================== «التظلم وجوبي» — REMOVED ====================
+                          Batch 3c gave بيانات التظلم a derived «مطلوب تظلم؟» row, so
+                          this one became a second display of grievance_required a
+                          few centimetres away. DISPLAY-ONLY removal: the derived row
+                          in بيانات التظلم stays, the edit dialog's field stays, and
+                          the column is untouched — nothing read this. */}
 
                       {!violationEditing ? (
                         <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
