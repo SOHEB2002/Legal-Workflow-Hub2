@@ -6669,8 +6669,11 @@ export type PrescriptionResult = {
   reason: PrescriptionReason;
   /** Only on "missing-input" — the LawCase key whose absence blocked the rule. */
   missingField?: string;
-  /** Only on "no-rule" — why no clock applies, for the panel's explanation. */
-  noRuleCause?: "accepted" | "outcome-unknown" | "unrouted";
+  /** Only on "no-rule" — why no clock applies, for the panel's explanation.
+   *  "awaiting-result": the grievance IS filed and its answer is outstanding —
+   *  the one genuinely silent state. It replaced "outcome-unknown", which used to
+   *  also cover the NOT-filed case that now runs a clock of its own. */
+  noRuleCause?: "accepted" | "awaiting-result" | "unrouted";
 };
 
 export type PrescriptionCaseInput = {
@@ -6682,9 +6685,38 @@ export type PrescriptionCaseInput = {
   violationKnowledgeDate?: string | null;
   grievanceDate?: string | null;
   grievanceResultDate?: string | null;
+  grievanceNumber?: string | null;
   prescriptionDate?: string | null;
   createdAt?: string | null;
 };
+
+/**
+ * 🔴 HAS THE TESTED GRIEVANCE ACTUALLY BEEN FILED? DERIVED, NEVER STORED.
+ *
+ * Owner ruling: a grievance counts as filed when the violation panel carries its
+ * details. No column, no checkbox, nobody types it — the evidence IS the data.
+ * ONE definition, used by the prescription rule AND by the «هل تم تقديم التظلم؟»
+ * row, so the clock and the label can never disagree.
+ *
+ * ⚠ «غير متوفرة» IS DELIBERATELY NOT EVIDENCE OF FILING, and this is a judgment
+ * call worth knowing about. The codebase carries two readings of that sentinel:
+ * the batch-2 dialog offers it for "I do not have the NUMBER to hand", which
+ * implies the grievance exists; the batch-3b comment defines it as "searched, and
+ * there is none", which implies it does not. Those cannot both be right.
+ * Excluding it takes the FAIL-SAFE direction: the clock keeps RUNNING on a case
+ * whose filing is uncertain, so the worst outcome is a warning the lawyer can
+ * retire by entering the real number or date. Including it would take the other
+ * direction — SILENCE on a deadline that may still be live, which is the exact
+ * failure item 1 exists to remove.
+ *
+ * A DATE alone is sufficient: تاريخ الاعتراض can only be known if the objection
+ * was lodged.
+ */
+export function grievanceWasFiled(c: PrescriptionCaseInput): boolean {
+  if (String(c.grievanceDate || "").trim()) return true;
+  const num = String(c.grievanceNumber || "").trim();
+  return !!num && num !== GrievanceNumberUnavailable;
+}
 
 // ==================== THE SIX RULE INPUTS ====================
 // 🔴 RECOMPUTE FIRES ON INPUT CHANGE, NOT ON EVERY WRITE (owner ruling, batch 3b).
@@ -6860,10 +6892,23 @@ export function computePrescriptionDate(c: PrescriptionCaseInput): PrescriptionR
     // The decision was overturned; there is no lawsuit to file.
     return { date: null, reason: "no-rule", noRuleCause: "accepted" };
   }
-  // NULL, or any unrecognised legacy value: WHICH rule applies depends on the
-  // outcome (60-from-rejection vs 120-from-submission), so computing either
-  // would be a guess.
-  return { date: null, reason: "no-rule", noRuleCause: "outcome-unknown" };
+
+  // 🔴 NO RESULT YET — TWO DIFFERENT SITUATIONS, AND BATCH 3 CONFLATED THEM.
+  // Treating "result is NULL" as one silent state left a case whose GRIEVANCE
+  // DEADLINE may already have passed showing «لا يسري التقادم», which is the
+  // defect this splits:
+  //
+  //   NOT FILED  → the clock RUNS. The grievance itself has a deadline — 60 days
+  //     from تاريخ العلم بالمخالفة, the same rule and the same input مسار التظلم
+  //     already uses, because it is the same act: lodging the objection.
+  //   FILED, awaiting the answer → genuinely NO CLOCK. This is the only
+  //     legitimately silent state: the outcome decides WHICH rule applies next
+  //     (60-from-rejection vs 120-from-submission), so computing either now would
+  //     be a guess.
+  if (!grievanceWasFiled(c)) {
+    return from("violationKnowledgeDate", PrescriptionDaysNoGrievance);
+  }
+  return { date: null, reason: "no-rule", noRuleCause: "awaiting-result" };
 }
 
 // ==================== THE صك (JUDGMENT DEED) SCOPE TEST ====================

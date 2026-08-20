@@ -12,6 +12,19 @@ import {
   formatDualDate,
 } from "@/lib/date-utils";
 
+// ==================== YEAR RANGE ====================
+// Centred on the date in view (or today when the field is empty).
+//
+// -50 / +10 chosen for THIS APP'S REAL DATA, not as a round number: the backward
+// span has to reach historic administrative documents — تاريخ العلم بالمخالفة,
+// تاريخ القرار الإداري and تاريخ إيفاء can all be years old, and a prescription
+// rule computed from one of them is only as good as the date the lawyer can pick.
+// Forward, the app's dates are scheduling ones — hearings, deadlines, pause-until
+// — which in practice never run beyond a couple of years; 10 is generous and
+// keeps the list short enough to scan.
+const YEARS_BACK = 50;
+const YEARS_FORWARD = 10;
+
 interface HijriDatePickerProps {
   value: string;
   onChange: (value: string) => void;
@@ -40,6 +53,13 @@ export function HijriDatePicker({
     if (!selectedDate) return "";
     const dual = formatDualDate(selectedDate);
     return `${dual.hijri} — ${dual.gregorian} م`;
+  }, [selectedDate]);
+
+  // GREGORIAN years, for the Gregorian tab's dropdown only. The Hijri grid
+  // computes its own range in Hijri years — the two must never share a number.
+  const gregorianYearRange = useMemo(() => {
+    const centre = (selectedDate ?? new Date()).getFullYear();
+    return { from: centre - YEARS_BACK, to: centre + YEARS_FORWARD };
   }, [selectedDate]);
 
   const handleSelectGregorian = useCallback(
@@ -111,10 +131,30 @@ export function HijriDatePicker({
         </div>
 
         {mode === "gregorian" ? (
+          // 🔴 GREGORIAN YEAR/MONTH NAVIGATION comes from react-day-picker's own
+          // dropdown caption. Using its built-in is deliberate: the dropdowns are
+          // generated FROM THE GREGORIAN CALENDAR by construction, so this tab can
+          // never offer a Hijri year or month name — the mixing failure the Hijri
+          // grid below has to guard against by hand.
+          //
+          // 🔴 NAVIGATION EMITS NOTHING. `onSelect` is the ONLY path to onChange
+          // and rdp fires it exclusively on a DAY click; the caption dropdowns
+          // fire onMonthChange, which is not wired to anything. Changing year or
+          // month therefore cannot write a value.
           <Calendar
             mode="single"
             selected={selectedDate}
             onSelect={handleSelectGregorian}
+            captionLayout="dropdown-buttons"
+            fromYear={gregorianYearRange.from}
+            toYear={gregorianYearRange.to}
+            defaultMonth={selectedDate}
+            classNames={{
+              caption_dropdowns: "flex gap-1 justify-center",
+              dropdown: "rdp-dropdown bg-background border rounded-md text-sm px-1 py-0.5",
+              caption_label: "hidden",
+              vhidden: "hidden",
+            }}
             initialFocus
           />
         ) : (
@@ -143,6 +183,19 @@ function HijriCalendarGrid({ selectedDate, onSelect }: HijriCalendarGridProps) {
 
   const [viewYear, setViewYear] = useState(initialHijri.year);
   const [viewMonth, setViewMonth] = useState(initialHijri.month);
+  // Which pane the Hijri tab is showing. "days" is the grid; the other two are
+  // navigation-only and CANNOT write a value — see the note on the header.
+  const [pane, setPane] = useState<"days" | "years" | "months">("days");
+
+  // 🔴 HIJRI YEARS, built from the HIJRI year in view. Never a Gregorian year
+  // offset by 579 or anything similar: a Hijri year is ~354 days, so any fixed
+  // arithmetic between the two calendars drifts, and a wrong-but-plausible year
+  // is the worst failure this component can produce.
+  const hijriYears = useMemo(() => {
+    const out: number[] = [];
+    for (let y = viewYear - YEARS_BACK; y <= viewYear + YEARS_FORWARD; y++) out.push(y);
+    return out;
+  }, [viewYear]);
 
   const selectedHijri = selectedDate ? gregorianToHijri(selectedDate) : null;
 
@@ -186,14 +239,84 @@ function HijriCalendarGrid({ selectedDate, onSelect }: HijriCalendarGridProps) {
 
   const weekDays = ["أحد", "إثن", "ثلا", "أرب", "خمي", "جمع", "سبت"];
 
+  // 🔴 NEITHER PANE CAN WRITE A VALUE. `onSelect` — the component's only route to
+  // the parent's onChange — is called from exactly ONE place in this file: the day
+  // button in the grid below. Everything here mutates viewYear / viewMonth / pane
+  // and returns to the grid, so navigating years or months leaves the stored value
+  // untouched and the popover open, exactly as the month arrows already did.
+  if (pane === "years") {
+    return (
+      <div className="p-3 w-[17rem]" dir="rtl">
+        <div className="text-sm font-medium text-center mb-3">اختر السنة الهجرية</div>
+        <div className="grid grid-cols-4 gap-1 max-h-64 overflow-y-auto">
+          {hijriYears.map((y) => (
+            <button
+              key={y}
+              type="button"
+              onClick={() => { setViewYear(y); setPane("days"); }}
+              className={cn(
+                "h-9 rounded-md text-sm hover:bg-accent",
+                y === viewYear && "bg-primary text-primary-foreground hover:bg-primary",
+              )}
+              data-testid={`hijri-year-${y}`}
+            >
+              {y}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (pane === "months") {
+    return (
+      <div className="p-3 w-[17rem]" dir="rtl">
+        <div className="text-sm font-medium text-center mb-3">اختر الشهر الهجري — {viewYear} هـ</div>
+        <div className="grid grid-cols-3 gap-1">
+          {HIJRI_MONTHS.map((name, i) => (
+            <button
+              key={name}
+              type="button"
+              onClick={() => { setViewMonth(i + 1); setPane("days"); }}
+              className={cn(
+                "h-9 rounded-md text-xs px-1 hover:bg-accent",
+                i + 1 === viewMonth && "bg-primary text-primary-foreground hover:bg-primary",
+              )}
+              data-testid={`hijri-month-${i + 1}`}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-3" dir="rtl">
       <div className="flex items-center justify-between mb-4">
         <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToPrevMonth}>
           <ChevronRight className="h-4 w-4" />
         </Button>
-        <div className="text-sm font-medium">
-          {HIJRI_MONTHS[viewMonth - 1]} {viewYear} هـ
+        {/* The month and the year are now SEPARATE buttons, so each opens its own
+            pane. They were one static label. */}
+        <div className="flex items-center gap-1 text-sm font-medium">
+          <button
+            type="button"
+            onClick={() => setPane("months")}
+            className="px-2 py-1 rounded-md hover:bg-accent"
+            data-testid="hijri-open-month-picker"
+          >
+            {HIJRI_MONTHS[viewMonth - 1]}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPane("years")}
+            className="px-2 py-1 rounded-md hover:bg-accent"
+            data-testid="hijri-open-year-picker"
+          >
+            {viewYear} هـ
+          </button>
         </div>
         <Button variant="outline" size="icon" className="h-7 w-7" onClick={goToNextMonth}>
           <ChevronLeft className="h-4 w-4" />
