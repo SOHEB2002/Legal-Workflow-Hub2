@@ -7229,6 +7229,14 @@ export const updateViolationDetailsSchema = z.object({
 // real number.
 export const GrievanceNumberUnavailable = "غير متوفرة";
 
+// The two مقفلة exits on مسار التظلم (batch 4). Tolerant like every other
+// workflow schema here — the handlers own the Arabic refusals, including the
+// membership check on grievanceResult.
+export const grievanceOutcomeSchema = z.object({
+  grievanceResult: z.string().optional(),
+  grievanceResultDate: z.string().optional(),
+}).passthrough();
+
 export const adminTrackSchema = z.object({
   track: z.string(),
   grievanceRequired: z.boolean().optional(),
