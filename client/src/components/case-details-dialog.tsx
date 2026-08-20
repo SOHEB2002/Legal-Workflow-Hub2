@@ -312,6 +312,31 @@ const VIOLATION_PANEL_FIELDS: ReadonlyArray<{
   { key: "invoiceNumber", label: "رقم الفاتورة", kind: "text" },
 ];
 
+// 🔴 «التظلم غير وجوبي» — a LABEL SUFFIX, never a disable. When the lawyer
+// answered لا to «التظلم وجوبي؟» on the مسار الدعوى choice, the two objection
+// fields say so and STAY EDITABLE: the owner's rule is that a grievance can still
+// turn up later and must be recordable when it does. Marking them read-only
+// would turn a recorded fact into a lock.
+//
+// Applied at the ONE place both render paths read the label from, so the
+// read-only grid and the edit form cannot disagree. Scoped to the two grievance
+// INPUT fields — grievanceResult / grievanceResultDate are the OUTCOME of an
+// objection that was actually filed, and are meaningless to qualify this way.
+const GRIEVANCE_INPUT_KEYS = new Set(["grievanceNumber", "grievanceDate"]);
+function violationFieldLabel(
+  field: { key: string; label: string },
+  selected: { adminCaseSubType?: string | null; grievanceRequired?: boolean } | null | undefined,
+): string {
+  if (!selected) return field.label;
+  // Only on the LAWSUIT track: the question is asked there and only there. On the
+  // grievance track the objection IS the matter, so the qualifier would be absurd.
+  const onLawsuitTrack = selected.adminCaseSubType === "قضية";
+  if (onLawsuitTrack && selected.grievanceRequired === false && GRIEVANCE_INPUT_KEYS.has(field.key)) {
+    return `${field.label} — التظلم غير وجوبي`;
+  }
+  return field.label;
+}
+
 export function CaseDetailsDialog({
   caseItem,
   open,
@@ -1251,13 +1276,46 @@ export function CaseDetailsDialog({
                         </div>
                       </div>
 
+                      {/* ==================== التظلم وجوبي ====================
+                          🔴 A RECORDED FACT, NOT A GATE (owner ruling). Nothing in
+                          the codebase branches on grievance_required — it is
+                          stored, shown here, and that is all. The objection fields
+                          below stay editable whatever it says.
+                          READ-ONLY HERE ON PURPOSE, and NOT a member of
+                          VIOLATION_PANEL_FIELDS: that array is the writable set
+                          for PATCH /violation-details, which does not accept this
+                          column. It is answered once, with the track, at
+                          «مسار الدعوى». Rendering it as an editable panel field
+                          would offer a save the endpoint silently drops.
+                          Shown for ALL THREE states — it previously appeared only
+                          when true, inside a separate «بيانات التظلم» block, so
+                          «لا» and "never answered" were indistinguishable from
+                          each other and from an ordinary non-admin case. */}
+                      <div className="mb-4 text-right">
+                        <Label className="text-muted-foreground">التظلم وجوبي</Label>
+                        <p className="font-medium" data-testid="violation-value-grievanceRequired">
+                          {selectedCase.adminCaseSubType !== "قضية" ? (
+                            // The question belongs to the lawsuit track. On the
+                            // grievance track the objection IS the matter, and on an
+                            // unrouted case it has not been asked yet.
+                            <span className="text-muted-foreground text-sm italic">لا ينطبق</span>
+                          ) : selectedCase.grievanceRequired === true ? (
+                            "نعم"
+                          ) : selectedCase.grievanceRequired === false ? (
+                            "لا"
+                          ) : (
+                            <span className="text-muted-foreground text-sm italic">غير مُحدد</span>
+                          )}
+                        </p>
+                      </div>
+
                       {!violationEditing ? (
                         <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                           {VIOLATION_PANEL_FIELDS.map((f) => {
                             const raw = String((selectedCase as unknown as Record<string, unknown>)[f.key] ?? "");
                             return (
                               <div key={f.key}>
-                                <Label className="text-muted-foreground">{f.label}</Label>
+                                <Label className="text-muted-foreground">{violationFieldLabel(f, selectedCase)}</Label>
                                 <p className="font-medium" data-testid={`violation-value-${f.key}`}>
                                   {!raw ? (
                                     // EVERY field is null on every case today. The
@@ -1319,7 +1377,7 @@ export function CaseDetailsDialog({
                           <div className="grid grid-cols-2 gap-4">
                             {VIOLATION_PANEL_FIELDS.map((f) => (
                               <div key={f.key}>
-                                <Label className="text-muted-foreground">{f.label}</Label>
+                                <Label className="text-muted-foreground">{violationFieldLabel(f, selectedCase)}</Label>
                                 {f.kind === "date" ? (
                                   <HijriDatePicker
                                     value={violationForm[f.key] || ""}
