@@ -65,6 +65,48 @@ export function CaseStagePanel({
       // إداري's track. NULL until batch 2's «مسار التظلم» / «مسار الدعوى»
       // buttons set it, which resolves the bar to AdminUnroutedStages.
       adminCaseSubType={caseItem.adminCaseSubType}
+      // Pre-fill only, for the two مقفلة-exit dialogs.
+      caseGrievanceResult={caseItem.grievanceResult}
+      caseGrievanceResultDate={caseItem.grievanceResultDate}
+      // 🔴 SAME GATE AS onChooseAdminTrack BELOW — canEditCaseViolationDetails's
+      // client mirror. Not a new permission and not a loosened one: choosing what
+      // happens after the grievance is the same authority as choosing the track in
+      // the first place, exercised later with more information.
+      onGrievanceOutcome={
+        user && (
+          hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") ||
+          isDeptHeadFor(actingIdentities, caseItem.departmentId) ||
+          anyIdentity(actingIdentities, (_r, id) =>
+            caseItem.primaryLawyerId === id ||
+            caseItem.responsibleLawyerId === id ||
+            (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(id)))
+        ) ? async (payload) => {
+          setStageTransitioning(true);
+          try {
+            const path = payload.kind === "accepted"
+              ? "grievance-accepted"
+              : "grievance-continue-as-lawsuit";
+            await apiRequest("POST", `/api/cases/${caseItem.id}/${path}`, {
+              grievanceResult: payload.grievanceResult,
+              grievanceResultDate: payload.grievanceResultDate,
+            });
+            toast({
+              title: payload.kind === "accepted"
+                ? "تم تسجيل قبول التظلم"
+                : "تم استكمال القضية كدعوى",
+              description: payload.kind === "accepted"
+                ? "انتقلت القضية إلى التحصيل وأُنشئت مهمة خطاب التحصيل"
+                : "بدأت القضية من مرحلة الاستلام على مسار الدعوى",
+            });
+            await refreshCases();
+            onChanged?.();
+          } catch (err) {
+            toast({ title: "تعذّر تنفيذ الإجراء", description: extractApiError(err), variant: "destructive" });
+          } finally {
+            setStageTransitioning(false);
+          }
+        } : undefined
+      }
       // Read-only: lets the bar work out how far a TERMINAL case (مقفلة /
       // مشطوبة / محكوم_* …) actually got along its path, since such a case can
       // be closed from any stage and currentStage no longer says where it was.

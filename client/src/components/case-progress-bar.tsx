@@ -78,6 +78,13 @@ interface CaseProgressBarProps {
     grievanceNumber?: string;
     grievanceDate?: string;
   }) => void;
+  // The two مقفلة exits on مسار التظلم. `kind` picks the endpoint; the panel owns
+  // the routing so the bar stays presentation-only.
+  onGrievanceOutcome?: (payload: {
+    kind: "continue-as-lawsuit" | "accepted";
+    grievanceResult?: string;
+    grievanceResultDate: string;
+  }) => void;
   onInternalReviewSendBack?: (notes: string) => void;
   onReturnToCommittee?: (notes: string) => void;
   // Committee-review (إحالة_للجنة_المراجعة) decisions, surfaced here so the
@@ -124,6 +131,9 @@ interface CaseProgressBarProps {
   // ship). Ignored for every other department, exactly like clientRole is
   // ignored outside the in-court paths.
   adminCaseSubType?: string | null;
+  // Stored grievance outcome, used ONLY to pre-fill the two مقفلة-exit dialogs.
+  caseGrievanceResult?: string | null;
+  caseGrievanceResultDate?: string | null;
   // The case's stage history, used ONLY to locate how far along the rendered
   // path a TERMINAL case actually got (a closed case can be closed from any
   // stage, so the bar can't infer it from currentStage). Optional: with no
@@ -164,6 +174,7 @@ export function CaseProgressBar({
   onMoveToPrevious,
   onSkipDataCompletion,
   onChooseAdminTrack,
+  onGrievanceOutcome,
   onInternalReviewSendBack,
   onReturnToCommittee,
   onReviewCommitteeApprove,
@@ -181,6 +192,8 @@ export function CaseProgressBar({
   memoRequired,
   isSettlementCase,
   adminCaseSubType,
+  caseGrievanceResult,
+  caseGrievanceResultDate,
   stageHistory,
   judgmentDirection,
   closureBadge,
@@ -208,6 +221,16 @@ export function CaseProgressBar({
   // no" from "the lawyer did not answer", and the confirm button stays disabled
   // until it is genuinely answered.
   const [lawsuitTrackOpen, setLawsuitTrackOpen] = useState(false);
+  // The two مقفلة-exit dialogs. Both ALWAYS ask (owner ruling) and are PRE-FILLED
+  // from the stored grievance result when there is one — the lawyer confirms or
+  // corrects rather than retyping, but is never skipped past the question.
+  const [continueLawsuitOpen, setContinueLawsuitOpen] = useState(false);
+  const [acceptedOpen, setAcceptedOpen] = useState(false);
+  const [failedResult, setFailedResult] = useState<string>(
+    caseGrievanceResult === "مرفوض" || caseGrievanceResult === "لم_يُردّ_عليه" ? caseGrievanceResult : "",
+  );
+  const [failedResultDate, setFailedResultDate] = useState(caseGrievanceResultDate || "");
+  const [acceptedDate, setAcceptedDate] = useState(caseGrievanceResultDate || "");
   const [grievanceObligatory, setGrievanceObligatory] = useState<"" | "نعم" | "لا">("");
   const [objectionNumber, setObjectionNumber] = useState("");
   const [objectionDate, setObjectionDate] = useState("");
@@ -417,6 +440,23 @@ export function CaseProgressBar({
     && departmentName === "إداري"
     && !String(adminCaseSubType || "").trim()
     && !!onChooseAdminTrack
+    && !disabled;
+
+  // ==================== THE TWO مقفلة EXITS ON مسار التظلم (batch 4) ====================
+  // 🔴 THE GATE DOES NOT TRANSFER FROM needsAdminTrack ABOVE — two of its five
+  // terms are INVERTED here: the stage is مقفلة rather than استلام, and the
+  // sub-type must BE تظلم rather than be absent. Only the department term, the
+  // handler-present term and `disabled` carry over unchanged.
+  //
+  // ⚠ `disabled` WAS CHECKED and does NOT block these. The panel passes
+  // `stageTransitioning || awaitingCompletion || !!pausedAt` — none of which
+  // closure sets, so a closed case has it false and the buttons render. The one
+  // live term is stageTransitioning, which correctly hides them mid-action.
+  const canExitGrievanceClosure =
+    normalizedStage === "مقفلة"
+    && departmentName === "إداري"
+    && String(adminCaseSubType || "").trim() === AdminCaseSubType.GRIEVANCE
+    && !!onGrievanceOutcome
     && !disabled;
 
   const getStageStatus = (stageIndex: number) => {
@@ -1572,6 +1612,134 @@ export function CaseProgressBar({
                       setObjectionDate("");
                     }}
                     data-testid="button-admin-track-case-confirm"
+                  >
+                    تأكيد
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </>
+        )}
+
+        {/* ==================== THE TWO مقفلة EXITS ON مسار التظلم ====================
+            Same action row as every other stage decision — no new surface. These
+            are CONTINUATIONS, not reopens: the grievance is finished and the case
+            carries on down whichever road its outcome dictates. */}
+        {canExitGrievanceClosure && (
+          <>
+            <AlertDialog open={continueLawsuitOpen} onOpenChange={setContinueLawsuitOpen}>
+              <AlertDialogTrigger asChild>
+                <Button variant="default" size="sm" data-testid="button-grievance-continue-as-lawsuit">
+                  استكمال كدعوى
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>استكمال القضية كدعوى</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    تنتقل القضية إلى مسار الدعوى وتبدأ من مرحلة الاستلام. يبقى سجل مراحل
+                    التظلم كما هو، ويُعاد احتساب تاريخ التقادم وفق نتيجة التظلم.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-3" dir="rtl">
+                  <div className="space-y-1">
+                    <Label>نتيجة التظلم</Label>
+                    <div className="flex gap-2">
+                      {([
+                        { value: "مرفوض", label: "مرفوض" },
+                        { value: "لم_يُردّ_عليه", label: "لم يُردّ عليه" },
+                      ] as const).map((opt) => (
+                        <Button
+                          key={opt.value}
+                          type="button"
+                          variant={failedResult === opt.value ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setFailedResult(opt.value)}
+                          data-testid={`button-grievance-result-${opt.value}`}
+                        >
+                          {opt.label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>تاريخ نتيجة التظلم</Label>
+                    <HijriDatePicker
+                      value={failedResultDate}
+                      onChange={setFailedResultDate}
+                      data-testid="input-grievance-result-date"
+                    />
+                    {/* Names the consequence, because the two answers produce
+                        different deadlines and the lawyer is choosing between
+                        them here. */}
+                    <p className="text-xs text-muted-foreground">
+                      {failedResult === "مرفوض"
+                        ? "يُحتسب التقادم ٦٠ يوماً من هذا التاريخ."
+                        : failedResult === "لم_يُردّ_عليه"
+                        ? "يُحتسب التقادم ١٢٠ يوماً من تاريخ تقديم الاعتراض."
+                        : "اختر نتيجة التظلم أولاً."}
+                    </p>
+                  </div>
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <Button
+                    disabled={!failedResult || !failedResultDate.trim()}
+                    onClick={() => {
+                      onGrievanceOutcome!({
+                        kind: "continue-as-lawsuit",
+                        grievanceResult: failedResult,
+                        grievanceResultDate: failedResultDate.trim(),
+                      });
+                      setContinueLawsuitOpen(false);
+                    }}
+                    data-testid="button-grievance-continue-confirm"
+                  >
+                    تأكيد
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+            <AlertDialog open={acceptedOpen} onOpenChange={setAcceptedOpen}>
+              <AlertDialogTrigger asChild>
+                <Button variant="default" size="sm" data-testid="button-grievance-accepted">
+                  التظلم قُبل
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>قبول التظلم</AlertDialogTitle>
+                  {/* 🔴 STATES THE FINALITY UP FRONT. تحصيل has no outbound edge and
+                      cannot be early-closed by any role, so this is the last manual
+                      move the case will take — it closes on its own when the
+                      collection task resolves. */}
+                  <AlertDialogDescription>
+                    تنتقل القضية إلى مرحلة التحصيل وتُنشأ مهمة إعداد خطاب التحصيل.
+                    التحصيل مرحلة نهائية — لا يمكن نقل القضية منها بعد ذلك، وتُقفل تلقائياً
+                    عند إنجاز مهمة التحصيل.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <div className="space-y-1" dir="rtl">
+                  <Label>تاريخ قبول التظلم</Label>
+                  <HijriDatePicker
+                    value={acceptedDate}
+                    onChange={setAcceptedDate}
+                    data-testid="input-grievance-accepted-date"
+                  />
+                </div>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>إلغاء</AlertDialogCancel>
+                  <Button
+                    disabled={!acceptedDate.trim()}
+                    onClick={() => {
+                      onGrievanceOutcome!({
+                        kind: "accepted",
+                        grievanceResultDate: acceptedDate.trim(),
+                      });
+                      setAcceptedOpen(false);
+                    }}
+                    data-testid="button-grievance-accepted-confirm"
                   >
                     تأكيد
                   </Button>

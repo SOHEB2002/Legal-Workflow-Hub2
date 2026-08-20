@@ -103,6 +103,9 @@ import {
   // CLIENT, which uses it for the placeholder and to hide the date field when the
   // lawyer states no objection exists.
   adminTrackSchema,
+  grievanceOutcomeSchema,
+  GrievanceResult,
+  CaseStatus,
   stageNumberRequirement,
   reopenCaseSchema,
   recordJudgmentDeedSchema,
@@ -3068,6 +3071,53 @@ async function recomputeCasePrescriptionDate(caseId: string | null | undefined):
 
 // The same logic against a case row the caller already holds — used by the
 // nightly sweep, which reads every case once and must not re-fetch each one.
+// ==================== تحصيل — THE COLLECTION-LETTER TASK ====================
+// 🔴 ONE CREATOR, TWO CALLERS. Extracted verbatim from the inline block in
+// PATCH /api/cases/:id (which still calls it) so the batch-4 «التظلم قُبل»
+// endpoint can REUSE it rather than grow a second copy. تحصيل can no longer be
+// closed by hand, so an entry edge that created NO task would strand the case —
+// which is exactly what the old grievance edge did before it was covered.
+//
+// The `reason` picks the wording, since the two edges land on تحصيل for
+// different causes. It is passed EXPLICITLY rather than re-derived from the
+// case's previous stage: the batch-4 entry comes from مقفلة, so a stage-based
+// test would silently fall through to the settlement wording.
+//
+// Total by construction — the whole body is one try/catch that only logs. A
+// stage transition must never fail because its follow-up task could not be made.
+async function createCollectionTaskForCase(
+  updated: LawCase,
+  user: { id: string; name?: string; role: string },
+  reason: "settlement" | "grievance-accepted",
+): Promise<void> {
+  try {
+    const allUsers = await storage.getAllUsers();
+    // Collection (تحصيل) → the per-type assignee from the admin_support
+    // task-routing mapping; "" (unassigned pool) if unset or inactive.
+    const assignments = await storage.getAdminSupportTaskAssignments();
+    const assignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
+    const collectionTask = await storage.createFieldTask(
+      {
+        title: `${CollectionTaskTitlePrefix} — قضية رقم ${updated.caseNumber}`,
+        description: reason === "grievance-accepted"
+          ? `تم قبول التظلم — يرجى إعداد خطاب التحصيل`
+          : `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
+        taskType: "متابعة_محكمة",
+        caseId: updated.id,
+        assignedTo: assignee,
+        priority: "عاجل",
+        dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0],
+      },
+      user.id,
+    );
+    await notifyFieldTaskCreated(collectionTask, user); // D4
+  } catch (e) {
+    console.error("Failed to auto-create collection task:", e);
+  }
+}
+
 export async function recomputePrescriptionForCase(existing: LawCase): Promise<boolean> {
   if (prescriptionClockStopped(existing)) return false;
   const result = computePrescriptionDate(existing);
@@ -5591,34 +5641,14 @@ export async function registerRoutes(
 
       // Side effect for مداولة_الصلح → تحصيل: create the admin collection task.
       if (shouldCreateCollectionTask) {
-        try {
-          const allUsers = await storage.getAllUsers();
-          // Collection (تحصيل) → the per-type assignee from the admin_support
-          // task-routing mapping; "" (unassigned pool) if unset or inactive.
-          const assignments = await storage.getAdminSupportTaskAssignments();
-          const assignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.COLLECTION, assignments, allUsers);
-          const collectionTask = await storage.createFieldTask(
-            {
-              title: `${CollectionTaskTitlePrefix} — قضية رقم ${updated.caseNumber}`,
-              // Entry-edge-specific wording: the settlement path and the grievance
-              // path both land on تحصيل but for different reasons.
-              description: existing.currentStage === "انتظار_رد_التظلم"
-                ? `تم قبول التظلم — يرجى إعداد خطاب التحصيل`
-                : `تم الصلح في مداولة الصلح — يرجى إعداد خطاب التحصيل`,
-              taskType: "متابعة_محكمة",
-              caseId: updated.id,
-              assignedTo: assignee,
-              priority: "عاجل",
-              dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-                .toISOString()
-                .split("T")[0],
-            },
-            user.id,
-          );
-          await notifyFieldTaskCreated(collectionTask, user); // D4
-        } catch (e) {
-          console.error("Failed to auto-create collection task on conciliation settlement:", e);
-        }
+        await createCollectionTaskForCase(
+          updated,
+          user,
+          // The grievance wording for the OLD grievance edge. The batch-4 entry
+          // point (مقفلة → تحصيل on مسار التظلم) passes the same reason from its
+          // own endpoint — see createCollectionTaskForCase.
+          existing.currentStage === "انتظار_رد_التظلم" ? "grievance-accepted" : "settlement",
+        );
       }
 
       // Side effect for مداولة_الصلح → أغلق_طلب_الصلح on a defendant case: the
@@ -9402,6 +9432,255 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error selecting admin track:", error);
       res.status(500).json({ error: "حدث خطأ في تحديد مسار القضية" });
+    }
+  });
+
+  // ==================== THE TWO مقفلة EXITS ON مسار التظلم (batch 4) ====================
+  // An admin case on the grievance track that has reached مقفلة has finished its
+  // grievance. These are its two CONTINUATIONS — not reopens: the case carries on
+  // down whichever road the grievance's OUTCOME dictates.
+  //
+  // 🔴 DEDICATED ENDPOINTS, NOT THE GENERIC PATCH, and that choice has one
+  // consequence worth stating precisely: the adminCaseSubType lock at
+  // PATCH /api/cases/:id is NOT BYPASSED — it is simply NOT REACHED, because this
+  // route never enters that handler. The lock's own header calls PATCH "the ONLY
+  // other writer of the column"; that is now three writers (/admin-track, PATCH,
+  // and this), and NO OTHER CALLER gained a way through it: the escape is not a
+  // relaxed condition in the lock but a separate, narrower endpoint whose own
+  // guards are stricter than the lock's in every dimension.
+  //
+  // Both bypass validateStageTransition — مقفلة has ZERO outbound edges — the same
+  // precedent /reopen and /skip-committee already set. Neither adds a table edge,
+  // so مقفلة stays terminal for the generic advance route and these endpoints
+  // remain the only way out.
+  //
+  // GATE = canEditCaseViolationDetails, THE SAME AUTHORITY THE BATCH-2 TRACK
+  // BUTTONS USE (branch_manager | admin_support | own-dept department_head |
+  // assigned lawyer). Not a new permission, not a loosened one — these are the
+  // same act as choosing a track, made later with more information.
+
+  // ---- BUTTON A — «استكمال كدعوى» ----
+  // The grievance failed; the same case continues as a lawsuit from استلام.
+  app.post("/api/cases/:id/grievance-continue-as-lawsuit", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const department = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      if (department?.name !== "إداري") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضايا القسم الإداري" });
+      }
+      if (!canEditCaseViolationDetails(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
+      }
+
+      // 🔴 THE SUB-TYPE LOCK ESCAPE, AS A PURE CONJUNCTION. Every term must hold;
+      // any one failing lands on the same refusal the lock itself gives. This is
+      // the isSettlementContinueTransition shape — a NAMED transition, not a
+      // widened rule.
+      //   existing.adminCaseSubType === "تظلم"
+      //   AND existing.currentStage === "مقفلة"
+      //   AND the target sub-type is "قضية"        (fixed by this endpoint)
+      //   AND the same write carries the move to استلام (fixed by this endpoint)
+      // The last two are constants here rather than request fields, which makes
+      // them unforgeable: a caller cannot ask this endpoint for any other pair.
+      if (String(lawCase.adminCaseSubType || "").trim() !== AdminCaseSubType.GRIEVANCE) {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية على مسار التظلم" });
+      }
+      if (lawCase.currentStage !== "مقفلة") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية مقفلة" });
+      }
+
+      const bodyCheck = grievanceOutcomeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+
+      // The dialog ALWAYS asks (owner ruling), so both values arrive on every call
+      // even when the columns already hold them — the lawyer confirms or corrects.
+      const result = String(req.body.grievanceResult || "").trim();
+      if (result !== GrievanceResult.REJECTED && result !== GrievanceResult.NO_RESPONSE) {
+        return res.status(400).json({
+          error: `نتيجة التظلم غير صالحة — القيم المسموحة: ${GrievanceResult.REJECTED} / ${GrievanceResult.NO_RESPONSE}`,
+        });
+      }
+      const resultDate = String(req.body.grievanceResultDate || "").trim();
+      if (!resultDate) {
+        return res.status(400).json({ error: "أدخل تاريخ نتيجة التظلم" });
+      }
+
+      // 🔴 CHRONOLOGY — the batch-3e validator, REUSED. Its own message is
+      // returned rather than a second one, so the lawyer sees the same sentence
+      // wherever the rule is broken. Only the pair being written is checked, which
+      // is what keeps an already-inconsistent row from being unfixable here.
+      const orderError = validateViolationDateOrder(
+        lawCase as unknown as Record<string, unknown>,
+        { grievanceResultDate: resultDate },
+      );
+      if (orderError) return res.status(400).json({ error: orderError });
+
+      const nowIso = new Date().toISOString();
+      const actorName = actorDisplayName(req.actingContext, lawCase.id, user.name);
+      const existingHistory = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+      // KEPT AND APPENDED — never truncated. The grievance stages stay in the
+      // record; the bar simply ignores entries absent from the array it renders
+      // (its furthestReachedIndex takes a Math.max over indexOf, and a miss is -1).
+      const stageHistory: CaseStageTransition[] = [
+        ...existingHistory,
+        {
+          stage: "استلام",
+          timestamp: nowIso,
+          userId: user.id,
+          userName: actorName,
+          notes: `استكمال كدعوى بعد ${result === GrievanceResult.REJECTED ? "رفض التظلم" : "عدم الرد على التظلم"}`,
+        },
+      ];
+
+      const updated = await storage.updateCase(lawCase.id, {
+        adminCaseSubType: AdminCaseSubType.CASE,
+        // Owner ruling: it WAS filed and it DID fail, so the flag is true whatever
+        // it held before — a case that reached مقفلة on the grievance track lodged
+        // a grievance by definition.
+        grievanceRequired: true,
+        grievanceResult: result,
+        grievanceResultDate: resultDate,
+        currentStage: "استلام",
+        stageHistory,
+        // Closure state is cleared: the case is live again on a new track.
+        closedAt: null,
+        closureReason: null,
+        closureReasonOther: null,
+        status: CaseStatus.RECEIVED,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تحديث القضية" });
+
+      // 🔴 RECOMPUTE ON THE POST-SWITCH ROW. Re-read rather than reuse `updated`
+      // or `lawCase`: the freeze is enforced inside recomputePrescriptionForCase
+      // via prescriptionClockStopped, which reads the CURRENT adminCaseSubType.
+      // Against the pre-switch row it would still see تظلم, test مقفلة, find it in
+      // history and DECLINE. Against the post-switch row it sees قضية, tests
+      // قيد_التدقيق_في_معين, finds none, and the clock un-freezes on its own.
+      // NO FREEZE GUARD IS RELAXED anywhere — the guard is unchanged and simply
+      // answers differently because the case genuinely changed track.
+      const postSwitch = await storage.getCaseById(lawCase.id);
+      if (postSwitch) await recomputePrescriptionForCase(postSwitch);
+
+      try {
+        await logCaseActivityActing(req, {
+          caseId: lawCase.id,
+          userId: user.id,
+          userName: user.name || user.id,
+          actionType: "grievance_continued_as_lawsuit",
+          title: `استكمال القضية كدعوى — ${result === GrievanceResult.REJECTED ? "التظلم مرفوض" : "لم يُردّ على التظلم"} بتاريخ ${resultDate}`,
+        });
+      } catch (e) {
+        console.error("[grievance-continue-as-lawsuit] activity log failed", e);
+      }
+
+      res.json(await storage.getCaseById(lawCase.id) || updated);
+    } catch (error) {
+      console.error("Error continuing grievance as lawsuit:", error);
+      res.status(500).json({ error: "حدث خطأ في استكمال القضية كدعوى" });
+    }
+  });
+
+  // ---- BUTTON B — «التظلم قُبل» ----
+  // The grievance succeeded. The case moves to تحصيل and the collection-letter
+  // task is raised.
+  //
+  // ⚠ تحصيل IS A HARD TERMINAL: zero outbound edges in ALLOWED_CASE_TRANSITIONS,
+  // and canEarlyCloseCase explicitly excludes it ("sealed for EVERY role,
+  // branch_manager included"). After this the case cannot be moved again by hand
+  // — it closes when its collection task resolves. That is the intended end of
+  // the road for an accepted grievance.
+  app.post("/api/cases/:id/grievance-accepted", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const user = req.user!;
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      const department = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      if (department?.name !== "إداري") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضايا القسم الإداري" });
+      }
+      if (!canEditCaseViolationDetails(user, lawCase, req.actingContext)) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لهذا الإجراء" });
+      }
+      if (String(lawCase.adminCaseSubType || "").trim() !== AdminCaseSubType.GRIEVANCE) {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية على مسار التظلم" });
+      }
+      if (lawCase.currentStage !== "مقفلة") {
+        return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضية مقفلة" });
+      }
+
+      const bodyCheck = grievanceOutcomeSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const resultDate = String(req.body.grievanceResultDate || "").trim();
+      if (!resultDate) {
+        return res.status(400).json({ error: "أدخل تاريخ قبول التظلم" });
+      }
+      const orderError = validateViolationDateOrder(
+        lawCase as unknown as Record<string, unknown>,
+        { grievanceResultDate: resultDate },
+      );
+      if (orderError) return res.status(400).json({ error: orderError });
+
+      const nowIso = new Date().toISOString();
+      const actorName = actorDisplayName(req.actingContext, lawCase.id, user.name);
+      const existingHistory = Array.isArray(lawCase.stageHistory) ? lawCase.stageHistory : [];
+      const stageHistory: CaseStageTransition[] = [
+        ...existingHistory,
+        { stage: "تحصيل", timestamp: nowIso, userId: user.id, userName: actorName, notes: "تم قبول التظلم" },
+      ];
+
+      const updated = await storage.updateCase(lawCase.id, {
+        // adminCaseSubType STAYS تظلم — the grievance succeeded; it did not become
+        // a lawsuit. Nothing here touches the sub-type, so the lock is irrelevant
+        // to this endpoint.
+        grievanceResult: GrievanceResult.ACCEPTED,
+        grievanceResultDate: resultDate,
+        currentStage: "تحصيل",
+        stageHistory,
+        closedAt: null,
+        closureReason: null,
+        closureReasonOther: null,
+        status: CaseStatus.RECEIVED,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تحديث القضية" });
+
+      // REUSED, not duplicated — the same creator PATCH /api/cases/:id calls, with
+      // the grievance wording passed explicitly.
+      await createCollectionTaskForCase(updated, user, "grievance-accepted");
+
+      // مقبول is a NO-CLOCK rule, so this recompute CLEARS the frozen date and the
+      // panel reads «لا يسري التقادم — تظلم مقبول». Run on the post-write row for
+      // the same reason as Button A: the stop test reads the stored values.
+      const postWrite = await storage.getCaseById(lawCase.id);
+      if (postWrite) await recomputePrescriptionForCase(postWrite);
+
+      try {
+        await logCaseActivityActing(req, {
+          caseId: lawCase.id,
+          userId: user.id,
+          userName: user.name || user.id,
+          actionType: "grievance_accepted",
+          title: `تم قبول التظلم بتاريخ ${resultDate} — انتقلت القضية إلى التحصيل`,
+        });
+      } catch (e) {
+        console.error("[grievance-accepted] activity log failed", e);
+      }
+
+      res.json(await storage.getCaseById(lawCase.id) || updated);
+    } catch (error) {
+      console.error("Error accepting grievance:", error);
+      res.status(500).json({ error: "حدث خطأ في تسجيل قبول التظلم" });
     }
   });
 
