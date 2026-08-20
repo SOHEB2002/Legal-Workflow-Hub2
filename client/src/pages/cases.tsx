@@ -319,6 +319,26 @@ function getCasePriorityGroup(
 }
 
 
+// ==================== THE VIOLATION-NUMBER SEARCH ====================
+// The five violation-panel identifiers the إداري-only second search bar looks
+// through. A query matches a case if it is a substring of ANY of them.
+//
+// 🔴 moeen_number IS DELIBERATELY ABSENT — it belongs to the GENERAL bar, which
+// reaches it through the derived `caseNumber` (deriveCurrentCaseNumber puts
+// moeenNumber in its chain). Duplicating it here would give two bars one field
+// and make «why did this case match?» unanswerable. See the report for the one
+// case where that coverage lapses.
+//
+// Typed as keys of LawCase rather than plain strings, so a renamed column is a
+// compile error here instead of a search that silently stops matching.
+const VIOLATION_SEARCH_FIELDS: readonly (keyof LawCase)[] = [
+  "administrativeDecisionNumber",
+  "ifaaNumber",
+  "grievanceNumber",
+  "adminExecutionRequestNumber",
+  "invoiceNumber",
+];
+
 // Copied VERBATIM from hearings.tsx (which declares it module-locally and does
 // not export it) so the day headings on this page speak the hearings page's own
 // vocabulary. Deliberately duplicated rather than hoisted into date-utils: that
@@ -660,6 +680,12 @@ export default function CasesPage() {
   // restored search box is the one filter users don't expect to persist, and it
   // is the hardest to notice (an invisible substring silently emptying a list).
   const [searchQuery, setSearchQuery] = useState("");
+  // 🔴 PLAIN useState, NOT usePersistedFilter — matching the general bar directly
+  // above and for its documented reason: search text is deliberately not
+  // persisted, because a hidden search box silently emptying a list is worse than
+  // retyping. That reasoning is stronger here, since this bar can also be hidden
+  // by the department filter.
+  const [violationSearch, setViolationSearch] = useState("");
   // Persisted per user + per page (use-persisted-state). Stage/classification
   // are sanitized against their STATIC option lists; dept/lawyer accept any
   // string here because departments and users load async — their existence is
@@ -1233,12 +1259,30 @@ export default function CasesPage() {
     const matched = cases.filter((c) => {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
       const q = searchQuery.trim().toLowerCase();
+      const vq = violationSearch.trim().toLowerCase();
       const matchesSearch = !q ||
         c.caseNumber.toLowerCase().includes(q) ||
         (c.courtCaseNumber && c.courtCaseNumber.toLowerCase().includes(q)) ||
         (clientName && clientName.toLowerCase().includes(q)) ||
         (c.plaintiffName && c.plaintiffName.toLowerCase().includes(q)) ||
         (c.opponentName && c.opponentName.toLowerCase().includes(q));
+      // 🔴 THE إداري VIOLATION-NUMBER BAR. Semantics mirror the general bar above
+      // EXACTLY — trimmed, lower-cased, substring — and it runs in the SAME
+      // client-side pass over the loaded list, because that is where the existing
+      // search runs. There is no server-side case search to extend, so no schema
+      // or index question arises.
+      //
+      // AND, not OR: both queries must pass, and each is a separate term in the
+      // same `return` below. A case with none of the five numbers simply never
+      // matches a non-empty violation query — no special-casing needed, `.some`
+      // over an all-empty row is false.
+      //
+      // `typeof v === "string"` narrows the keyof-LawCase union without a cast,
+      // and doubles as the null guard.
+      const matchesViolationSearch = !vq || VIOLATION_SEARCH_FIELDS.some((f) => {
+        const v = c[f];
+        return typeof v === "string" && v.toLowerCase().includes(vq);
+      });
       // Stage filter operates on displayStage (virtual grouping) so a
       // closed/archived case appears under مقفلة and a paused one
       // under استكمال_البيانات.
@@ -1284,6 +1328,7 @@ export default function CasesPage() {
         (c.primaryLawyerId && advFilters.lawyers.includes(c.primaryLawyerId));
       return (
         matchesSearch &&
+        matchesViolationSearch &&
         matchesStatus &&
         matchesDept &&
         matchesClassification &&
@@ -1388,7 +1433,7 @@ export default function CasesPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks]);
+  }, [cases, searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks]);
 
   // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
   // must not be again:
@@ -1467,7 +1512,34 @@ export default function CasesPage() {
   // reshuffles the whole list, so the page-4 slice the user was looking at
   // becomes a different set of cases. Someone who turns on "الأقرب أولاً" is
   // asking to see the nearest sessions, which are on page 1.
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortBy]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortBy]);
+
+  // ==================== THE إداري VIOLATION-NUMBER BAR ====================
+  // Shown when إداري is SPECIFICALLY SELECTED — by EITHER department control, not
+  // just the header dropdown. The page has two: `deptFilter` (a single id, or the
+  // "all" sentinel) and the advanced panel's `advFilters.depts` (a multi-select
+  // array). Keying on the dropdown alone would hide the bar from a user who
+  // narrowed to إداري through the panel, which is the same scope by a different
+  // door. For the multi-select the test is MEMBERSHIP — إداري among the chosen —
+  // so a user looking at إداري plus another department still gets it.
+  //
+  // "all"/empty does NOT show it: the bar is إداري-specific, and offering it over
+  // a mixed list would imply the other departments have violation numbers too.
+  const adminDeptId = departments.find((d) => d.name === "إداري")?.id;
+  const showViolationSearch =
+    !!adminDeptId && (
+      deptFilter === String(adminDeptId)
+      || advFilters.depts.includes(String(adminDeptId))
+    );
+
+  // 🔴 CLEARED WHEN IT HIDES, NEVER MERELY HIDDEN. A query left alive behind a
+  // hidden input is invisible corruption: the user changes department, sees a
+  // short list, and has nothing on screen to explain why. Clearing is the ONLY
+  // exit — there is deliberately no separate clear button and no chip, so this
+  // effect is the single code path and cannot drift from one.
+  useEffect(() => {
+    if (!showViolationSearch && violationSearch) setViolationSearch("");
+  }, [showViolationSearch, violationSearch]);
   // Which empty state to show. HONEST BY CONSTRUCTION: it lists every control
   // that can narrow the table, so "no cases at all" is claimed ONLY when nothing
   // is narrowing it. Matches the my-tasks isFiltering shape (search text OR any
@@ -1480,6 +1552,10 @@ export default function CasesPage() {
   // admin_support, sentinel "all") can ever see the unfiltered message.
   const isFilteringCases =
     !!searchQuery.trim()
+    // Listed for the same reason every other control is: this bar narrows the
+    // table, so omitting it would let the page claim "no cases exist" when a
+    // violation-number query is what emptied it.
+    || !!violationSearch.trim()
     || statusFilter !== "all"
     || classificationFilter !== "all"
     || deptFilter !== "all"
@@ -1793,6 +1869,30 @@ export default function CasesPage() {
               onSortByChange={setSortBy}
             />
           </div>
+
+          {/* ==================== بحث برقم المخالفة — إداري ONLY ====================
+              A SECOND bar on its own row beneath the filter row, not another item
+              inside it: it is scoped to one department and appears and disappears,
+              so putting it in the flex row would make the other controls jump.
+              The general bar above is untouched.
+              Its own presence is the indicator — no chip. Search text has never
+              had one on this page (the sort chip exists because an active sort is
+              otherwise invisible; a search box is not), and a chip would need a
+              clear path separate from the effect that clears it on hide, which is
+              exactly the second code path worth avoiding. */}
+          {showViolationSearch && (
+            <div className="mt-3 relative max-w-md">
+              <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <SmartInput
+                inputType="text"
+                data-testid="input-violation-search"
+                placeholder="بحث برقم المخالفة (القرار الإداري · إيفاء · الاعتراض · طلب التنفيذ · الفاتورة)"
+                value={violationSearch}
+                onChange={(e) => setViolationSearch(e.target.value)}
+                className="pr-10"
+              />
+            </div>
+          )}
           {/* 🔴 THE ACTIVE-SORT CHIP — the answer to "the panel is closed and the
               sort is still on". Without it the only difference an active sort
               makes is that the rows are in an order the user cannot account for,
