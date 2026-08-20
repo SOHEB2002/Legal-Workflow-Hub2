@@ -6712,6 +6712,68 @@ export type PrescriptionCaseInput = {
  * A DATE alone is sufficient: تاريخ الاعتراض can only be known if the objection
  * was lodged.
  */
+// ==================== VIOLATION DATE ORDER ====================
+// 🔴 THE FAILURE THIS PREVENTS: a grievance RESULT date four months EARLIER than
+// the grievance date was accepted, and the prescription rule then computed a
+// deadline from it — impossible data producing a plausible-looking answer, which
+// is the worst shape a defect can take here.
+//
+// The chain, earliest first. Every pair (i < j) must satisfy dates[i] <= dates[j].
+// ONE definition, used by the server gate and the client's pre-save check, so the
+// dialog can never allow something the endpoint refuses or vice versa.
+export const ViolationDateOrder = [
+  { key: "administrativeDecisionDate", label: "تاريخ القرار الإداري" },
+  { key: "violationKnowledgeDate", label: "تاريخ العلم بالمخالفة" },
+  { key: "grievanceDate", label: "تاريخ الاعتراض" },
+  { key: "grievanceResultDate", label: "تاريخ نتيجة الاعتراض" },
+] as const;
+
+/**
+ * Returns an Arabic error naming BOTH offending fields, or null when the dates
+ * are consistent.
+ *
+ * 🔴 IT VALIDATES ONLY PAIRS THE PATCH IS TOUCHING, and that is what keeps an
+ * ALREADY-BROKEN ROW EDITABLE. Existing rows may violate this order — the guard
+ * did not exist when they were written. If it judged the merged row as a whole, a
+ * lawyer fixing the fine amount on such a case would be refused for two dates he
+ * never touched, and the row would become permanently unfixable. Touch either
+ * side of a pair and you own that pair; touch neither and it is not your problem.
+ *
+ * ALL pairs in the chain are checked, not just adjacent ones: with a middle date
+ * missing, adjacent-only checks would let القرار الإداري sit after الاعتراض.
+ *
+ * Missing dates never trigger an error — only pairs where BOTH values are
+ * present are compared. Equality is allowed; same-day events are real.
+ * Comparison is lexicographic on "YYYY-MM-DD", as everywhere else in this work.
+ */
+export function validateViolationDateOrder(
+  existing: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+): string | null {
+  const merged = (key: string): string => {
+    const src = Object.prototype.hasOwnProperty.call(incoming, key) ? incoming : existing;
+    const v = src[key];
+    return v === null || v === undefined ? "" : String(v).trim();
+  };
+  const touched = (key: string): boolean =>
+    Object.prototype.hasOwnProperty.call(incoming, key);
+
+  for (let i = 0; i < ViolationDateOrder.length; i++) {
+    for (let j = i + 1; j < ViolationDateOrder.length; j++) {
+      const earlier = ViolationDateOrder[i];
+      const later = ViolationDateOrder[j];
+      if (!touched(earlier.key) && !touched(later.key)) continue;
+      const a = merged(earlier.key);
+      const b = merged(later.key);
+      if (!a || !b) continue;
+      if (b < a) {
+        return `${later.label} لا يمكن أن يكون قبل ${earlier.label}`;
+      }
+    }
+  }
+  return null;
+}
+
 export function grievanceWasFiled(c: PrescriptionCaseInput): boolean {
   if (String(c.grievanceDate || "").trim()) return true;
   const num = String(c.grievanceNumber || "").trim();
