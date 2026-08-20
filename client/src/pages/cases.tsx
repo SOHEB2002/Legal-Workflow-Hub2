@@ -2367,14 +2367,20 @@ export default function CasesPage() {
                       // stand for, and left otherwise exactly as it was.
                       const canReassign = hasEffectiveRole(actingIdentities, "department_head") && c.currentStage !== "مقفلة" && !c.isArchived;
                       const canResumeAwait = !isCasePaused(c) && c.awaitingCompletion && canPauseCase(c);
+                      // 🔴 STAGE **AND** STATUS on both, mirroring the server guards
+                      // this batch hardened (/await-completion and /pause). Without
+                      // the stage term these buttons would keep rendering for the 63
+                      // drifted cases and 403 on click — the FE/server mismatch this
+                      // codebase keeps paying for. Visibility == authorization.
                       const canMarkAwait = !isCasePaused(c)
                         && !c.awaitingCompletion
                         && c.status !== "مغلق"
+                        && c.currentStage !== "مقفلة"
                         && !c.isArchived
                         && c.currentStage !== "استكمال_البيانات"
                         && canPauseCase(c);
                       const canUnpause = isCasePaused(c) && canPauseCase(c);
-                      const canPause = !isCasePaused(c) && c.status !== "مغلق" && !c.isArchived && canPauseCase(c);
+                      const canPause = !isCasePaused(c) && c.status !== "مغلق" && c.currentStage !== "مقفلة" && !c.isArchived && canPauseCase(c);
                       const canEarlyClose = canEarlyCloseCase(c);
                       const canCloseNoResponse = canCloseCaseForNoResponse(c);
                       const canDelete = user?.role === "branch_manager";
