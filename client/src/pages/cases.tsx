@@ -115,6 +115,7 @@ import {
   HearingStatus,
   firmToday,
   isUpcomingHearing,
+  prescriptionClockStopped,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, CaseTypeValue, PriorityType, CaseClassificationValue, Hearing } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -145,7 +146,9 @@ import {
   EMPTY_ADV_FILTERS,
   countActiveAdvFilters,
   getFilterStages,
+  CASES_SORT_VALUES,
   type AdvancedCasesFilters,
+  type CasesSortValue,
 } from "@/components/cases-advanced-filters";
 
 // ===== STAGE-FILTER LABELS =====
@@ -315,9 +318,6 @@ function getCasePriorityGroup(
   return 4;
 }
 
-/** Persisted-filter sanitizer for a plain boolean toggle. */
-const isBooleanValue = (raw: unknown): boolean | undefined =>
-  typeof raw === "boolean" ? raw : undefined;
 
 // Copied VERBATIM from hearings.tsx (which declares it module-locally and does
 // not export it) so the day headings on this page speak the hearings page's own
@@ -691,9 +691,21 @@ export default function CasesPage() {
   // filters. Its own key also means it restores independently: clearing filters
   // does not silently drop the sort, and an old saved "adv" object needs no
   // migration to gain a member.
-  const [sortByNextHearing, setSortByNextHearing] = usePersistedFilter<boolean>(
-    "cases", "sortNextHearing", false, isBooleanValue,
+  // 🔴 ONE ENUM, NOT TWO BOOLEANS. A list has exactly one primary order, so two
+  // independent switches would permit an impossible state ("nearest hearing AND
+  // nearest prescription"). The mutual exclusion is expressed in the TYPE rather
+  // than enforced by handlers that could drift.
+  //
+  // A NEW KEY (cases.sortBy). The old cases.sortNextHearing held a BOOLEAN and is
+  // abandoned deliberately: reading it back as a string would fail `oneOf` and
+  // fall to the default anyway, so a migration would buy nothing but code. Users
+  // lose a saved sort preference exactly once.
+  const [sortBy, setSortBy] = usePersistedFilter<CasesSortValue>(
+    "cases", "sortBy", "none",
+    oneOf(CASES_SORT_VALUES as readonly string[], "none") as (raw: unknown) => CasesSortValue | undefined,
   );
+  const sortByNextHearing = sortBy === "hearing";
+  const sortByPrescription = sortBy === "prescription";
 
   // Refresh cases on page mount to pick up changes from other tabs/users
   useEffect(() => {
@@ -1298,7 +1310,29 @@ export default function CasesPage() {
       const i = CaseStagesOrder.indexOf(c.currentStage as CaseStageValue);
       return i === -1 ? 999 : i;
     };
+    // The prescription sort key, or null for "sorts last". Null covers all three
+    // no-date reasons at once — no-rule, missing-input and STOPPED — which is the
+    // owner's ruling that a filed case drops to the bottom: the sort answers
+    // "what am I about to lose", and a filed case cannot be lost.
+    const prescriptionSortKey = (c: LawCase): string | null => {
+      if (prescriptionClockStopped(c)) return null;
+      const stored = String(c.prescriptionDate || "").trim();
+      return stored || null;
+    };
     return matched.slice().sort((a, b) => {
+      // Same shape as the hearing comparator directly below: nearest first,
+      // no-date last, then fall through to the default ordering for ties. Both
+      // are "YYYY-MM-DD" so `<` IS the calendar comparison — no parsing.
+      if (sortByPrescription) {
+        const pa = prescriptionSortKey(a);
+        const pb = prescriptionSortKey(b);
+        if (pa && pb) {
+          if (pa !== pb) return pa < pb ? -1 : 1;
+        } else if (pa || pb) {
+          return pa ? -1 : 1;
+        }
+        // Both undated → fall through to the default ordering below.
+      }
       // 🔴 WHEN THE SORT IS ON IT IS THE PRIMARY KEY, and the entire default
       // ordering below becomes its TIE-BREAKER. Layering it under the priority
       // group instead would not be "sorted by upcoming hearing" at all — every
@@ -1354,7 +1388,7 @@ export default function CasesPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, nextHearingRanks]);
+  }, [cases, searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks]);
 
   // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
   // must not be again:
@@ -1433,7 +1467,7 @@ export default function CasesPage() {
   // reshuffles the whole list, so the page-4 slice the user was looking at
   // becomes a different set of cases. Someone who turns on "الأقرب أولاً" is
   // asking to see the nearest sessions, which are on page 1.
-  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortByNextHearing]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortBy]);
   // Which empty state to show. HONEST BY CONSTRUCTION: it lists every control
   // that can narrow the table, so "no cases at all" is claimed ONLY when nothing
   // is narrowing it. Matches the my-tasks isFiltering shape (search text OR any
@@ -1755,8 +1789,8 @@ export default function CasesPage() {
               onChange={setAdvFilters}
               departments={departments.map((d) => ({ id: String(d.id), name: d.name }))}
               lawyers={departmentFilteredLawyers.map((l) => ({ id: l.id, name: l.name }))}
-              sortByNextHearing={sortByNextHearing}
-              onSortByNextHearingChange={setSortByNextHearing}
+              sortBy={sortBy}
+              onSortByChange={setSortBy}
             />
           </div>
           {/* 🔴 THE ACTIVE-SORT CHIP — the answer to "the panel is closed and the
@@ -1769,21 +1803,23 @@ export default function CasesPage() {
               nobody reads the bottom of the list as missing data. Its ✕ turns the
               sort off without opening the panel — the panel's مسح does not reach
               it (مسح clears the filter draft, and this is not a filter). */}
-          {sortByNextHearing && (
+          {sortBy !== "none" && (
             <div className="mt-3">
               <Badge
                 variant="secondary"
                 className="gap-2 py-1 pr-3 pl-2 font-normal"
-                data-testid="badge-sort-next-hearing"
+                data-testid="badge-sort-active"
               >
                 <CalendarClock className="h-3.5 w-3.5" />
-                مرتبة حسب الجلسة القادمة — الأقرب أولاً، وما لا جلسة قادمة له في الأسفل
+                {sortByNextHearing
+                  ? "مرتبة حسب الجلسة القادمة — الأقرب أولاً، وما لا جلسة قادمة له في الأسفل"
+                  : "مرتبة حسب تاريخ التقادم — الأقرب أولاً، وما لا يسري عليه تقادم في الأسفل"}
                 <button
                   type="button"
-                  onClick={() => setSortByNextHearing(false)}
+                  onClick={() => setSortBy("none")}
                   className="rounded-sm hover:bg-muted-foreground/20 p-0.5"
-                  aria-label="إلغاء الترتيب حسب الجلسة القادمة"
-                  data-testid="button-clear-sort-next-hearing"
+                  aria-label="إلغاء الترتيب"
+                  data-testid="button-clear-sort"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>

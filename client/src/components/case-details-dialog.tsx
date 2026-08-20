@@ -94,6 +94,8 @@ import {
   ViolationAmountPattern,
   GrievanceResultValues,
   GrievanceResultLabels,
+  computePrescriptionDate,
+  PrescriptionInputLabels,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment, GrievanceResultValue } from "@shared/schema";
 
@@ -1269,10 +1271,54 @@ export function CaseDetailsDialog({
                           <AlertTriangle className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0" />
                           <Label className="text-amber-800 dark:text-amber-300 font-semibold">تاريخ التقادم</Label>
                         </div>
+                        {/* 🔴 FOUR STATES, NOT TWO. «لم يُحدَّد بعد» was the answer to
+                            every empty value, which is wrong for the cases where
+                            there is deliberately NO clock — it reads as "somebody
+                            forgot" when the truth is "this rule does not apply".
+                            The reason comes from the SAME shared helper the server
+                            and the scheduler compute with, so the panel can never
+                            explain a date differently from the one that was
+                            stored. */}
                         <div className="text-2xl font-bold text-amber-900 dark:text-amber-200">
-                          {selectedCase.prescriptionDate
-                            ? <DualDateDisplay date={selectedCase.prescriptionDate} />
-                            : <span className="text-base font-medium text-amber-700 dark:text-amber-400">لم يُحدَّد بعد</span>}
+                          {(() => {
+                            const p = computePrescriptionDate(selectedCase);
+                            const small = "text-base font-medium text-amber-700 dark:text-amber-400";
+                            // STOPPED — the value is frozen at filing (R3). Show it
+                            // WITH the note: the date is the record of what the firm
+                            // was working to, which is what matters if timeliness is
+                            // ever argued.
+                            if (p.reason === "stopped") {
+                              return selectedCase.prescriptionDate ? (
+                                <>
+                                  <DualDateDisplay date={selectedCase.prescriptionDate} />
+                                  <div className={small}>تم الرفع — لا يسري التقادم</div>
+                                </>
+                              ) : (
+                                <span className={small}>تم الرفع — لا يسري التقادم</span>
+                              );
+                            }
+                            if (p.reason === "no-rule") {
+                              const cause =
+                                p.noRuleCause === "accepted" ? "تظلم مقبول"
+                                : p.noRuleCause === "outcome-unknown" ? "النتيجة غير معروفة بعد"
+                                : "لم يُحدَّد المسار";
+                              return <span className={small}>لا يسري التقادم — {cause}</span>;
+                            }
+                            if (p.reason === "missing-input") {
+                              const label = p.missingField
+                                ? (PrescriptionInputLabels[p.missingField] ?? p.missingField)
+                                : "";
+                              return <span className={small}>بانتظار {label}</span>;
+                            }
+                            // ok — prefer the STORED value (what the scheduler warns
+                            // on) and fall back to the freshly computed one, so a
+                            // case whose recompute has not yet run still shows the
+                            // right date rather than nothing.
+                            const shown = selectedCase.prescriptionDate || p.date;
+                            return shown
+                              ? <DualDateDisplay date={shown} />
+                              : <span className={small}>لم يُحدَّد بعد</span>;
+                          })()}
                         </div>
                       </div>
 

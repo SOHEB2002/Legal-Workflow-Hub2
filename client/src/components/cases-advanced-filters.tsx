@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -39,6 +38,13 @@ export type AdvancedCasesFilters = {
   classifications: string[];
   lawyers: string[];
 };
+
+// The cases list's primary ordering. "none" = the default priority-group order.
+// Declared HERE, not in cases.tsx, because cases.tsx imports this file — the
+// reverse would be a circular import. Same home as AdvancedCasesFilters, for the
+// same reason.
+export const CASES_SORT_VALUES = ["none", "hearing", "prescription"] as const;
+export type CasesSortValue = typeof CASES_SORT_VALUES[number];
 
 export const EMPTY_ADV_FILTERS: AdvancedCasesFilters = {
   priorities: [],
@@ -340,8 +346,11 @@ interface Props {
   // Kept out, all three stay exactly as they are. It is also why it applies
   // IMMEDIATELY rather than through the draft/تطبيق cycle below: a sort has
   // nothing to stage — there is no combination to assemble before committing.
-  sortByNextHearing: boolean;
-  onSortByNextHearingChange: (value: boolean) => void;
+  // 🔴 ONE ENUM, NOT TWO BOOLEANS — a list has exactly one primary order, so two
+  // switches would permit "nearest hearing AND nearest prescription", a state
+  // with no meaning. The exclusion lives in the type, not in a handler.
+  sortBy: CasesSortValue;
+  onSortByChange: (value: CasesSortValue) => void;
 }
 
 export function CasesAdvancedFilters({
@@ -349,8 +358,8 @@ export function CasesAdvancedFilters({
   onChange,
   departments,
   lawyers,
-  sortByNextHearing,
-  onSortByNextHearingChange,
+  sortBy,
+  onSortByChange,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<AdvancedCasesFilters>(filters);
@@ -514,7 +523,7 @@ export function CasesAdvancedFilters({
               number would misreport the list. A control the user can reach only
               by opening the panel must still be visible from outside it, or an
               active sort becomes invisible state. */}
-          {sortByNextHearing && (
+          {sortBy !== "none" && (
             <CalendarClock className="h-4 w-4 text-primary" data-testid="icon-adv-sort-active" />
           )}
         </Button>
@@ -542,21 +551,40 @@ export function CasesAdvancedFilters({
                   filter draft and does not govern this;
                 • مسح does NOT clear it (مسح resets the filter draft, and this is
                   not in that draft) — so it is turned off by this same switch,
-                  or by the ✕ on the "مرتبة حسب الجلسة القادمة" chip that the
-                  cases page shows under the filter row while it is on;
+                  or by the ✕ on the "مرتبة حسب…" chip that the cases page shows
+                  under the filter row while it is on;
                 • it changes ORDER, not MEMBERSHIP — no row appears or vanishes.
               See the Props comment for why it is not a member of the filters
-              object. */}
-          <div className="flex items-center justify-between rounded-md border px-3 py-2">
-            <Label htmlFor="adv-sort-next-hearing" className="text-sm cursor-pointer">
-              الترتيب حسب الجلسة القادمة (الأقرب أولاً)
-            </Label>
-            <Switch
-              id="adv-sort-next-hearing"
-              checked={sortByNextHearing}
-              onCheckedChange={onSortByNextHearingChange}
-              data-testid="switch-adv-sort-next-hearing"
-            />
+              object.
+
+              A RADIO GROUP, not two switches: the options are mutually exclusive,
+              and a radio says so on sight. «بدون ترتيب» is a real option rather
+              than an absence, so turning the sort OFF is one click in the same
+              control that turned it on. */}
+          <div className="rounded-md border px-3 py-2 space-y-2">
+            <Label className="text-sm">الترتيب</Label>
+            <div className="flex flex-col gap-1">
+              {([
+                { value: "none", label: "بدون ترتيب (الافتراضي)" },
+                { value: "hearing", label: "حسب الجلسة القادمة (الأقرب أولاً)" },
+                { value: "prescription", label: "حسب تاريخ التقادم (الأقرب أولاً)" },
+              ] as const).map((opt) => (
+                <label
+                  key={opt.value}
+                  className="flex items-center gap-2 text-sm cursor-pointer"
+                  data-testid={`radio-adv-sort-${opt.value}`}
+                >
+                  <input
+                    type="radio"
+                    name="cases-sort-by"
+                    className="accent-primary"
+                    checked={sortBy === opt.value}
+                    onChange={() => onSortByChange(opt.value)}
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
