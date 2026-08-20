@@ -98,6 +98,8 @@ import {
   PrescriptionInputLabels,
   prescriptionFilingDate,
   prescriptionArrivedTimeBarred,
+  grievanceWasFiled,
+  firmDayOf,
 } from "@shared/schema";
 import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJudgment, GrievanceResultValue } from "@shared/schema";
 
@@ -1121,13 +1123,45 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.grievanceRequired && (
+                  {/* ==================== بيانات التظلم ====================
+                      🔴 NOW RENDERS FOR EVERY ADMIN CASE, not only when
+                      grievanceRequired is true. It used to be gated on that flag,
+                      so «مطلوب تظلم» could only ever read «نعم» — the block was
+                      invisible in exactly the case where "no, it is not required"
+                      is the fact worth stating. Both rows below are DERIVED and
+                      both answer honestly in every state.
+                      The «تفاصيل القضية الإدارية» block that stood after this one
+                      is GONE (owner ruling) — see the note where it was. */}
+                  {getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">بيانات التظلم</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
                         <div>
-                          <Label className="text-muted-foreground">مطلوب تظلم</Label>
-                          <p className="font-medium">نعم</p>
+                          <Label className="text-muted-foreground">مطلوب تظلم؟</Label>
+                          <p className="font-medium" data-testid="grievance-required-row">
+                            {selectedCase.grievanceRequired ? "نعم" : "لا"}
+                          </p>
+                        </div>
+                        {/* 🔴 THE TWO TRACKS ANSWER THIS DIFFERENTLY ON PURPOSE, and
+                            the asymmetry is the owner's ruling — do NOT "fix" it
+                            into symmetry:
+                              • مسار التظلم — the grievance IS the case, and it has
+                                not been lodged while the case is still in
+                                progress, so this always reads «لا».
+                              • مسار الدعوى — «نعم» whenever the violation panel
+                                carries the grievance details, REGARDLESS of
+                                whether the grievance was mandatory («حتى لو التظلم
+                                غير وجوبي»). Hence grievanceWasFiled is consulted
+                                without reference to grievanceRequired.
+                            Same shared derivation the prescription rule uses, so
+                            this row and the clock can never disagree. */}
+                        <div>
+                          <Label className="text-muted-foreground">هل تم تقديم التظلم؟</Label>
+                          <p className="font-medium" data-testid="grievance-filed-row">
+                            {selectedCase.adminCaseSubType === "قضية" && grievanceWasFiled(selectedCase)
+                              ? "نعم"
+                              : "لا"}
+                          </p>
                         </div>
                         {selectedCase.grievanceDate && (
                           <div>
@@ -1145,63 +1179,25 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {/* 🔴 GATED ON THE RESOLVED DEPARTMENT, NEVER ON caseType — the
-                      documented L5 precedent (hearings.tsx, the labor settlement
-                      panels, case-progress-bar). caseType is free-text user input
-                      and "إداري" is a value in BOTH CaseType and the departments
-                      table, so the two readings silently disagree: the create and
-                      edit forms that CAPTURE these fields gate on
-                      getDepartmentName(departmentId) === "إداري" (cases.tsx), while
-                      this panel gated on the type — so an إداري-DEPARTMENT case
-                      typed anything else collected نوع القضية الإدارية + تاريخ
-                      التقادم as mandatory fields and then never displayed either.
-                      Now keyed exactly like the تجاري and عمالي workflow panels
-                      immediately below, so capture and display cannot drift. */}
-                  {/* 🔴 THIS PANEL RENDERS FOR NO CASE IN THE SYSTEM TODAY. IT LOOKS
-                      LIKE WORKING CODE AND IS DEAD IN PRACTICE.
-                      Read the gate below: it requires a TRUTHY adminCaseSubType, and
-                      that column is NULL on every case — ef4d221 removed نوع القضية
-                      الإدارية from the create dialog (owner ruling: the تظلم/دعوى
-                      choice is made at استلام, by two buttons, not at creation), so
-                      nothing has SET it at intake since.
-
-                      ⚠ BUT IT IS NOT UNWRITABLE — do not read the paragraph above as
-                      "unreachable by construction". The EDIT dialog's نوع القضية
-                      الإدارية select is a live writer (cases.tsx, the إداري block,
-                      which as of da70666 renders on EVERY admin case rather than only
-                      under-study ones). Set the type through edit on a case that is
-                      still UNDER_STUDY and this panel comes back. Nobody does, which
-                      is why it is dead rather than merely rare — and the استلام flow
-                      populating the column at intake is what would revive it for real.
-
-                      DELIBERATELY LEFT IN PLACE, not deleted:
-                        • تاريخ التقادم appears here AND in لوحة تفاصيل المخالفة below.
-                          That duplication is UNREACHABLE while this gate is false, so
-                          removing the row would be a no-op today that silently deletes
-                          a display if this panel is ever revived. If you fix this gate,
-                          drop the تاريخ التقادم row here at the same time — the
-                          violation panel is now its prominent home (7254d54).
-                        • Its caseClassification === UNDER_STUDY term is ALSO wrong, for
-                          the same reason it was dropped from the violation panel and
-                          the edit dialog: نوع القضية الإدارية is a routing fact that
-                          survives a case going in-court. Left as-is pending a ruling,
-                          because fixing that term alone still would not make the panel
-                          render — the adminCaseSubType term is what kills it. */}
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "إداري" && selectedCase.adminCaseSubType && (
-                    <div className="border-t pt-4">
-                      <h4 className="font-semibold mb-3">تفاصيل القضية الإدارية</h4>
-                      <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
-                        <div>
-                          <Label className="text-muted-foreground">نوع القضية</Label>
-                          <p className="font-medium">{selectedCase.adminCaseSubType === "تظلم" ? "تظلم" : "قضية"}</p>
-                        </div>
-                        <div>
-                          <Label className="text-muted-foreground">تاريخ التقادم</Label>
-                          <p className="font-medium">{selectedCase.prescriptionDate ? <DualDateDisplay date={selectedCase.prescriptionDate} compact /> : "-"}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* ==================== «تفاصيل القضية الإدارية» — REMOVED ====================
+                      🔴 DELETED (owner ruling, batch 3c). The block rendered exactly
+                      TWO fields and both survive elsewhere in this same dialog, so
+                      nothing was lost from the UI:
+                        • نوع القضية — the TRACK. It repeats a choice the case
+                          already announces: the progress bar above renders that
+                          track's own path (6 stages for تظلم, 9 for دعوى), and the
+                          «مطلوب تظلم؟» / «هل تم تقديم التظلم؟» rows in بيانات التظلم
+                          are derived from it. It also remains named and editable in
+                          the edit dialog's «نوع القضية الإدارية» select.
+                        • تاريخ التقادم — shown by the prominent amber block in
+                          لوحة تفاصيل المخالفة, in BOTH calendars and with the four
+                          computed states this block's bare `compact` could not
+                          express (it was also the only remaining `compact` on a
+                          deadline in this panel).
+                      ⚠ Its gate had become live: it required a truthy
+                      adminCaseSubType, which nothing set until the batch-2 track
+                      buttons shipped. It was dead code for months and then quietly
+                      started rendering — which is why the owner saw it now. */}
 
                   {/* ==================== لوحة تفاصيل المخالفة ====================
                       A SIBLING of the «تفاصيل القضية الإدارية» panel above, not an
@@ -1331,9 +1327,17 @@ export function CaseDetailsDialog({
                             // silent, so the label and the silence agree by
                             // construction rather than by two matching conditions.
                             if (prescriptionArrivedTimeBarred(selectedCase)) {
+                              // Names BOTH dates, so the reader can see at a glance
+                              // that the deadline predates the file rather than
+                              // having to compare two numbers elsewhere. The entry
+                              // day is the SAME firmDayOf(created_at) the predicate
+                              // itself compares against — not a second derivation.
+                              const enteredDay = firmDayOf(selectedCase.createdAt);
                               return (
                                 <div className="flex flex-wrap items-center gap-1">
-                                  <span>متقادمة منذ</span>
+                                  <span>دخلت القضية بتاريخ</span>
+                                  {enteredDay ? <DualDateDisplay date={enteredDay} /> : <span>—</span>}
+                                  <span>وهي متقادمة منذ</span>
                                   <DualDateDisplay date={String(selectedCase.prescriptionDate)} />
                                 </div>
                               );
@@ -1341,7 +1345,11 @@ export function CaseDetailsDialog({
                             if (p.reason === "no-rule") {
                               const cause =
                                 p.noRuleCause === "accepted" ? "تظلم مقبول"
-                                : p.noRuleCause === "outcome-unknown" ? "النتيجة غير معروفة بعد"
+                                // The grievance IS filed and its answer is
+                                // outstanding — the one genuinely silent state.
+                                // A grievance NOT yet filed no longer lands here:
+                                // it runs its own 60-day clock (batch 3c item 1).
+                                : p.noRuleCause === "awaiting-result" ? "بانتظار نتيجة التظلم"
                                 : "لم يُحدَّد المسار";
                               return <span className={small}>لا يسري التقادم — {cause}</span>;
                             }
