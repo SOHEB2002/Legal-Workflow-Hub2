@@ -5595,6 +5595,25 @@ export async function registerRoutes(
         // Set closedAt when transitioning to مقفلة
         if (req.body.currentStage === "مقفلة") {
           req.body.closedAt = new Date().toISOString();
+          // 🔴 AND status — THE FIX FOR THE CLOSED-CASE DRIFT. This handler set
+          // closedAt and stopped, so every closure that came through it left
+          // `status` holding whatever the case had — استلام / دراسة /
+          // جاهز_للرفع / تعديلات. Measured in production: 63 of 88 closed cases.
+          //
+          // THIS IS THE WRITER EVERY MANUAL CLOSURE USES — the early-close dialog
+          // and the plain stage advance both land here — which is why the two
+          // earlier fixes missed it: b41553a patched the judgment closes and
+          // bfdd621 patched closeCaseForNoResponse, each in its own path, while
+          // the shared one kept producing drifted rows.
+          //
+          // `status` is a LEGACY parallel tracker and consumers only ever test it
+          // for "مغلق" (see the note in storage.closeCaseForNoResponse), so this
+          // is the one transition where it has to be written.
+          //
+          // ⚠ SCOPE: only on the transition INTO مقفلة. No general
+          // "status follows stage" rule — that is a much larger change, and every
+          // other transition deliberately leaves status alone.
+          req.body.status = CaseStatus.CLOSED;
         }
 
         // Entering تحصيل auto-creates the admin collection-letter field task. The
@@ -8168,6 +8187,13 @@ export async function registerRoutes(
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بقرار اللجنة" });
       }
+      // ⚠ DELIBERATELY NOT STAGE-HARDENED, and tsc proved why: the guard above
+      // already requires currentStage === "إحالة_للجنة_المراجعة", so by this line
+      // the type is narrowed to that literal and `=== "مقفلة"` is provably
+      // unreachable. A drifted case (currentStage مقفلة, live status) is refused
+      // by the stage check, never reaching here — this endpoint was never exposed
+      // to the drift. Same shape as /close-no-response, which the DATA_COMPLETION
+      // guard likewise protects.
       if (lawCase.status === "مغلق" || lawCase.isArchived) {
         return res.status(400).json({ error: "لا يمكن اتخاذ قرار اللجنة في قضية مغلقة أو مؤرشفة" });
       }
@@ -8322,6 +8348,9 @@ export async function registerRoutes(
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
         return res.status(400).json({ error: "القضية في حالة لا تسمح بتجاوز اللجنة" });
       }
+      // ⚠ NOT stage-hardened — same reason as /committee-decision above: the
+      // إحالة_للجنة_المراجعة guard earlier in this handler makes a مقفلة case
+      // unreachable here, and tsc rejects the comparison as having no overlap.
       if (lawCase.status === "مغلق" || lawCase.isArchived) {
         return res.status(400).json({ error: "لا يمكن تجاوز اللجنة في قضية مغلقة أو مؤرشفة" });
       }
@@ -10039,7 +10068,8 @@ export async function registerRoutes(
       if (lawCase.pausedAt) {
         return res.status(400).json({ error: "هذه القضية معلّقة بالفعل" });
       }
-      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+      // STAGE AND STATUS — see the committee-decision guard for why.
+      if (lawCase.status === "مغلق" || lawCase.currentStage === "مقفلة" || lawCase.isArchived) {
         return res.status(400).json({ error: "لا يمكن تعليق قضية مغلقة أو مؤرشفة" });
       }
 
@@ -13082,7 +13112,8 @@ export async function registerRoutes(
       if (lawCase.pausedAt) {
         return res.status(400).json({ error: "القضية معلّقة — أزل التعليق أولاً" });
       }
-      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+      // STAGE AND STATUS — see the committee-decision guard for why.
+      if (lawCase.status === "مغلق" || lawCase.currentStage === "مقفلة" || lawCase.isArchived) {
         return res.status(400).json({ error: "لا يمكن تغيير حالة قضية مغلقة أو مؤرشفة" });
       }
       if (lawCase.awaitingCompletion) {

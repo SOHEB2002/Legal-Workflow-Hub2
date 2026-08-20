@@ -1663,6 +1663,12 @@ async function checkStruckOffExpiry() {
       const stageHistory = Array.isArray((caseItem as any).stageHistory) ? (caseItem as any).stageHistory : [];
       await storage.updateCase(caseItem.id, {
         currentStage: "مقفلة",
+        // 🔴 THE SECOND WRITER THAT OMITTED status. Same defect as the generic
+        // PATCH, same fix — and the idiom is already here in this file:
+        // checkSettlementLinkMissingTimeout writes it. This job is the smaller
+        // instance (it fires only on مشطوبة cases whose reopen deadline lapsed),
+        // but it produced the same unusable rows.
+        status: "مغلق",
         closureReason: "شطب_بدون_إعادة_قيد",
         closedAt: new Date().toISOString(),
         stageHistory: [
