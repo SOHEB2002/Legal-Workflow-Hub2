@@ -243,7 +243,7 @@ import {
   effectiveRolesFor,
 } from "./acting-context";
 import { Client as ObjectStorageClient } from "@replit/object-storage";
-import { resolveNotificationRecipients } from "./notification-recipients";
+import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 
 // Attachments live in Replit Object Storage — the previous
 // ./uploads/contracts/<id>/<file> layout was on the container's
@@ -2568,6 +2568,36 @@ async function cancelActiveCaseMemos(
 // reject and a notification failure can never turn a successful create into a
 // 500. It is also called only AFTER the record exists, so the record is never
 // rolled back on account of a notice about it.
+// 🔴 EVERY ACTIVE HEAD OF A DEPARTMENT, WITH A BRANCH-MANAGER FALLBACK (batch 13).
+//
+// Three notification sites used `allUsers.find(… role === "department_head" …)`,
+// which returns THE FIRST match and silently drops every co-head — the documented
+// single-head defect class. Two of them then fell back to the LITERAL id "1" when
+// no head was found; "1" is the seeded branch-manager account
+// (script/seed-dev-2026-07.sql: "the password hash is COPIED from the manager
+// (id='1')"), so the fallback hardcoded one installation's primary key into
+// application logic and would notify an arbitrary account — or nobody real — on any
+// database where that id means something else.
+//
+// The head fan-out is resolveNotificationRecipients, the established helper: it
+// appends EVERY active head of the department, carries the mandatory
+// !!u.departmentId guard, and filters to real active users (load-bearing — prod has
+// an FK on notifications.recipient_id that dev lacks).
+//
+// THE FALLBACK IS RESOLVED, NEVER LITERAL: when a department has no active head the
+// notice goes to every active branch_manager (the role has no uniqueness in this
+// codebase, so `.find` would have been wrong here too). With neither, it returns
+// EMPTY and the caller logs — sending nobody a notice is strictly better than
+// sending it to a guessed account.
+function departmentHeadsOrBranchManagers(
+  users: NotificationRecipientUser[],
+  departmentId: string | null | undefined,
+): string[] {
+  const heads = resolveNotificationRecipients([], users, { departmentId });
+  if (heads.length > 0) return heads;
+  return users.filter((u) => u.isActive && u.role === "branch_manager").map((u) => u.id);
+}
+
 async function notifyDepartmentHeadOfNewRecord(input: {
   entityType: "case" | "consultation" | "contract";
   entityId: string;
@@ -4524,9 +4554,14 @@ export async function registerRoutes(
       const updated = await storage.updateCase(caseItem.id, updateData);
       
       if (status === "لم_يتم_صلح") {
+        // 🔴 BATCH 13 — was `.find(…)` (first head only) with a hardcoded `["1"]`
+        // fallback. Now EVERY active head of the case's department, falling back to
+        // the branch manager(s) by role rather than by literal id.
         const deptUsers = await storage.getAllUsers();
-        const deptHead = deptUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
-        const recipients = deptHead ? [deptHead.id] : ["1"];
+        const recipients = departmentHeadsOrBranchManagers(deptUsers, caseItem.departmentId);
+        if (recipients.length === 0) {
+          console.error("[cases/taradi] no active department head or branch manager to notify for case", caseItem.id);
+        }
         for (const recipientId of recipients) {
           await storage.createNotification({
             type: "stage_changed",
@@ -4592,9 +4627,14 @@ export async function registerRoutes(
       const updated = await storage.updateCase(caseItem.id, updateData);
       
       if (status === "انتهت_التسوية") {
+        // 🔴 BATCH 13 — was `.find(…)` (first head only) with a hardcoded `["1"]`
+        // fallback. Now EVERY active head of the case's department, falling back to
+        // the branch manager(s) by role rather than by literal id.
         const deptUsers = await storage.getAllUsers();
-        const deptHead = deptUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
-        const recipients = deptHead ? [deptHead.id] : ["1"];
+        const recipients = departmentHeadsOrBranchManagers(deptUsers, caseItem.departmentId);
+        if (recipients.length === 0) {
+          console.error("[cases/taradi] no active department head or branch manager to notify for case", caseItem.id);
+        }
         for (const recipientId of recipients) {
           await storage.createNotification({
             type: "stage_changed",
@@ -6057,14 +6097,23 @@ export async function registerRoutes(
       // Notify the new department head when a transfer lands
       if (isDeptTransfer && updated) {
         try {
+          // 🔴 BATCH 13 — THE RECIPIENT SET IS THE **NEW** DEPARTMENT'S HEADS, and
+          // that is not the same question the other eight sites ask. The message
+          // says «تم تحويل القضية … إلى قسمك — يرجى إسناد محامٍ مسؤول لها», so it is
+          // addressed to whoever must now staff the case: the RECEIVING department,
+          // req.body.departmentId — never the sender's. That target is preserved
+          // exactly; only the arity changes.
+          //
+          // BOTH halves were single-`.find`: the head lookup dropped co-heads, and
+          // the branch_manager fallback dropped co-managers (the role has no
+          // uniqueness here either). departmentHeadsOrBranchManagers keeps the
+          // head-else-manager precedence and returns ALL of whichever tier applies.
           const allUsers = await storage.getAllUsers();
-          const newDeptHead = allUsers.find((u: any) =>
-            u.role === "department_head" && u.departmentId === req.body.departmentId && u.isActive
-          );
-          const notifyRecipient = newDeptHead || allUsers.find((u: any) =>
-            u.role === "branch_manager" && u.isActive
-          );
-          if (notifyRecipient) {
+          const transferRecipients = departmentHeadsOrBranchManagers(allUsers, req.body.departmentId);
+          if (transferRecipients.length === 0) {
+            console.error("[PATCH cases] transfer notice: no active head or branch manager for department", req.body.departmentId);
+          }
+          for (const notifyRecipient of transferRecipients) {
             await storage.createNotification({
               type: "case_assigned",
               priority: "high",
@@ -6073,7 +6122,8 @@ export async function registerRoutes(
               message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك. يرجى إسناد محامٍ مسؤول لها.`,
               senderId: user.id,
               senderName: user.name || user.id,
-              recipientId: notifyRecipient.id,
+              // Plain id now — departmentHeadsOrBranchManagers returns ids, not rows.
+              recipientId: notifyRecipient,
               requiresResponse: false,
               relatedType: "case",
               relatedId: String(req.params.id),
@@ -16278,8 +16328,10 @@ export async function registerRoutes(
           const allUsers = await storage.getAllUsers();
           const notifyIds: string[] = [];
           if (existingCase.primaryLawyerId) notifyIds.push(existingCase.primaryLawyerId);
-          const deptHead = allUsers.find((u: any) => u.departmentId === existingCase!.departmentId && u.role === "department_head" && u.isActive);
-          if (deptHead) notifyIds.push(deptHead.id);
+          // 🔴 BATCH 13 — was `.find(…)`, first head only. Every active head of the
+          // case's department now. The Set below already de-duplicates, so a head who
+          // is also the primary lawyer is still notified exactly once.
+          notifyIds.push(...resolveNotificationRecipients([], allUsers, { departmentId: existingCase!.departmentId }));
 
           for (const rid of Array.from(new Set(notifyIds))) {
             await storage.createNotification({
@@ -19754,8 +19806,17 @@ export async function registerRoutes(
         fromUserId: user.id,
       });
       const allUsers = await storage.getAllUsers();
-      const deptHead = allUsers.find(u => u.departmentId === user.departmentId && u.role === "department_head");
-      if (deptHead) {
+      // 🔴 BATCH 13 — was `.find(…)`, first head only, and it did not even check
+      // isActive: a DEACTIVATED head could be picked ahead of the serving one and
+      // the request would reach nobody. resolveNotificationRecipients filters to
+      // active users and returns EVERY head of the requester's department — which
+      // matters most here, since an unseen delegation request simply never gets
+      // approved.
+      const delegationApprovers = resolveNotificationRecipients([], allUsers, { departmentId: user.departmentId });
+      if (delegationApprovers.length === 0) {
+        console.error("[delegations] no active department head to notify for department", user.departmentId);
+      }
+      for (const approverId of delegationApprovers) {
         await storage.createNotification({
           type: "delegation_requested",
           title: "طلب تفويض جديد",
@@ -19764,7 +19825,7 @@ export async function registerRoutes(
           status: "pending",
           senderId: user.id,
           senderName: user.name,
-          recipientId: deptHead.id,
+          recipientId: approverId,
           relatedType: "task",
           relatedId: delegation.id,
           requiresResponse: true,

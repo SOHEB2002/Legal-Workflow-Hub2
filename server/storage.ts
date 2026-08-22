@@ -5610,21 +5610,54 @@ export class DatabaseStorage implements IStorage {
     //     For a plain user the where-clause is still `internalReviewerId = uid`
     //     — byte-identical behaviour.
     //
-    //     ⚠ branch_manager ONLY — NOT department_head, deliberately. All FOUR
-    //     internal-review decisions are locked to (designated reviewer |
-    //     branch_manager): memos and contracts 403 with
-    //     "فقط المراجع الداخلي المعين أو مدير الفرع…", consultations likewise,
-    //     and the case equivalent is a stage transition whose allowedRoles are
-    //     ["internal_reviewer", "branch_manager"]. department_head is authorized
-    //     on NONE of them. Since the مهامي team section renders the SAME action
-    //     button as the personal list, giving a dept_head visibility here would
-    //     hand them a button that always 403s — breaking visibility ===
-    //     authorization. So supervisory visibility stops at branch_manager,
-    //     who can actually act.
+    //     ⚠ SUPERVISORY SCOPE IS PER-ENTITY, AND IT IS NOT THE SAME FOR ALL FOUR.
+    //     🔴 REWRITTEN IN BATCH 13. This note used to say "branch_manager ONLY —
+    //     NOT department_head, deliberately… department_head is authorized on NONE
+    //     of them", quoting a 403 string ("…أو مدير الفرع") that no longer exists.
+    //     That was true when written and has since been overtaken: three of the
+    //     four decisions were widened to admit an own-department head, and the feed
+    //     did not follow — so a head who COULD act could not SEE, which is the same
+    //     invariant broken from the other side. Musab, a second head, saw his
+    //     colleague's cases/memos/hearings but no استشارات group at all.
+    //
+    //     VERIFIED AGAINST THE LIVE GATES (batch 13, all four read in full):
+    //       • consultations /internal-review — WIDENED. isOwnDeptHeadReviewer on
+    //         consultation.departmentId; four-eyes enforced one guard earlier.
+    //       • memos /internal-review — WIDENED. isOwnDeptHeadReviewer resolved
+    //         through the PARENT CASE's departmentId, with !isAssignedLawyer inline.
+    //       • contracts /internal-review — WIDENED. isOwnDeptHeadReviewer on
+    //         contract.departmentId, with !isAssignedLawyer inline.
+    //         All three now 403 with "…المراجع الداخلي المعيَّن أو رئيس القسم أو مدير الفرع".
+    //       • cases — NOT widened, and deliberately left out. A case review is a
+    //         STAGE TRANSITION, and every outbound edge from مراجعة_داخلية /
+    //         مراجعة_داخلية_للتظلم is allowedRoles ["internal_reviewer",
+    //         "branch_manager"] (routes.ts — eight edges, all identical). A head has
+    //         no authority there, so the case block below keeps the two-arm shape:
+    //         giving him visibility would hand him a button that always 403s.
+    //
+    //     So: THREE blocks get a deptHeadScoped middle arm, CASES does not. Each
+    //     dept-head arm also carries notOwnWork(...) — see that helper for why
+    //     four-eyes has to be in the SQL for visibility === authorization to hold.
+    //     🔴 IF THE CASE EDGES ARE EVER WIDENED, ADD THE FOURTH ARM HERE TOO — and
+    //     if any of the three is ever narrowed back, remove its arm. This comment
+    //     is the reason the shape differs per entity; keep it in step with the gates.
     {
       // "a reviewer is actually designated" — the supervisory variants match on
       // this instead of a specific uid.
       const hasReviewer = (col: AnyPgColumn) => sql`${col} IS NOT NULL AND ${col} <> ''`;
+
+      // 🔴 FOUR-EYES, IN SQL. All three widened endpoints exclude a head who is the
+      // entity's OWN assignee — memos and contracts fold `!isAssignedLawyer(...)`
+      // into isOwnDeptHeadReviewer, consultations enforce it one guard earlier — so
+      // without this term the dept-head arm would surface a row whose button 403s
+      // for that head, which is the exact failure the block comment above exists to
+      // prevent. Nothing is lost: a head who is the assignee already sees the record
+      // through his own work task.
+      //
+      // ⚠ NULL-SAFE ON PURPOSE. assignedTo is nullable on all three tables and
+      // `col <> uid` is NULL (not TRUE) on a NULL, so a bare ne() would silently drop
+      // every UNASSIGNED record from the head's view.
+      const notOwnWork = (col: AnyPgColumn) => sql`(${col} IS NULL OR ${col} <> ${uid})`;
 
       const caseReviewWhere = firmWideScoped
         ? and(hasReviewer(lawCases.internalReviewerId), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
@@ -5651,8 +5684,13 @@ export class DatabaseStorage implements IStorage {
         // extra query each on a method polled every 30s. Deferred by owner ruling.
         isOverdue: isAgedOverdue(stageEnteredAtIso(r.stageHistory, r.stage), nowMs), actionHint: "review" });
 
+      // CONTRACTS carry departmentId on the row (NOT NULL), so the dept-head arm
+      // is one term and needs no join.
       const contractReviewWhere = firmWideScoped
         ? and(hasReviewer(contracts.internalReviewerId), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"))
+        : deptHeadScoped
+        ? and(hasReviewer(contracts.internalReviewerId), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"),
+            eq(contracts.departmentId, userDept!), notOwnWork(contracts.assignedTo))
         : and(eq(contracts.internalReviewerId, uid), eq(contracts.currentStage, "مراجعة_داخلية"), eq(contracts.status, "active"));
       const contractRows = await db.select({ id: contracts.id, title: contracts.title,
           reviewerId: contracts.internalReviewerId })
@@ -5663,8 +5701,16 @@ export class DatabaseStorage implements IStorage {
 
       // Memos carry no departmentId — the dept-head scope joins the parent case,
       // the same way block 6 and the committee block below do.
+      // 🔴 THE JOIN BELOW WAS ADDED FOR EXACTLY THIS ARM AND NOTHING USED IT until
+      // now: lawCases is innerJoin'd on every variant, so scoping on
+      // lawCases.departmentId costs no extra query. The server resolves the memo's
+      // department through the parent case identically (routes.ts, memo
+      // /internal-review — memoReviewParentCase).
       const memoReviewWhere = firmWideScoped
         ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused)
+        : deptHeadScoped
+        ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused,
+            eq(lawCases.departmentId, userDept!), notOwnWork(memos.assignedTo))
         : and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused);
       const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId,
           reviewerId: memos.internalReviewerId })
@@ -5675,8 +5721,18 @@ export class DatabaseStorage implements IStorage {
 
       // Consultations now carry a designated reviewer at internal review too
       // (mirrors cases) — surface to that reviewer.
+      // 🔴 THE REPORTED DEFECT. This block emitted the ONLY task a consultation at
+      // مراجعة_داخلية produces (CONSULTATION_WORK_STAGES deliberately excludes that
+      // stage — the work there is the reviewer's, not the assignee's), and it had no
+      // dept-head arm. So a second department head saw his colleague's cases, memos
+      // and hearings but NO استشارات group at all: every other consultation emitter
+      // either needs a different stage or a different role. departmentId is NOT NULL
+      // on the row (shared/schema.ts) — one term, no join.
       const consultReviewWhere = firmWideScoped
         ? and(hasReviewer(consultations.internalReviewerId), eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية"))
+        : deptHeadScoped
+        ? and(hasReviewer(consultations.internalReviewerId), eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية"),
+            eq(consultations.departmentId, userDept!), notOwnWork(consultations.assignedTo))
         : and(eq(consultations.internalReviewerId, uid), eq(consultations.status, "active"), eq(consultations.currentStage, "مراجعة_داخلية"));
       const consultReviewRows = await db.select({ id: consultations.id, type: consultations.consultationType,
           consultationNumber: consultations.consultationNumber, reviewerId: consultations.internalReviewerId })
