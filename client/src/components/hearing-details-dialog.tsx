@@ -38,6 +38,7 @@ import {
   ObjectionStatusLabels,
   isFirmToday,
   isHearingCheckInLate,
+  caseAttendanceLawyerId,
 } from "@shared/schema";
 import type { Hearing, ObjectionStatusValue, HearingStatusValue, HearingTypeValue } from "@shared/schema";
 import {
@@ -97,12 +98,19 @@ export function HearingDetailsDialog({
   const { getCaseById } = useCases();
   const { user, users, actingIdentities } = useAuth();
   const { getMemosByCase } = useMemos();
-  // Same resolution the hearings page uses for its filters: the explicitly
-  // assigned attending lawyer, else the parent case's primary/responsible.
+  // The explicitly assigned attending lawyer, else the parent case's attendance
+  // chain — IDENTICAL to the hearings page, which is the point.
+  //
+  // 🔴 THIS CHAIN OMITTED litigatorId until batch 9, so for a hearing with a null
+  // attendingLawyerId on a case that designates a المترافع this dialog named the
+  // RESPONSIBLE lawyer while the list named the المترافع — two surfaces, one
+  // hearing, two different people, with nothing on screen to explain it. Both now
+  // call caseAttendanceLawyerId (shared/schema), the same function the server's
+  // creation default and reassignment cascade use, so a fifth divergent copy is
+  // the only way this can come back.
   const getLawyerForHearing = (h: Hearing) =>
     h.attendingLawyerId
-    || (h.caseId ? (getCaseById(h.caseId)?.primaryLawyerId || getCaseById(h.caseId)?.responsibleLawyerId) : null)
-    || null;
+    || caseAttendanceLawyerId(h.caseId ? getCaseById(h.caseId) : null);
   const detailHearing = hearingId ? hearings.find((h) => h.id === hearingId) || null : null;
   // Case-scoped field tasks for the open hearing's case (case-access gated), so
   // the hearing detail shows every linked task on the case.

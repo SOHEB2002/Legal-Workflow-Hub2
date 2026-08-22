@@ -81,7 +81,7 @@ import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate } from "@shared/schema";
+import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate, caseAttendanceLawyerId } from "@shared/schema";
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -267,7 +267,7 @@ export default function HearingsPage() {
       // "المترافع" first when the case designates one — mirrors the server
       // default in POST /api/hearings so the pre-filled value matches what the
       // server would have chosen anyway.
-      attendingLawyerId: c?.litigatorId || c?.primaryLawyerId || c?.responsibleLawyerId || prev.attendingLawyerId,
+      attendingLawyerId: caseAttendanceLawyerId(c) || prev.attendingLawyerId,
       courtName: c?.courtName || prev.courtName,
     }));
     setIsAddDialogOpen(true);
@@ -599,14 +599,21 @@ export default function HearingsPage() {
     (h) => h.status === HearingStatus.COMPLETED || h.status === HearingStatus.POSTPONED
   );
 
+  // 🔴 THE ONE RESOLUTION FOR "WHO IS ON THIS HEARING", used by the FILTERS **and**
+  // by the table column. The column used to read hearing.attendingLawyerId raw with
+  // no fallback (rendering "—" for every row with a null column) while the filters
+  // called this — so a row could be matched by the "المترافع" filter and then show
+  // a dash, or be filtered to one lawyer and displayed as another. Same expression
+  // on both sides now; they cannot disagree.
+  //
+  // The fallback chain is caseAttendanceLawyerId from shared/schema — the SAME
+  // function the server's creation default and reassignment cascade call, so an old
+  // hearing on a case that has since designated a المترافع resolves to them rather
+  // than to the responsible lawyer. DISPLAY only; it reassigns nothing and writes
+  // nothing.
   const getLawyerForHearing = (hearing: Hearing) => {
     if (hearing.attendingLawyerId) return hearing.attendingLawyerId;
-    // Fallback for legacy rows with no attending lawyer stored. Same chain the
-    // server uses at creation, so an old hearing on a case that has since
-    // designated a المترافع resolves to them rather than to the responsible
-    // lawyer — this is DISPLAY only and reassigns nothing.
-    const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
-    return caseData?.litigatorId || caseData?.primaryLawyerId || caseData?.responsibleLawyerId || null;
+    return caseAttendanceLawyerId(hearing.caseId ? getCaseById(hearing.caseId) : null);
   };
 
   const getDepartmentForHearing = (hearing: Hearing) => {
@@ -805,7 +812,7 @@ export default function HearingsPage() {
                                   const selected = cases.find(x => x.id === val);
                                   if (!selected) return;
                                   // "المترافع" first — same chain as the server.
-                                  const autoLawyer = selected.litigatorId || selected.primaryLawyerId || selected.responsibleLawyerId || "";
+                                  const autoLawyer = caseAttendanceLawyerId(selected) || "";
                                   // Auto-derive the hearing type. A DEFAULT ONLY — the
                                   // "نوع الجلسة" select below stays fully editable, so a
                                   // user can still record a settlement hearing on a
@@ -1247,8 +1254,15 @@ export default function HearingsPage() {
                       const nextDate = pagedHearings[idx + 1]?.hearingDate;
                       const isDayBoundary = !!nextDate && nextDate !== hearing.hearingDate;
                       // Look up the attending lawyer's display name.
-                      const attendingLawyerName = hearing.attendingLawyerId
-                        ? users.find((u: any) => u.id === hearing.attendingLawyerId)?.name || "—"
+                      // 🔴 THROUGH getLawyerForHearing, the same resolution the
+                      // filters use — not hearing.attendingLawyerId raw. The raw
+                      // read showed "—" on every row whose column is null (132 in
+                      // production) even when the parent case names a المترافع or a
+                      // responsible lawyer, and it let the column contradict the
+                      // filter that had just selected the row.
+                      const attendingLawyerId = getLawyerForHearing(hearing);
+                      const attendingLawyerName = attendingLawyerId
+                        ? users.find((u: any) => u.id === attendingLawyerId)?.name || "—"
                         : "—";
                       return (
                         <tr

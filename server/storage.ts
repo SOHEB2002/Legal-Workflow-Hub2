@@ -11,6 +11,7 @@ import {
   type AdminSupportTaskAssignment,
   type SidebarCounts, type SidebarSectionValue, type MyTaskItem, MyTaskKind, FieldTaskType, FieldTaskStatus, taskSpecialtyClass,
   PausedTaskMinDays, AgeOverdueDays, caseNotificationRecipientId,
+  DeliberateHearingAssignmentAction,
   AssignableAdminSupportTaskKind, resolveAdminSupportAssignee,
   type ConsultationStudy, type ConsultationDraft, type ConsultationReview,
   type ConsultationCommitteeDecision, type ConsultationNoteOutcome,
@@ -661,6 +662,8 @@ export interface IStorage {
   // implementations for why each condition is in SQL.
   getJudgmentsAwaitingObjectionMemo(today: string, notBefore: string): Promise<CaseJudgment[]>;
   getJudgmentIdsWithObjectionMemoActivity(judgmentIds: string[]): Promise<Set<string>>;
+  // Batch 9 — which of THESE hearings carry a deliberate per-hearing assignment.
+  getHearingIdsWithDeliberateAssignment(hearingIds: string[]): Promise<Set<string>>;
 
   // ---- سجل الأحكام — THE WRITE PRIMITIVES (batch 2) ----
   // 🔴 CALL THESE ONLY THROUGH server/judgment-record.ts. Both write the judgment
@@ -8925,6 +8928,35 @@ export class DatabaseStorage implements IStorage {
         eq(caseActivityLog.actionType, "objection_memo_raised"),
         eq(caseActivityLog.relatedEntityType, "judgment"),
         inArray(caseActivityLog.relatedEntityId, judgmentIds),
+      ));
+    return new Set(rows.map((r) => String(r.relatedEntityId)));
+  }
+
+  // ==================== BATCH 9 — THE DELIBERATE-ASSIGNMENT MARKERS ====================
+  // Which of THESE hearings a person deliberately assigned a lawyer to. ONE query
+  // for a whole case's upcoming set, never one per hearing — the same shape and the
+  // same reasoning as getJudgmentIdsWithObjectionMemoActivity directly above,
+  // including the empty-input short-circuit (`inArray(col, [])` compiles to a
+  // false-y fragment in some drizzle versions and is a pointless round-trip in all
+  // of them).
+  //
+  // 🔴 THIS IS WHAT THE REASSIGNMENT CASCADE ASKS BEFORE IT OVERWRITES. A marked
+  // hearing is a deliberate exception and keeps its lawyer through every later
+  // change to the case's المترافع; an unmarked one is carrying a default and is
+  // re-pointed. Reading hearings.attending_lawyer_id instead could not answer this
+  // — both paths write that one column, which is the entire problem.
+  //
+  // A hearing may carry SEVERAL markers (reassigned more than once); the Set makes
+  // that irrelevant — presence is the whole signal, and the newest assignment is
+  // already in the column itself.
+  async getHearingIdsWithDeliberateAssignment(hearingIds: string[]): Promise<Set<string>> {
+    if (hearingIds.length === 0) return new Set();
+    const rows = await db.select({ relatedEntityId: caseActivityLog.relatedEntityId })
+      .from(caseActivityLog)
+      .where(and(
+        eq(caseActivityLog.actionType, DeliberateHearingAssignmentAction),
+        eq(caseActivityLog.relatedEntityType, "hearing"),
+        inArray(caseActivityLog.relatedEntityId, hearingIds),
       ));
     return new Set(rows.map((r) => String(r.relatedEntityId)));
   }
