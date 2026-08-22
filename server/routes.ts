@@ -87,6 +87,8 @@ import {
   type NotificationTypeValue,
   type NotificationPriorityValue,
   caseNotificationRecipientId,
+  caseAttendanceLawyerId,
+  DeliberateHearingAssignmentAction,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -6079,27 +6081,97 @@ export async function registerRoutes(
       // (primary takes precedence); it only ADDS firing for the
       // responsibleLawyerId-is-effective case. Fires only when the effective
       // lawyer actually changes to a non-empty value.
+      //
+      // 🔴 BATCH 9 — TWO LAWYERS, NOT ONE, AND THAT SPLIT IS THE WHOLE FIX.
+      // This block used ONE value for both children. That was wrong in both
+      // directions once المترافع existed:
+      //   • HEARINGS were stamped with `primary || responsible`, ignoring
+      //     litigatorId entirely. Because assignCase sends primaryLawyerId and
+      //     litigatorId in the SAME PATCH (cases-context.tsx), designating a
+      //     المترافع while changing the responsible lawyer destroyed the litigator
+      //     in the very request that set it — and eleven readers key on that
+      //     column (the T-10 ring, canCheckInHearing, canActOnHearing, the مهامي
+      //     feed, the 48h/24h reminders), so the real المترافع could not check in,
+      //     record a result, attach the ضبط, or be rung.
+      //   • MEMOS must NOT gain litigatorId. A المترافع PLEADS; they do not draft.
+      //     Case work follows the notification order, which is why the two values
+      //     below are separate rather than one widened chain.
       const newPrimaryLawyerId = req.body.primaryLawyerId !== undefined ? req.body.primaryLawyerId : existing.primaryLawyerId;
       const newResponsibleLawyerId = req.body.responsibleLawyerId !== undefined ? req.body.responsibleLawyerId : existing.responsibleLawyerId;
-      const oldEffectiveLawyerId = existing.primaryLawyerId || existing.responsibleLawyerId || "";
-      const newEffectiveLawyerId = newPrimaryLawyerId || newResponsibleLawyerId || "";
-      if (newEffectiveLawyerId && newEffectiveLawyerId !== oldEffectiveLawyerId) {
+      const newLitigatorId = req.body.litigatorId !== undefined ? req.body.litigatorId : existing.litigatorId;
+      // MEMOS — `primary || responsible`, BYTE-IDENTICAL to what this block always
+      // computed. Nothing about memo cascading changes in this batch.
+      const oldCaseWorkLawyerId = existing.primaryLawyerId || existing.responsibleLawyerId || "";
+      const newCaseWorkLawyerId = newPrimaryLawyerId || newResponsibleLawyerId || "";
+      // HEARINGS — the attendance order, via the SHARED helper that POST
+      // /api/hearings and both client surfaces now also call. Applied to the row as
+      // it was and to the row as it will be, so the comparison is like-for-like.
+      const oldAttendanceLawyerId = caseAttendanceLawyerId(existing) || "";
+      const newAttendanceLawyerId = caseAttendanceLawyerId({
+        litigatorId: newLitigatorId,
+        primaryLawyerId: newPrimaryLawyerId,
+        responsibleLawyerId: newResponsibleLawyerId,
+      }) || "";
+      const caseWorkChanged = !!newCaseWorkLawyerId && newCaseWorkLawyerId !== oldCaseWorkLawyerId;
+      // 🔴 THIS IS ALSO THE FIX FOR "SETTING litigator_id RE-POINTS NOTHING". The
+      // trigger was the EFFECTIVE lawyer, and litigatorId was not in it, so
+      // designating a المترافع changed no child at all — the case-level field said
+      // one thing and every hearing said another. litigatorId is now a first-class
+      // input to this comparison, so setting, changing OR clearing it fires the
+      // re-point on its own. (Clearing it correctly hands the sessions back to the
+      // responsible lawyer, because the chain then resolves to them.)
+      //
+      // ⚠ FOR A CASE WITH NO المترافع NOTHING CHANGES. With litigatorId null the
+      // attendance chain collapses to `primary || responsible` on BOTH sides, i.e.
+      // exactly the expression this block used before — so every non-litigator
+      // case fires on precisely the conditions it always did and receives precisely
+      // the lawyer it always did.
+      const attendanceChanged = !!newAttendanceLawyerId && newAttendanceLawyerId !== oldAttendanceLawyerId;
+      if (caseWorkChanged || attendanceChanged) {
         const caseId = String(req.params.id);
-        const newLawyerId = newEffectiveLawyerId;
         try {
-          const caseHearings = await storage.getHearingsByCase(caseId);
-          for (const h of caseHearings) {
-            if (h.status === "قادمة") {
-              await storage.updateHearing(h.id, { attendingLawyerId: newLawyerId });
+          if (attendanceChanged) {
+            const caseHearings = await storage.getHearingsByCase(caseId);
+            // ⚠ UPCOMING ONLY — the `قادمة` guard is unchanged and still bounds
+            // every write here. A PAST hearing records who actually attended and is
+            // never rewritten; owner ruling 4.
+            const upcoming = caseHearings.filter((h) => h.status === "قادمة");
+            // 🔴 ONE QUERY FOR THE WHOLE SET, never one per hearing — the batch-8
+            // getJudgmentIdsWithObjectionMemoActivity precedent.
+            const deliberate = await storage.getHearingIdsWithDeliberateAssignment(
+              upcoming.map((h) => h.id),
+            );
+            for (const h of upcoming) {
+              // 🔴 A DELIBERATE PER-HEARING ASSIGNMENT IS AN EXCEPTION AND SURVIVES
+              // THIS — permanently, across repeated المترافع changes (owner ruling
+              // 2). The marker is what separates "this lawyer arrived from a
+              // default" from "a person chose this lawyer for this session"; both
+              // wrote the same column, so nothing else could tell them apart.
+              //
+              // The `attendingLawyerId` term is deliberate: a marked hearing whose
+              // lawyer has since been emptied has no exception left to protect, and
+              // must be repairable rather than frozen with nobody assigned.
+              if (deliberate.has(h.id) && h.attendingLawyerId) continue;
+              await storage.updateHearing(h.id, { attendingLawyerId: newAttendanceLawyerId });
             }
           }
-          const caseMemos = await storage.getMemosByCase(caseId);
-          for (const m of caseMemos) {
-            if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              await storage.updateMemo(m.id, { assignedTo: newLawyerId });
+          if (caseWorkChanged) {
+            const caseMemos = await storage.getMemosByCase(caseId);
+            for (const m of caseMemos) {
+              if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
+                await storage.updateMemo(m.id, { assignedTo: newCaseWorkLawyerId });
+              }
             }
           }
         } catch (e) {
+          // ⚠ THE SWALLOW IS NOT WIDENED, BUT ITS BLAST RADIUS GREW BY ONE READ.
+          // getHearingIdsWithDeliberateAssignment is a new failure point inside this
+          // try, and it runs BEFORE the memo loop — so if it throws, the memos are
+          // not re-pointed either, where previously only the two loops could fail.
+          // Left as one catch on purpose: the alternative is failing the PATCH, and
+          // this cascade maintains DERIVED assignments that a subsequent save
+          // repairs. The user-visible symptom is recorded in the batch report
+          // rather than buried — it is not surfaced to the caller, by design.
           console.error("Error cascading lawyer assignment:", e);
         }
       }
@@ -14364,6 +14436,11 @@ export async function registerRoutes(
   app.post("/api/hearings", requireAuth, async (req: AuthRequest, res) => {
     try {
       const validatedData = insertHearingSchema.parse(req.body);
+      // Set inside the case block below when the caller named a lawyer OTHER than
+      // the case's own attendance default; read after createHearing to write the
+      // marker. Declared out here because a case-less hearing never enters that
+      // block, and a hearing with no parent case has no default to differ from.
+      let deliberateAttendee = false;
       if (validatedData.caseId && validatedData.caseId !== "none") {
         const relatedCase = await storage.getCaseById(validatedData.caseId);
         if (relatedCase) {
@@ -14378,18 +14455,37 @@ export async function registerRoutes(
           if (relatedCase.currentStage === "مقفلة" || relatedCase.isArchived) {
             return res.status(400).json({ error: "لا يمكن إضافة جلسات لقضية مغلقة أو مؤرشفة" });
           }
+          // "المترافع" wins when set — the case's designated court-appearance
+          // lawyer, for when the responsible lawyer cannot plead. NULL (the
+          // normal case) falls through to the original chain unchanged, so
+          // every existing case behaves exactly as before.
+          //
+          // This one line is the whole permission story too: canActOnHearing
+          // is keyed on attendingLawyerId, so making the litigator the
+          // attending lawyer AT CREATION grants them the full hearing action
+          // set (record result, write report, close) with NO gate change.
+          //
+          // 🔴 NOW THE SHARED caseAttendanceLawyerId — the same function the
+          // reassignment cascade and both client surfaces call. The order is
+          // unchanged; it simply stopped being a hand-written copy.
+          const attendanceDefault = caseAttendanceLawyerId(relatedCase);
+          // 🔴 "DELIBERATE" IS NOT "THE CALLER SENT THE FIELD" — it is "the caller
+          // sent a DIFFERENT lawyer". This distinction is the whole correctness of
+          // the marker on this path, and getting it wrong would have marked
+          // EVERY hearing: the create dialog PRE-FILLS attendingLawyerId from this
+          // same chain (hearings.tsx:270 and :852, deliberately, so the form shows
+          // what the server would choose), so a perfectly ordinary create arrives
+          // with the field populated and equal to the default. Marking on presence
+          // would make every new hearing an exception and the cascade would never
+          // re-point anything again.
+          //
+          // Owner ruling 3 is "choosing a DIFFERENT lawyer at creation counts",
+          // and that is exactly what this compares.
+          const suppliedAttendee = String(validatedData.attendingLawyerId || "").trim();
+          deliberateAttendee =
+            !!suppliedAttendee && suppliedAttendee !== String(attendanceDefault || "");
           if (!validatedData.attendingLawyerId) {
-            // "المترافع" wins when set — the case's designated court-appearance
-            // lawyer, for when the responsible lawyer cannot plead. NULL (the
-            // normal case) falls through to the original chain unchanged, so
-            // every existing case behaves exactly as before.
-            //
-            // This one line is the whole permission story too: canActOnHearing
-            // is keyed on attendingLawyerId, so making the litigator the
-            // attending lawyer AT CREATION grants them the full hearing action
-            // set (record result, write report, close) with NO gate change.
-            validatedData.attendingLawyerId =
-              relatedCase.litigatorId || relatedCase.primaryLawyerId || relatedCase.responsibleLawyerId || null;
+            validatedData.attendingLawyerId = attendanceDefault;
           }
         }
       }
@@ -14589,6 +14685,42 @@ export async function registerRoutes(
         } catch (e) {}
       }
 
+      // 🔴 THE DELIBERATE-ASSIGNMENT MARKER (batch 9), creation half. Written ONLY
+      // when the caller named a lawyer OTHER than the case's own attendance
+      // default — see where deliberateAttendee is computed for why "the caller sent
+      // the field" is not the test. Owner ruling 3: choosing a different lawyer at
+      // creation IS a deliberate exception and must survive every later change to
+      // the case's المترافع.
+      //
+      // A SEPARATE ROW from hearing_added above, not a flag on it: the cascade
+      // queries by action_type, and hearing_added exists on every hearing.
+      //
+      // Swallowed like its neighbour. The hearing EXISTS with the right lawyer —
+      // that is the user-visible outcome. A missing marker degrades this one
+      // hearing to the pre-batch behaviour (a later litigator change re-points it);
+      // failing the create would be strictly worse.
+      if (user && validatedData.caseId && deliberateAttendee) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: validatedData.caseId,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: DeliberateHearingAssignmentAction,
+            title: "إسناد الجلسة لمحامٍ محدد",
+            details: JSON.stringify({
+              hearingId: newHearing.id,
+              attendingLawyerId: validatedData.attendingLawyerId ?? null,
+              previousAttendingLawyerId: null,
+              via: "create",
+            }),
+            relatedEntityType: "hearing",
+            relatedEntityId: newHearing.id,
+          });
+        } catch (e) {
+          console.error("[hearings/create] deliberate-assignment marker failed for", newHearing.id, e);
+        }
+      }
+
       if (validatedData.responseRequired && validatedData.caseId && validatedData.caseId !== "none") {
         try {
           const deadlineDate = new Date(validatedData.hearingDate);
@@ -14701,9 +14833,68 @@ export async function registerRoutes(
         }
       }
 
+      // 🔴 THE DELIBERATE-ASSIGNMENT TEST, computed BEFORE the write — `existing`
+      // is the row as it stood, and after storage.updateHearing there is nothing
+      // left to compare against.
+      //
+      // ⚠ A PATCH CARRYING attendingLawyerId IS NOT EVIDENCE OF INTENT. The edit
+      // dialog submits the WHOLE form (hearings.tsx:502-506 sends editFormData,
+      // whose attendingLawyerId is seeded from the row at :497), so editing only a
+      // hearing's DATE re-sends the lawyer unchanged. Only a CHANGED value means a
+      // person chose someone. Marking on presence would mark almost every edit.
+      //
+      // Both sides are normalised through String(x || "").trim() so null, undefined
+      // and "" are one value — the column is nullable and the client sends "" for
+      // "none", and an un-normalised compare would read null → "" as a change.
+      //
+      // ⚠ A CLEAR IS NOT A DELIBERATE ASSIGNMENT. Requiring a non-empty NEW value
+      // means emptying the field records nothing: removing an exception is not
+      // creating one, and a marked-but-empty hearing would be the worst state
+      // possible — nobody rings, nobody can act, and the cascade would refuse to
+      // repair it. (Unreachable from the UI in any case: the reassign dialog
+      // returns early on a falsy id at hearings.tsx:569 and neither lawyer select
+      // offers an empty option. The cascade's own skip additionally requires the
+      // hearing to HAVE a lawyer — see there.)
+      const priorAttendee = String(existing.attendingLawyerId || "").trim();
+      const nextAttendee = String(req.body.attendingLawyerId || "").trim();
+      const deliberateAttendee =
+        req.body.attendingLawyerId !== undefined
+        && !!nextAttendee
+        && nextAttendee !== priorAttendee;
+
       const updated = await storage.updateHearing(String(req.params.id), req.body);
       if (!updated) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
+      }
+
+      // Keyed to the HEARING (related_entity_type/_id), never to the case, so the
+      // exception survives everything that later happens to the case — repeated
+      // المترافع changes, reassignment, department transfer.
+      //
+      // Swallowed deliberately, like every other activity write on this surface:
+      // the reassignment SUCCEEDED and the user has been told so. A missing marker
+      // degrades this hearing to pre-batch behaviour (a later litigator change
+      // re-points it); 500-ing a completed write would be strictly worse.
+      if (deliberateAttendee && existing.caseId) {
+        try {
+          await logCaseActivityActing(req, {
+            caseId: existing.caseId,
+            userId: user.id,
+            userName: user.name || user.id,
+            actionType: DeliberateHearingAssignmentAction,
+            title: "إسناد الجلسة لمحامٍ محدد",
+            details: JSON.stringify({
+              hearingId: existing.id,
+              attendingLawyerId: nextAttendee,
+              previousAttendingLawyerId: priorAttendee || null,
+              via: "update",
+            }),
+            relatedEntityType: "hearing",
+            relatedEntityId: existing.id,
+          });
+        } catch (e) {
+          console.error("[hearings/patch] deliberate-assignment marker failed for", existing.id, e);
+        }
       }
 
       if (relatedCase && !relatedCase.isArchived && req.body.hearingDate) {

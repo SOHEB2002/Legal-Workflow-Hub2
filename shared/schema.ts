@@ -2562,6 +2562,57 @@ export function caseNotificationRecipientId(
   return lawCase?.primaryLawyerId || lawCase?.responsibleLawyerId || "";
 }
 
+// ==================== WHO APPEARS IN COURT — THE ATTENDANCE ORDER ====================
+// 🔴 THE OTHER SANCTIONED ORDER, NAMED AT LAST. The comment block above has always
+// listed `litigatorId || primaryLawyerId || responsibleLawyerId` as a deliberate
+// SEPARATE rule that caseNotificationRecipientId does not replace — but it was
+// never a function, so it lived as four hand-written copies. They drifted, exactly
+// as the notification order did before it was hoisted:
+//   • POST /api/hearings          — correct (the creation default)
+//   • the reassignment cascade    — 🔴 OMITTED litigatorId entirely, so designating
+//                                   a المترافع while changing the responsible lawyer
+//                                   stamped the PRIMARY over the litigator in the
+//                                   very same request that set it
+//   • hearings.tsx                — correct
+//   • hearing-details-dialog.tsx  — 🔴 OMITTED litigatorId, so the list and the
+//                                   dialog could name two different lawyers for one
+//                                   hearing once attendingLawyerId was null
+// All four now call THIS. A fifth copy is the bug.
+//
+// 🔴 IT IS NOT INTERCHANGEABLE WITH caseNotificationRecipientId. That one answers
+// "who do we NOTIFY / assign case work to" and MUST NOT gain litigatorId: a
+// المترافع pleads, they do not draft. The memo half of the reassignment cascade
+// deliberately keeps the notification order for exactly that reason — see the two
+// separate values there.
+//
+// Returns null (not "") — unlike its sibling, whose "" is the memos.assigned_to
+// NOT NULL sentinel. hearings.attending_lawyer_id is NULLABLE, and null is its real
+// "nobody designated" value.
+export function caseAttendanceLawyerId(
+  lawCase:
+    | {
+        litigatorId?: string | null;
+        primaryLawyerId?: string | null;
+        responsibleLawyerId?: string | null;
+      }
+    | null
+    | undefined,
+): string | null {
+  return lawCase?.litigatorId || lawCase?.primaryLawyerId || lawCase?.responsibleLawyerId || null;
+}
+
+// 🔴 THE DELIBERATE PER-HEARING ASSIGNMENT MARKER (batch 9).
+// Written to case_activity_log.action_type — free text, no DDL — with
+// related_entity_type "hearing" and related_entity_id = the HEARING's id, the pair
+// this table already carries for hearings. Keyed to the HEARING and never to the
+// case, so the exception survives everything that later happens to the case:
+// repeated litigator changes, reassignment, department transfer.
+//
+// It is the ONLY thing separating (X) "this lawyer arrived from a default" from
+// (Y) "a person chose this lawyer for this one session" — the two write the same
+// column and nothing else in the schema distinguishes them.
+export const DeliberateHearingAssignmentAction = "hearing_lawyer_assigned";
+
 // ==================== أسباب الإغلاق ====================
 export const ClosureReason = {
   CONTRACT_NOT_RENEWED: "عدم_تجديد_العقد",
