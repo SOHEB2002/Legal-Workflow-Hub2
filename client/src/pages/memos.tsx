@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
+import { formatHijriDateFull, formatDualDate } from "@/lib/date-utils";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
 import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
@@ -231,6 +232,40 @@ function getDeadlineColor(deadline: string): string {
   if (days < 3) return "text-orange-500 dark:text-orange-400 font-medium";
   return "text-muted-foreground";
 }
+
+// ==================== DAY-SEPARATOR VOCABULARY ====================
+// Copied VERBATIM from cases.tsx, which copied it verbatim from hearings.tsx
+// (which declares it module-locally and does not export it), so all three pages
+// name a day identically. The cases-page note explains why it is duplicated
+// rather than hoisted into date-utils; that reasoning holds here unchanged —
+// except that this is now the THIRD copy, which is the trigger that note names.
+// 🔴 IF A FOURTH IS EVER WANTED, HOIST ALL FOUR AT ONCE instead of adding it.
+const ARABIC_WEEKDAYS = [
+  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
+] as const;
+const arabicWeekday = (date: string): string => {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
+};
+
+// 🔴 THE HEADING NAMES ITS SOURCE, AND THIS IS WHERE THIS PAGE DELIBERATELY
+// DIVERGES FROM THE CASES PAGE (owner ruling). A memo's sort key is whichever is
+// sooner — its case's next session, or its own deadline — so a memo can sit under
+// a day because of a HEARING that is not its own work. On the cases page a day
+// heading can only ever mean one thing; here a bare date would leave the reader
+// unable to tell why the row is there at all.
+const URGENCY_SOURCE_LABEL = {
+  hearing: "جلسة",
+  deadline: "مهلة مذكرة",
+} as const;
+
+// The bottom group's heading. It must read as a GROUP, not as a date — these rows
+// have no day in common, and they arrive here for three different reasons (no
+// upcoming session AND no deadline; or the memo is filed; or it is cancelled), so
+// any date-shaped label would be a lie about at least some of them. It also must
+// not say "بدون مهلة": a filed memo usually HAD one and met it. "موعد" matches the
+// active-sort chip's own wording.
+const NO_UPCOMING_DUE_LABEL = "بدون موعد قادم";
 
 // Priority-group sort, mirroring the cases page. Rows that need
 // attention surface on top, terminal rows sink to the bottom.
@@ -1340,6 +1375,69 @@ export default function MemosPage() {
     return result;
   }, [hearings]);
 
+  // ==================== الأقرب استحقاقاً — THE URGENCY KEY ====================
+  // 🔴 ONE KEY FROM TWO DATES, not two sorts (owner ruling). The question the list
+  // answers is "what am I about to lose", and a memo can lose either its case's
+  // next session or its own deadline — whichever comes FIRST. Two separate sort
+  // options would fight for the same order and each would hide the other's date.
+  //
+  // 🔴 IT CARRIES THE SOURCE, NOT JUST THE DATE — and this map is the ONE
+  // computation. The comparator reads it and so does the day heading, so a heading
+  // can never disagree with the rows under it and nothing is recomputed in the
+  // render path. Same shape and same reason as the cases page's nextHearingRanks:
+  // one memoised pass, read by both.
+  //
+  // Memoised on the memo list and the hearing map, and built unconditionally
+  // rather than behind `sortByUrgency` so switching the sort on never triggers a
+  // rebuild. Absent from the map = NO key = sorts last.
+  //
+  // For a لائحة اعتراضية the memo's own deadline IS the objection deadline — it is
+  // written there by ensureObjectionMemoForCase from the judgment's stored
+  // objection_deadline. Nothing is recomputed here; this reads.
+  //
+  // ⚠ THE TWO SIDES ARE FILTERED DIFFERENTLY, ON PURPOSE:
+  //   • the HEARING side is the shared upcoming rule (nearestUpcomingHearingDate —
+  //     not cancelled, no result recorded, date >= the firm's today). A session
+  //     that already happened is not something still to be lost, and using the
+  //     shared helper is what keeps this page, the cases-page sort and the stored
+  //     law_cases.next_hearing_date from ever disagreeing about it.
+  //   • the DEADLINE side is used RAW, with no "still ahead" filter. An overdue
+  //     memo is the most urgent row on the page, not an expired one — it sorts to
+  //     the very top, matching the destructive styling deadlineClass already gives it.
+  //
+  // Both are "YYYY-MM-DD", so `<=` IS the calendar comparison and the min is
+  // spelled as a string comparison — no parsing anywhere, therefore no timezone
+  // able to shift a boundary (the 60a4d79 class).
+  //
+  // ⚠ ON A TIE THE SOURCE IS "hearing" (`<=`, not `<`). The DATE is identical
+  // either way, so the ordering batch 8 shipped is unchanged to the byte; the tie
+  // only decides which label the row is filed under, and a court session is the
+  // stronger reason to be looking at a memo that day.
+  //
+  // 🔴 A TERMINAL MEMO GETS NO ENTRY and sorts LAST, even when its case has a
+  // session next week. Same ruling the cases page's prescription comparator makes
+  // for a filed case: a memo that is filed or cancelled cannot be lost, so it has
+  // nothing outstanding for this question. isMemoNonFinal is the page's existing
+  // three-way check, reused rather than restated.
+  const memoUrgency = useMemo(() => {
+    const map = new Map<string, { day: string; source: keyof typeof URGENCY_SOURCE_LABEL }>();
+    for (const m of memos) {
+      if (!isMemoNonFinal(m)) continue;
+      const hearing = m.caseId ? (caseNextHearing.get(m.caseId) || null) : null;
+      const deadline = String(m.deadline || "").trim() || null;
+      if (hearing && deadline) {
+        map.set(m.id, hearing <= deadline
+          ? { day: hearing, source: "hearing" }
+          : { day: deadline, source: "deadline" });
+      } else if (hearing) {
+        map.set(m.id, { day: hearing, source: "hearing" });
+      } else if (deadline) {
+        map.set(m.id, { day: deadline, source: "deadline" });
+      }
+    }
+    return map;
+  }, [memos, caseNextHearing]);
+
   const filteredMemos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
@@ -1422,44 +1520,6 @@ export default function MemosPage() {
       const i = MemoStagesAll.indexOf(m.currentStage as MemoStageValue);
       return i === -1 ? 999 : i;
     };
-    // ==================== الأقرب استحقاقاً — THE URGENCY KEY ====================
-    // 🔴 ONE KEY FROM TWO DATES, not two sorts (owner ruling). The question the
-    // list answers is "what am I about to lose", and a memo can lose either its
-    // case's next session or its own deadline — whichever comes FIRST. Two
-    // separate sort options would fight for the same order and each would hide
-    // the other's date.
-    //
-    // For a لائحة اعتراضية the memo's own deadline IS the objection deadline —
-    // it is written there by ensureObjectionMemoForCase from the judgment's
-    // stored objection_deadline. Nothing is recomputed here; this reads.
-    //
-    // ⚠ THE TWO SIDES ARE FILTERED DIFFERENTLY, ON PURPOSE:
-    //   • the HEARING side is the shared upcoming rule (nearestUpcomingHearingDate
-    //     — not cancelled, no result recorded, date >= the firm's today). A session
-    //     that already happened is not something still to be lost, and using the
-    //     shared helper is what keeps this page, the cases-page sort and the
-    //     stored law_cases.next_hearing_date from ever disagreeing about it.
-    //   • the DEADLINE side is used RAW, with no "still ahead" filter. An overdue
-    //     memo is the most urgent row on the page, not an expired one — it sorts
-    //     to the very top, matching the destructive styling deadlineClass already
-    //     gives it.
-    //
-    // Both are "YYYY-MM-DD", so `<` IS the calendar comparison and Math.min is
-    // spelled as a string comparison — no parsing anywhere, therefore no
-    // timezone able to shift a boundary (the 60a4d79 class).
-    //
-    // 🔴 A TERMINAL MEMO HAS NO KEY and sorts LAST, even when its case has a
-    // session next week. Same ruling the cases page's prescription comparator
-    // already makes for a filed case: a memo that is filed or cancelled cannot be
-    // lost, so it has nothing outstanding for this question. isMemoNonFinal is the
-    // page's existing three-way check, reused rather than restated.
-    const memoUrgencyKey = (m: Memo): string | null => {
-      if (!isMemoNonFinal(m)) return null;
-      const hearing = m.caseId ? (caseNextHearing.get(m.caseId) || null) : null;
-      const deadline = String(m.deadline || "").trim() || null;
-      if (hearing && deadline) return hearing < deadline ? hearing : deadline;
-      return hearing || deadline;
-    };
     return filtered.slice().sort((a, b) => {
       // 🔴 WHEN THE SORT IS ON IT IS THE PRIMARY KEY, and the whole default
       // ordering below becomes its TIE-BREAKER — mirroring the cases page. Layering
@@ -1471,18 +1531,37 @@ export default function MemosPage() {
       // whenever the sort is off — this block is skipped entirely, so the default
       // list is byte-for-byte what it was.
       if (sortByUrgency) {
-        const ka = memoUrgencyKey(a);
-        const kb = memoUrgencyKey(b);
+        const ua = memoUrgency.get(a.id);
+        const ub = memoUrgency.get(b.id);
+        const ka = ua?.day ?? null;
+        const kb = ub?.day ?? null;
         if (ka && kb) {
           if (ka !== kb) return ka < kb ? -1 : 1;
+          // 🔴 SAME DAY → ORDER BY SOURCE, and this clause is what makes the day
+          // headings honest. Without it a day's rows interleave (hearing, deadline,
+          // hearing…), which under a per-source heading would emit three headings
+          // for one date and look broken — and under a single combined heading
+          // would let one memo's source silently label another's. Ordering by
+          // source makes each day's rows CONTIGUOUS blocks, so every heading is
+          // true for every row beneath it.
+          //
+          // Hearings first: a court session is externally fixed and cannot be
+          // moved, and it keeps the top of each day reading the way the cases
+          // page's day headings already do.
+          //
+          // ⚠ Batch 8 fell straight through to the default ordering here. This
+          // refines that tie-break; it does not reorder anything across days.
+          const sa = ua!.source === "hearing" ? 0 : 1;
+          const sb = ub!.source === "hearing" ? 0 : 1;
+          if (sa !== sb) return sa - sb;
         } else if (ka || kb) {
           // Exactly one has a date → it wins. Everything with NEITHER date sinks
           // to the bottom — sorted last, never hidden. Same shape as the cases
           // page's comparators.
           return ka ? -1 : 1;
         }
-        // Same date, or both undated → fall through to the default ordering, so
-        // the tie is broken the way this page always broke it.
+        // Same day AND same source, or both undated → fall through to the default
+        // ordering, so the tie is broken the way this page always broke it.
       }
       const ga = getMemoPriorityGroup(a);
       const gb = getMemoPriorityGroup(b);
@@ -1492,7 +1571,7 @@ export default function MemosPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters, sortByUrgency, caseNextHearing]);
+  }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters, sortByUrgency, memoUrgency]);
 
   // Rows-per-page is user-configurable and persisted per user + per page.
   const [MEMO_PAGE_SIZE, setMemoPageSize] = usePageSize("memos");
@@ -1504,6 +1583,36 @@ export default function MemosPage() {
   const memoTotalPages = Math.max(1, Math.ceil(filteredMemos.length / MEMO_PAGE_SIZE));
   const pagedMemos = filteredMemos.slice((memoPage - 1) * MEMO_PAGE_SIZE, memoPage * MEMO_PAGE_SIZE);
   const handleMemoPageSizeChange = (size: number) => { setMemoPageSize(size); setMemoPage(1); };
+
+  // ==================== DAY SEPARATORS (sort-active only) ====================
+  // Mirrors cases.tsx:1567-1584 exactly — same suppression rule, same "" stand-in
+  // for the bottom group, same emitted-with-a-row mechanism in the render below.
+  //
+  // The GROUP KEY IS day + source, not day alone, because this page renders one
+  // heading per (day, source) pair — see the render. Two memos on the same date
+  // for different reasons are two groups, so a page holding only those two still
+  // separates them.
+  //
+  // 🔴 SUPPRESSED WHEN THE PAGE HOLDS ONLY ONE GROUP. A separator's whole job is to
+  // mark a boundary; with nothing to separate it is chrome that says nothing. This
+  // is what keeps a single-memo page, an all-bottom-group page, and a filter that
+  // narrows to one day from each growing a stray heading.
+  // "" stands in for the bottom group — no real key can collide with it, since
+  // every real key starts with a "YYYY-MM-DD".
+  const memoDayGroupKey = (m: Memo): string => {
+    const u = memoUrgency.get(m.id);
+    return u ? `${u.day}|${u.source}` : "";
+  };
+  // ⚠ Calls memoDayGroupKey rather than restating it inline. The cases page writes
+  // its key twice (once here, once in the render) and gets away with it because
+  // its rule is a single `?? ""`; this one is two fields joined, so a second copy
+  // thirty lines from the first is exactly the shape that drifts. memoDayGroupKey
+  // closes over memoUrgency only, which IS in the dep list.
+  const showDaySeparators = useMemo(() => {
+    if (!sortByUrgency) return false;
+    return new Set(pagedMemos.map(memoDayGroupKey)).size > 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortByUrgency, pagedMemos, memoUrgency]);
 
   if (isLoading) {
     return (
@@ -1696,8 +1805,57 @@ export default function MemosPage() {
                             : priorityGroup === 3
                               ? "opacity-80"
                               : "";
+                      // A heading is emitted above the FIRST row of each (day,
+                      // source) group. The comparison is against the previous row
+                      // ON THIS PAGE, which is deliberate: the pager is a plain
+                      // slice, so page 2 opens with its own heading rather than
+                      // inheriting one the reader cannot see. Every heading
+                      // therefore has rows beneath it by construction — it is
+                      // emitted WITH a row, never on its own, so an empty one is
+                      // impossible. Identical mechanism to cases.tsx:2019-2030.
+                      const groupKey = memoDayGroupKey(memo);
+                      const prevGroupKey = idx === 0 ? undefined : memoDayGroupKey(pagedMemos[idx - 1]);
+                      const showSeparator =
+                        showDaySeparators && (idx === 0 || groupKey !== prevGroupKey);
+                      const urgency = memoUrgency.get(memo.id);
+                      // Hijri via the hearings page's OWN helpers (formatHijriDateFull
+                      // + arabicWeekday) with the Gregorian spelled out beside it,
+                      // exactly as the cases page renders its day headings — same
+                      // markup, same classes, same order. The ONLY addition is the
+                      // source suffix, which is this page's whole reason for
+                      // diverging (a memo can be here because of a hearing that is
+                      // not its own work).
                       return (
-                      <TableRow key={memo.id} data-testid={`row-memo-${memo.id}`} className={rowClass}>
+                      <Fragment key={memo.id}>
+                      {showSeparator && (
+                        <TableRow
+                          className="hover:bg-transparent border-0"
+                          data-testid={`row-day-separator-${urgency ? `${urgency.day}-${urgency.source}` : "none"}`}
+                        >
+                          {/* colSpan 9 — the table's column count is FIXED: nine
+                              unconditional <TableHead>s and no filter adds or
+                              removes one, so there is no count to track. */}
+                          <TableCell
+                            colSpan={9}
+                            className="bg-muted/60 py-1.5 text-right text-xs font-semibold text-muted-foreground"
+                          >
+                            {urgency ? (
+                              <span className="flex flex-wrap items-center gap-x-2">
+                                <span>{arabicWeekday(urgency.day)}</span>
+                                <span>{formatHijriDateFull(urgency.day)}</span>
+                                <LtrInline className="font-normal opacity-80">
+                                  {formatDualDate(urgency.day).gregorian}
+                                </LtrInline>
+                                <span aria-hidden="true" className="opacity-50">—</span>
+                                <span>{URGENCY_SOURCE_LABEL[urgency.source]}</span>
+                              </span>
+                            ) : (
+                              NO_UPCOMING_DUE_LABEL
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      <TableRow data-testid={`row-memo-${memo.id}`} className={rowClass}>
                         {/* Display-only sequential number — index inside the
                             RENDERED page, so filters/sorting/search renumber
                             from 1. Continues across pages via the page offset
@@ -1950,6 +2108,7 @@ export default function MemosPage() {
                           </DropdownMenu>
                         </TableCell>
                       </TableRow>
+                      </Fragment>
                       );
                     })}
                 </TableBody>
