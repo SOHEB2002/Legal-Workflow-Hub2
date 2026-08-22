@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
-import { MemoStage, type Memo, type MemoStageValue } from "@shared/schema";
+import { MemoStage, isMemoActionable, type Memo, type MemoStageValue } from "@shared/schema";
 
 // SHARED memo lawyer-side advance panel. Extracted VERBATIM from memos.tsx: the
 // linear-path advance buttons (RECEIVED→DRAFTING, READY→FILED) and the
@@ -88,7 +88,12 @@ export function MemoAdvancePanel({
   // canAdvanceMemoStage, replicated verbatim from memos.tsx.
   const canAdvanceMemoStage = (m: Memo, targetStage: MemoStageValue): boolean => {
     if (!user) return false;
-    if (m.awaitingCompletion || m.pausedAt) return false;
+    // 🔴 BATCH 11 — was `m.awaitingCompletion || m.pausedAt`, the verbatim copy of
+    // memos.tsx's memoIsActionable, which was ALSO missing cancellation. That hole
+    // is what let the owner advance a CANCELLED memo through its stages: this
+    // panel is the lawyer-side advance control on both the memos page and مهامي.
+    // Both copies now call the shared isMemoActionable.
+    if (!isMemoActionable(m)) return false;
     const memoCase = getMemoCase(m);
     // Delegation-aware: POST /api/memos/:id/advance-stage hands
     // req.actingContext to validateStageTransition, so a delegate already holds

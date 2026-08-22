@@ -18,7 +18,6 @@ interface MemosContextType {
   getMemosByHearing: (hearingId: string) => Memo[];
   getActiveMemos: () => Memo[];
   getOverdueMemos: () => Memo[];
-  getMemosNeedingReview: () => Memo[];
 }
 
 const MemosContext = createContext<MemosContextType | undefined>(undefined);
@@ -116,7 +115,15 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
     return memos.filter(m => isActiveMemo(m) && m.deadline < today);
   };
 
-  const getMemosNeedingReview = () => memos.filter(m => m.status === "قيد_المراجعة");
+  // getMemosNeedingReview DELETED in batch 11 (owner ruling). It filtered on
+  // `status === "قيد_المراجعة"` — a legacy value no writer produces, matching ONE
+  // orphan row in production — and had zero consumers. The question it pretended
+  // to answer is answered correctly and server-side by the مهامي feed
+  // (storage.ts, the review_pending memo block), which keys on
+  // currentStage === "مراجعة_داخلية" AND scopes to the designated
+  // internalReviewerId. That query is SQL in storage.ts and never referenced this
+  // function; deleting it changes nothing about مهامي. Do not reinstate a
+  // client-side, unscoped twin.
 
   return (
     <MemosContext.Provider value={{
@@ -131,7 +138,6 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
       getMemosByHearing,
       getActiveMemos,
       getOverdueMemos,
-      getMemosNeedingReview,
     }}>
       {children}
     </MemosContext.Provider>

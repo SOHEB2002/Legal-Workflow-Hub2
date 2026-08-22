@@ -668,9 +668,10 @@ async function generateWeeklyReport() {
       new Date(c.updatedAt) >= weekAgo
     ).length;
     const completedHearings = allHearings.filter(h => h.status === "تمت" && h.updatedAt && new Date(h.updatedAt) >= weekAgo).length;
-    const overdueMemos = allMemos.filter(m => 
-      !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) && 
-      m.deadline && new Date(m.deadline) < now
+    // 🔴 BATCH 11 — same dead «مرفوعة» arm. The weekly management report has been
+    // counting every filed-but-late memo as still overdue, firm-wide.
+    const overdueMemos = allMemos.filter(m =>
+      isActiveMemo(m) && m.deadline && new Date(m.deadline) < now
     ).length;
 
     const allUsers = await storage.getAllUsers();
@@ -1286,9 +1287,12 @@ async function checkExpiredPauses() {
     const allMemos = await storage.getAllMemos();
     for (const m of allMemos) {
       // Memos leave status alone on pause (it is workflow state), so pausedAt
-      // is the only indicator — but a memo that reached a terminal status while
+      // is the only indicator — but a memo that reached a terminal state while
       // paused should not be revived.
-      if (m.status === "ملغاة" || m.status === "مرفوعة" || m.status === "معتمدة") continue;
+      // 🔴 BATCH 11 — was `m.status === "ملغاة" || "مرفوعة" || "معتمدة"`. The two
+      // non-cancellation arms never matched, so a paused memo that was FILED in the
+      // meantime got auto-unpaused and returned to the active pool.
+      if (!isActiveMemo(m)) continue;
       if (!isExpired(m)) continue;
       const pauseUntilValue = String(m.pauseUntil ?? "").trim();
       const unpaused = await storage.unpauseMemo(m.id, {

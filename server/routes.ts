@@ -90,6 +90,8 @@ import {
   caseAttendanceLawyerId,
   DeliberateHearingAssignmentAction,
   isActiveMemo,
+  isMemoCancelled,
+  isMemoFiled,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -10438,10 +10440,12 @@ export async function registerRoutes(
       if (memo.pausedAt) {
         return res.status(400).json({ error: "هذه المذكرة معلّقة بالفعل" });
       }
-      // Pausing a memo in a terminal status doesn't make sense — once
-      // approved/submitted/cancelled there's nothing to halt.
-      const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
-      if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
+      // Pausing a memo in a terminal state doesn't make sense — once
+      // filed/cancelled there's nothing to halt.
+      // 🔴 BATCH 11 — was `new Set(["معتمدة","مرفوعة","ملغاة"]).has(memo.status)`.
+      // status stops moving at creation, so the مرفوعة arm NEVER matched and a
+      // FILED memo could be paused. isActiveMemo reads current_stage for filing.
+      if (!isActiveMemo(memo)) {
         return res.status(400).json({ error: "لا يمكن تعليق مذكرة في حالة نهائية" });
       }
 
@@ -13511,8 +13515,9 @@ export async function registerRoutes(
       if (memo.awaitingCompletion) {
         return res.status(400).json({ error: "المذكرة بالفعل بانتظار استكمال المرفقات والبيانات" });
       }
-      const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
-      if (TERMINAL_MEMO_STATUSES.has(memo.status)) {
+      // 🔴 BATCH 11 — same dead-armed set as the pause guard; a FILED memo could
+      // be put into await-completion. isActiveMemo reads current_stage for filing.
+      if (!isActiveMemo(memo)) {
         return res.status(400).json({ error: "لا يمكن تغيير حالة مذكرة منتهية" });
       }
 
@@ -13595,6 +13600,16 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — A CANCELLED MEMO CANNOT MOVE. This was missing from BOTH
+      // stage endpoints (and from four more below); only /skip-committee carried
+      // it. /cancel writes status and deliberately leaves current_stage alone, so
+      // a cancelled memo still sits on a real stage and the transition table
+      // happily offered it an outbound edge — the owner advanced a cancelled memo
+      // through its stages in production. There is NO un-cancel path in this
+      // codebase, so nothing legitimate is blocked by refusing here.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن تغيير مرحلة مذكرة ملغاة" });
+      }
       if (memo.awaitingCompletion) {
         return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
       }
@@ -13721,6 +13736,16 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — A CANCELLED MEMO CANNOT MOVE. This was missing from BOTH
+      // stage endpoints (and from four more below); only /skip-committee carried
+      // it. /cancel writes status and deliberately leaves current_stage alone, so
+      // a cancelled memo still sits on a real stage and the transition table
+      // happily offered it an outbound edge — the owner advanced a cancelled memo
+      // through its stages in production. There is NO un-cancel path in this
+      // codebase, so nothing legitimate is blocked by refusing here.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن تغيير مرحلة مذكرة ملغاة" });
+      }
       if (memo.awaitingCompletion) {
         return res.status(400).json({ error: "المذكرة بانتظار استكمال المرفقات والبيانات" });
       }
@@ -13795,6 +13820,10 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — cancellation, missing here. See the stage endpoints above.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن مراجعة مذكرة ملغاة" });
+      }
       if (memo.awaitingCompletion || memo.pausedAt) {
         return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالمراجعة" });
       }
@@ -13904,6 +13933,10 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — cancellation, missing here. See the stage endpoints above.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن إصدار قرار لجنة على مذكرة ملغاة" });
+      }
       if (memo.awaitingCompletion || memo.pausedAt) {
         return res.status(400).json({ error: "المذكرة في حالة لا تسمح بالقرار" });
       }
@@ -13985,6 +14018,10 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — cancellation, missing here. See the stage endpoints above.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن تسجيل نتيجة على مذكرة ملغاة" });
+      }
       if (memo.awaitingCompletion || memo.pausedAt) {
         return res.status(400).json({ error: "المذكرة في حالة لا تسمح بتسجيل النتيجة" });
       }
@@ -14050,6 +14087,10 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
+      // 🔴 BATCH 11 — cancellation, missing here. See the stage endpoints above.
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن إعادة مذكرة ملغاة للجنة" });
+      }
       if (memo.awaitingCompletion || memo.pausedAt) {
         return res.status(400).json({ error: "المذكرة في حالة لا تسمح بإعادتها للجنة" });
       }
@@ -14202,11 +14243,21 @@ export async function registerRoutes(
       const memo = await storage.getMemoById(String(req.params.id));
       if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
 
-      if (memo.status === "ملغاة") {
+      if (isMemoCancelled(memo)) {
         return res.status(400).json({ error: "المذكرة ملغاة بالفعل" });
       }
-      if (memo.status === "معتمدة" || memo.status === "مرفوعة") {
-        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
+      // 🔴 BATCH 11 — was `memo.status === "معتمدة" || memo.status === "مرفوعة"`,
+      // neither of which any writer produces, so a FILED memo could be cancelled.
+      //
+      // REFUSING RESTORES THE ORIGINAL INTENT, IT IS NOT NEW POLICY: this guard was
+      // written to refuse exactly this and simply stopped working when the workflow
+      // moved onto current_stage. A filed مذكرة has been lodged with the court — the
+      // act happened, and marking it ملغاة would assert that work which
+      // demonstrably left the building never did. It would also mint a
+      // contradictory row (status ملغاة sitting on stage مرفوعة) that every display
+      // folds as filed.
+      if (isMemoFiled(memo)) {
+        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة مرفوعة" });
       }
 
       // 4c-5: per-identity act-as (see /pause). cancel additionally allows
@@ -14265,11 +14316,21 @@ export async function registerRoutes(
         return res.status(400).json({ error: "هذه المذكرة ليست بانتظار استكمال المرفقات والبيانات" });
       }
       // Same terminal-status refusals the ordinary /cancel enforces.
-      if (memo.status === "ملغاة") {
+      if (isMemoCancelled(memo)) {
         return res.status(400).json({ error: "المذكرة ملغاة بالفعل" });
       }
-      if (memo.status === "معتمدة" || memo.status === "مرفوعة") {
-        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة معتمدة أو مرفوعة" });
+      // 🔴 BATCH 11 — was `memo.status === "معتمدة" || memo.status === "مرفوعة"`,
+      // neither of which any writer produces, so a FILED memo could be cancelled.
+      //
+      // REFUSING RESTORES THE ORIGINAL INTENT, IT IS NOT NEW POLICY: this guard was
+      // written to refuse exactly this and simply stopped working when the workflow
+      // moved onto current_stage. A filed مذكرة has been lodged with the court — the
+      // act happened, and marking it ملغاة would assert that work which
+      // demonstrably left the building never did. It would also mint a
+      // contradictory row (status ملغاة sitting on stage مرفوعة) that every display
+      // folds as filed.
+      if (isMemoFiled(memo)) {
+        return res.status(400).json({ error: "لا يمكن إلغاء مذكرة مرفوعة" });
       }
       if (memo.pausedAt) {
         return res.status(400).json({ error: "المذكرة معلّقة — أزل التعليق أولاً" });
@@ -19185,9 +19246,12 @@ export async function registerRoutes(
             return sum + (completed.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
           }, 0) / completedMemos.length
         : 0;
+      // 🔴 BATCH 11 — was `!["معتمدة","مرفوعة","ملغاة"].includes(m.status)`. status
+      // stops moving at creation, so «مرفوعة» never matched: every FILED memo past
+      // its deadline was counted as overdue against the lawyer. isActiveMemo reads
+      // current_stage for filing. This figure will DROP for lawyers who filed late.
       const overdueMemos = lawyerMemos.filter(m =>
-        !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) &&
-        m.deadline && new Date(m.deadline) < now
+        isActiveMemo(m) && m.deadline && new Date(m.deadline) < now
       ).length;
 
       // judgment_side holds THREE values (لصالحنا / ضدنا / جزئي) — partial
@@ -19999,9 +20063,10 @@ export async function registerRoutes(
     const userMemos = user.role === "employee"
       ? allMemos.filter(m => m.assignedTo === user.id)
       : allMemos.filter(m => caseIds.includes(m.caseId));
+    // 🔴 BATCH 11 — same dead «مرفوعة» arm; the dashboard raised an
+    // "overdue_memo" ALERT for memos that had already been filed.
     userMemos.filter(m =>
-      !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) &&
-      m.deadline && new Date(m.deadline) < now
+      isActiveMemo(m) && m.deadline && new Date(m.deadline) < now
     ).forEach(m => {
       alerts.push({
         type: "overdue_memo",
@@ -20037,7 +20102,8 @@ export async function registerRoutes(
       activeCases: activeCases.length,
       closedThisMonth: closedThisMonth.length,
       totalCases: userCases.length,
-      overdueMemos: userMemos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) && m.deadline && new Date(m.deadline) < now).length,
+      // 🔴 BATCH 11 — same dead «مرفوعة» arm as the alert above.
+      overdueMemos: userMemos.filter(m => isActiveMemo(m) && m.deadline && new Date(m.deadline) < now).length,
       todayHearingsCount: todayHearings.length,
       upcomingDeadlinesCount: upcomingDeadlines.length,
       unreadNotifications,
