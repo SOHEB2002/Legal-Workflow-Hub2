@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, Ban } from "lucide-react";
 import {
   MemoStage,
   MemoStageLabels,
@@ -21,12 +21,26 @@ interface MemoStagesBarProps {
   // component has no data access of its own. Omitted → committee kept, i.e.
   // today's behaviour.
   departmentName?: string | null;
+  // 🔴 THE MEMO IS CANCELLED (status === "ملغاة"). Batch 10 — this component had
+  // NO cancellation input at all, so all 120 cancelled memos in production
+  // rendered a live-looking bar with a highlighted "current" stage, directly
+  // contradicting the ملغاة badge sitting beside it in the same dialog.
+  //
+  // OWNER RULING: DIMMED, NOT HIDDEN. The stage a memo stopped at is useful
+  // information — it says how far the work got before it was cancelled — so the
+  // bar stays and reads as history instead of as live work.
+  //
+  // Cancellation is orthogonal to the stage by design («ملغاة حالة لا مرحلة»), so
+  // it arrives as its own prop rather than as a stage value. Omitted → false →
+  // byte-identical to the pre-batch rendering.
+  cancelled?: boolean;
 }
 
 export function MemoStagesBar({
   currentStage,
   hasTakingNotesHistory = false,
   departmentName,
+  cancelled = false,
 }: MemoStagesBarProps) {
   const showTakingNotes =
     currentStage === MemoStage.TAKING_NOTES || hasTakingNotesHistory;
@@ -45,9 +59,30 @@ export function MemoStagesBar({
   };
 
   return (
+    <div className="space-y-2" data-testid="memo-stages-bar-wrap">
+    {/* The cancellation line sits ABOVE the bar, not inside it: the bar's own
+        vocabulary is stages, and ملغاة is not one. Stating it in words is what
+        stops the dimming from reading as "loading" or "disabled". */}
+    {cancelled && (
+      <div
+        className="flex items-center gap-1.5 text-xs font-semibold text-destructive"
+        data-testid="memo-stages-bar-cancelled"
+      >
+        <Ban className="w-3.5 h-3.5" />
+        <span>مذكرة ملغاة — توقفت عند هذه المرحلة</span>
+      </div>
+    )}
     <div
-      className="flex items-center justify-between gap-2 overflow-x-auto min-w-0 pb-2"
+      className={`flex items-center justify-between gap-2 overflow-x-auto min-w-0 pb-2 ${
+        // 🔴 DIMMED, NOT HIDDEN (owner ruling). grayscale drains the green
+        // "completed" ticks and the accent "current" ring of their meaning-carrying
+        // colour in ONE rule, without editing any of the per-stage classes below —
+        // so the stage logic stays exactly as it is for a live memo, and there is
+        // no second styling path to keep in sync. opacity does the rest.
+        cancelled ? "opacity-50 grayscale" : ""
+      }`}
       dir="rtl"
+      aria-disabled={cancelled || undefined}
       data-testid="memo-stages-bar"
     >
       {stages.map((stage, index) => {
@@ -89,6 +124,7 @@ export function MemoStagesBar({
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

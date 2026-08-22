@@ -104,6 +104,7 @@ import {
   findPrimaryJudgmentHearing,
   judgmentDirectionOf,
   weAreTheAppellant,
+  isActiveMemo,
   StartingStageOption,
   currentStartingStage,
   startingStageCorrectionBlockedReason,
@@ -448,14 +449,10 @@ type ActiveMemoInfo = {
 };
 
 // "Active" memo for the group-3 rule: not cancelled, not filed.
-function isActiveMemo(m: { status?: string | null; currentStage?: string | null }): boolean {
-  if (m.status === "ملغاة") return false;
-  if (m.currentStage === "مرفوعة") return false;
-  // Legacy memos pre-Phase-9 might still carry status="مرفوعة" without
-  // a currentStage — treat that as filed too.
-  if (m.status === "مرفوعة") return false;
-  return true;
-}
+// 🔴 MOVED TO shared/schema (isActiveMemo) IN BATCH 10 — this local copy was the
+// only correct one in the codebase, and it was unreachable from the other ten
+// surfaces, which each wrote their own wrong version against `status` alone. Its
+// shape is unchanged; it is now imported rather than declared here.
 
 export default function CasesPage() {
   const {
@@ -4351,8 +4348,12 @@ export default function CasesPage() {
               // SOFT consequences — warned about, never blocked. Both are
               // recoverable by hand; a judgment is not, which is why that one is
               // in the hard guard instead.
+              // 🔴 BATCH 10 — the `m.status !== "مرفوعة"` half was a WORKFLOW test on a
+              // field frozen at creation, so filed memos counted as live and this
+              // warning over-stated what a stage change would disturb. The ملغاة half
+              // was right and survives inside isActiveMemo.
               const liveMemoCount = editCase
-                ? memos.filter((m) => m.caseId === editCase.id && m.status !== "ملغاة" && m.status !== "مرفوعة").length
+                ? memos.filter((m) => m.caseId === editCase.id && isActiveMemo(m)).length
                 : 0;
               const hasSettlementNumber = !!(editCase?.mohrNumber || editCase?.taradiNumber);
               return (

@@ -63,14 +63,13 @@ export const EMPTY_HEARINGS_ADV_FILTERS: AdvancedHearingsFilters = {
   withPendingMemos: false,
 };
 
-// Memo statuses considered "incomplete" for the pending-memo hearing filter.
-export const PENDING_MEMO_STATUSES: ReadonlySet<string> = new Set([
-  "لم_تبدأ",
-  "قيد_التحرير",
-  "قيد_المراجعة",
-  "بانتظار_الاعتماد",
-  "تحتاج_تعديل",
-]);
+// 🔴 PENDING_MEMO_STATUSES DELETED IN BATCH 10. It listed five MemoStatus values
+// as "incomplete", but `status` stops moving at creation — every non-cancelled
+// memo in production sits at لم_تبدأ — so the set matched EVERY live memo
+// regardless of stage and the «بانتظار مذكرة» filter selected nothing in
+// particular. Its one consumer (hearings.tsx) now calls the shared isActiveMemo,
+// which reads current_stage for filing and status only for ملغاة. Do not
+// reintroduce a status-keyed list here.
 
 export function countActiveHearingsAdvFilters(f: AdvancedHearingsFilters): number {
   return (

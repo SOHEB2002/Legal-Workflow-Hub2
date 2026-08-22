@@ -89,6 +89,7 @@ import {
   caseNotificationRecipientId,
   caseAttendanceLawyerId,
   DeliberateHearingAssignmentAction,
+  isActiveMemo,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -2452,9 +2453,17 @@ function validateStageTransition(
   return { allowed: true };
 }
 
+// 🔴 WAS `!["معتمدة","مرفوعة","ملغاة"].includes(m.status)` — a WORKFLOW test against
+// a field frozen at creation, so a FILED memo still counted as open work and the
+// number written to law_cases.active_memo_count was inflated on every case with a
+// filed memo. isActiveMemo reads current_stage for filing, status only for ملغاة.
+//
+// ⚠ THE STORED COLUMN IS NOT BACK-FILLED BY THIS CHANGE. Every existing row keeps
+// its inflated value until something calls this function for that case again. The
+// recompute SQL is in the batch report — deliberately NOT run here.
 async function getActiveMemoCount(caseId: string): Promise<number> {
   const memos = await storage.getMemosByCase(caseId);
-  return memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status)).length;
+  return memos.filter(isActiveMemo).length;
 }
 
 // The memo statuses that mean "still open work" — not yet approved, filed or

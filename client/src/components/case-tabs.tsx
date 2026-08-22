@@ -13,7 +13,8 @@ import {
   Clock, FileText, Pin, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
   MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, ClipboardList,
 } from "lucide-react";
-import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels } from "@shared/schema";
+import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels,
+  isActiveMemo, memoWorkflowLabel } from "@shared/schema";
 import { formatRelativeArabic } from "@/lib/date-utils";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { DualDateDisplay } from "@/components/ui/dual-date-display";
@@ -351,12 +352,18 @@ export function CaseDeadlinesTab({ caseId, hearings = [], memos = [], responseDe
   }
 
   // Memo deadlines
+  // 🔴 BATCH 10 — BOTH HALVES WERE WRONG.
+  //   • the FILTER read `status`, which stops moving at creation, so «مرفوعة»
+  //     never matched and FILED memos kept appearing on the deadline timeline.
+  //   • the LABEL printed `m.status` RAW — no label map at all — so the user was
+  //     shown the underscored storage value ("لم_تبدأ"), and it was the wrong
+  //     field on top of that.
   for (const m of memos) {
-    if (m.deadline && m.status !== "معتمدة" && m.status !== "مرفوعة" && m.status !== "ملغاة") {
+    if (m.deadline && isActiveMemo(m)) {
       timelineItems.push({
         date: m.deadline,
         label: m.title || "مذكرة",
-        subLabel: m.status || "",
+        subLabel: memoWorkflowLabel(m),
         icon: FileText,
         urgency: classify(m.deadline),
       });

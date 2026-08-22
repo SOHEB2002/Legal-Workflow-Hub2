@@ -10,7 +10,7 @@ import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotifica
   HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
   HearingRingTier, HearingRingTierLeadMinutes,
   addDaysToDateString, prescriptionClockStopped, prescriptionArrivedTimeBarred,
-  FieldTaskType } from "@shared/schema";
+  FieldTaskType, isActiveMemo } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
@@ -381,7 +381,13 @@ async function checkMemoDeadlines() {
     const now = new Date();
 
     for (const memo of allMemos) {
-      if (["معتمدة", "مرفوعة", "ملغاة"].includes(memo.status)) continue;
+      // 🔴 WAS `["معتمدة","مرفوعة","ملغاة"].includes(memo.status)` — a WORKFLOW test
+      // against a field that stops moving at creation. status holds لم_تبدأ on
+      // every non-cancelled memo in production, so «مرفوعة» never matched and a
+      // FILED memo kept receiving 3-day, 1-day and overdue reminders — every
+      // single day, forever, about work that was finished. isActiveMemo reads
+      // current_stage for filing and status only for ملغاة.
+      if (!isActiveMemo(memo)) continue;
       if (!memo.deadline) continue;
 
       const deadline = new Date(memo.deadline);

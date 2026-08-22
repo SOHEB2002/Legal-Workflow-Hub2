@@ -3625,6 +3625,116 @@ export const MemoStagesAll: MemoStageValue[] = [
   MemoStage.FILED,
 ];
 
+// ==================== 🔴 MEMO STATE — READ current_stage, NOT status ====================
+// A memo carries TWO fields and the split is DELIBERATE, documented at the memos
+// table declaration, at the MemoStage declaration, and in
+// script/backfill-memo-stages.sql:
+//
+//   current_stage = THE WORKFLOW. Authoritative for progress. Eight real stages.
+//   status        = CANCELLATION ONLY. «ملغاة حالة لا مرحلة» — there is no stage
+//                   for it, which is why the column was retained rather than
+//                   dropped.
+//
+// 🔴 AFTER CREATION NO WORKFLOW WRITER TOUCHES status. Every stage writer
+// (recordMemoInternalReview / recordMemoCommitteeDecision / recordMemoNoteOutcome
+// / returnMemoToCommittee / skipMemoCommittee / advance-stage / return-stage)
+// sets current_stage and is silent on status; every status writer (cancelMemo /
+// cancelMemoForNoResponse / cancelActiveCaseMemos) is silent on current_stage.
+// The census is in the batch-9 investigation. Production proved it: status held
+// only لم_تبدأ (133) · ملغاة (120) · قيد_المراجعة (1 orphan) across 254 memos,
+// while current_stage moved through all eight stages.
+//
+// So a reader testing status for WORKFLOW state reads a value frozen at creation:
+// a filed memo answers «لم تبدأ». Eleven surfaces did exactly that, each having
+// written its own copy of the test — because the correct resolution lived
+// module-locally in memos.tsx and nothing else could reach it.
+//
+// 🔴 THE FIX IS NOT "make every writer update both". That resurrects the second
+// source of truth the schema comments explicitly retired. Read current_stage for
+// workflow, read status ONLY for ملغاة. These helpers are that rule, exported
+// once — the caseAttendanceLawyerId precedent. A twelfth private copy is the bug.
+//
+// Structural parameter, not `Memo`: callers hold everything from full rows to the
+// three-field projections the cases page passes, and none should have to widen.
+
+/** The only fields the memo-state rules read. */
+export type MemoStateFields = {
+  status?: string | null;
+  currentStage?: string | null;
+  pausedAt?: string | Date | null;
+};
+
+/** Cancelled. The ONE question `status` is authoritative for. */
+export function isMemoCancelled(m: MemoStateFields | null | undefined): boolean {
+  return m?.status === MemoStatus.CANCELLED;
+}
+
+/**
+ * Filed — the terminal workflow state.
+ *
+ * ⚠ BOTH TERMS ARE LOAD-BEARING, and `مرفوعة` is the ONE value the two enums
+ * share (MemoStage.FILED === MemoStatus.SUBMITTED). current_stage is the real
+ * test; the status arm catches LEGACY pre-Phase-9 rows that were filed before the
+ * stage column existed and which the backfill left carrying status="مرفوعة".
+ * Dropping it would resurface long-finished memos as open work.
+ */
+export function isMemoFiled(m: MemoStateFields | null | undefined): boolean {
+  return m?.currentStage === MemoStage.FILED || m?.status === MemoStatus.SUBMITTED;
+}
+
+/**
+ * 🔴 THE REFERENCE TEST — "is there still work on this memo".
+ * Lifted VERBATIM in shape from cases.tsx's isActiveMemo, the one reader that was
+ * already correct. Not cancelled, not filed. Every fixed surface uses THIS.
+ *
+ * ⚠ IT DOES NOT EXCLUDE «معتمدة». The legacy predicates it replaces excluded that
+ * status, but under the stage model معتمدة backfills to جاهزة_للرفع (READY),
+ * which is NOT filed — the memo still has to be filed, so it is still open work.
+ * Zero production rows carry that status, so nothing changes today; recorded
+ * because it is a real semantic difference and not an oversight.
+ */
+export function isActiveMemo(m: MemoStateFields | null | undefined): boolean {
+  if (!m) return false;
+  return !isMemoCancelled(m) && !isMemoFiled(m);
+}
+
+/**
+ * The stage a memo should be GROUPED under in a list that also renders its own
+ * lifecycle pills. Moved verbatim from memos.tsx, where it drove both the stage
+ * filter and the row badge — its two foldings are why the memos-page filter
+ * options are labelled "مرفوعة أو ملغاة" and "تحرير أو معلّقة".
+ *
+ * ⚠ FOLDS CANCELLED → مرفوعة AND PAUSED → تحرير. That is correct ONLY where a
+ * separate ملغاة / معلّقة pill sits beside it. A surface rendering ONE badge must
+ * use memoWorkflowLabel instead, or it will call a cancelled memo "مرفوعة".
+ * Returns null for legacy rows that never got a stage.
+ */
+export function getMemoDisplayStage(m: MemoStateFields | null | undefined): MemoStageValue | null {
+  if (!m) return null;
+  if (isMemoCancelled(m)) return MemoStage.FILED;
+  if (m.pausedAt) return MemoStage.DRAFTING;
+  return (m.currentStage as MemoStageValue | null) ?? null;
+}
+
+/**
+ * The Arabic label for a memo's state, for any surface rendering a SINGLE badge
+ * with no pills of its own.
+ *
+ * Resolution order, and each arm exists for a reason:
+ *   cancelled              → «ملغاة» — never folded to مرفوعة, because with no pill
+ *                            beside it that would report a cancelled memo as filed;
+ *   current_stage present  → MemoStageLabels — the authoritative vocabulary;
+ *   otherwise (legacy)     → MemoStatusLabels, the only thing those rows have.
+ */
+export function memoWorkflowLabel(m: MemoStateFields | null | undefined): string {
+  if (!m) return "";
+  if (isMemoCancelled(m)) return MemoStatusLabels[MemoStatus.CANCELLED];
+  const stage = String(m.currentStage || "").trim();
+  if (stage) return MemoStageLabels[stage as MemoStageValue] || stage;
+  const status = String(m.status || "").trim();
+  return MemoStatusLabels[status as MemoStatusValue] || status;
+}
+
 // ==================== أنواع المستندات ====================
 export const DocumentType = {
   ID: "هوية",

@@ -27,7 +27,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
   MemoType,
-  MemoStatusLabels,
+  isMemoFiled,
+  isMemoCancelled,
+  memoWorkflowLabel,
   FieldTaskStatus,
   HearingStatusLabels,
   HearingStatus,
@@ -494,8 +496,12 @@ export function HearingDetailsDialog({
                     const ts = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
                     return !isNaN(ts) && !isNaN(hearingTs) && ts >= hearingTs;
                   });
-                  // "منجزة" is a consultation stage (COMPLETED), not a memo status — do not re-add.
-                  const doneMemoStatuses = new Set(["معتمدة", "مرفوعة"]);
+                  // 🔴 BATCH 10 — the `doneMemoStatuses = new Set(["معتمدة","مرفوعة"])`
+                  // test that stood here read `status`, which stops moving at
+                  // creation. NEITHER value is ever written by any workflow writer,
+                  // so the green "done" badge was UNREACHABLE and every linked memo
+                  // rendered orange — including memos that were filed months ago.
+                  // ("منجزة" is a consultation stage, not a memo state — do not re-add.)
                   return (
                     <div className="border border-border rounded-md p-3 space-y-2">
                       <p className="text-xs text-muted-foreground font-semibold">المهام المرتبطة</p>
@@ -505,7 +511,11 @@ export function HearingDetailsDialog({
                         <div className="space-y-2">
                           {linkedMemos.map((m) => {
                             const memoTypeLabel = m.memoType === MemoType.RESPONSE ? "جوابية" : "تحرير";
-                            const isDone = doneMemoStatuses.has(m.status);
+                            // THREE states, not two. A cancelled memo is neither done
+                            // nor outstanding, and painting it orange would report
+                            // abandoned work as owed.
+                            const isDone = isMemoFiled(m);
+                            const isCancelled = isMemoCancelled(m);
                             return (
                               <div key={m.id} className="flex items-center justify-between gap-2 text-sm">
                                 <div className="flex flex-col">
@@ -515,12 +525,23 @@ export function HearingDetailsDialog({
                                 <Badge
                                   variant="outline"
                                   className={
-                                    isDone
-                                      ? "border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"
-                                      : "border-orange-500 text-orange-500"
+                                    isCancelled
+                                      ? "border-muted-foreground/40 text-muted-foreground line-through"
+                                      : isDone
+                                        ? "border-green-600 text-green-600 dark:border-green-400 dark:text-green-400"
+                                        : "border-orange-500 text-orange-500"
                                   }
                                 >
-                                  {MemoStatusLabels[m.status] || m.status}
+                                  {/* 🔴 memoWorkflowLabel, not MemoStatusLabels[m.status].
+                                      This is THE defect the owner reported: a memo at
+                                      stage مرفوعة rendered «لم تبدأ», because status is
+                                      frozen at creation. The shared resolution reads
+                                      current_stage for the workflow and names
+                                      cancellation from status — and it deliberately does
+                                      NOT fold cancelled onto مرفوعة the way the memos
+                                      list does, because there is no ملغاة pill here to
+                                      correct it. */}
+                                  {memoWorkflowLabel(m)}
                                 </Badge>
                               </div>
                             );
@@ -711,9 +732,15 @@ export function HearingDetailsDialog({
                             const createdTs = m.createdAt ? new Date(m.createdAt).getTime() : NaN;
                             return !isNaN(createdTs) && createdTs >= hearingTs;
                           });
-                      const memoDone = relevantMemos.some(
-                        (m) => m.status === "معتمدة" || m.status === "مرفوعة",
-                      );
+                      // 🔴 BATCH 10 — was `m.status === "معتمدة" || m.status === "مرفوعة"`,
+                      // neither of which any writer produces, so «المطلوب بعد الجلسة»
+                      // could NEVER show the memo requirement as met.
+                      //
+                      // isMemoFiled, not isActiveMemo: the question here is "has the
+                      // required memo been FILED", and a memo sitting at جاهزة_للرفع
+                      // (the stage the legacy «معتمدة» backfills to) is ready but not
+                      // yet filed — the requirement is not met until it is.
+                      const memoDone = relevantMemos.some(isMemoFiled);
                       return (
                         <div className="border border-border rounded-md p-3 space-y-2">
                           <p className="text-xs text-muted-foreground font-semibold">المطلوب بعد الجلسة</p>

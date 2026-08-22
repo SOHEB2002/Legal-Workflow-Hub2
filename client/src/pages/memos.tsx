@@ -111,6 +111,8 @@ import {
   canChangeMemoStatus,
   canDeleteMemos,
   nearestUpcomingHearingDate,
+  getMemoDisplayStage,
+  isMemoCancelled,
 } from "@shared/schema";
 import type {
   Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
@@ -206,11 +208,9 @@ function getStageBadgeClass(stage: MemoStageValue): string {
 //                            stage like consultations/cases do)
 //   otherwise      → currentStage (may be null on legacy pre-backfill rows)
 // The details-dialog stages bar still uses the literal currentStage.
-function getMemoDisplayStage(m: Memo): MemoStageValue | null {
-  if (m.status === MemoStatus.CANCELLED) return MemoStage.FILED;
-  if (m.pausedAt) return MemoStage.DRAFTING;
-  return (m.currentStage as MemoStageValue | null) ?? null;
-}
+// 🔴 MOVED TO shared/schema (getMemoDisplayStage) IN BATCH 10, unchanged. It was
+// module-local here, which is exactly why ten other surfaces could not reach it
+// and wrote their own — wrong — version against `status`. Imported now.
 
 // ===== STAGE-FILTER LABELS =====
 // 🔴 FILTER-ONLY — MemoStageLabels drives the per-row badge and is shared.
@@ -2617,6 +2617,11 @@ export default function MemosPage() {
                   <MemoStagesBar
                     currentStage={detailMemo.currentStage as MemoStageValue}
                     departmentName={getDepartmentName(getMemoCase(detailMemo)?.departmentId || "")}
+                    // 🔴 Batch 10 — DIMMED, not hidden (owner ruling). The gate above
+                    // is still `currentStage` only, so a cancelled memo's bar keeps
+                    // rendering; it now reads as history rather than as live work,
+                    // and stops contradicting the ملغاة badge above it.
+                    cancelled={isMemoCancelled(detailMemo)}
                   />
                 )}
 
