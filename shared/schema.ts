@@ -3662,6 +3662,7 @@ export type MemoStateFields = {
   status?: string | null;
   currentStage?: string | null;
   pausedAt?: string | Date | null;
+  awaitingCompletion?: boolean | null;
 };
 
 /** Cancelled. The ONE question `status` is authoritative for. */
@@ -3696,6 +3697,39 @@ export function isMemoFiled(m: MemoStateFields | null | undefined): boolean {
 export function isActiveMemo(m: MemoStateFields | null | undefined): boolean {
   if (!m) return false;
   return !isMemoCancelled(m) && !isMemoFiled(m);
+}
+
+/**
+ * 🔴 "CAN A WORKFLOW ACTION BE TAKEN ON THIS MEMO RIGHT NOW" — the LIFECYCLE gate
+ * every stage transition, review decision and committee action must pass.
+ *
+ * Batch 11. This existed as `memoIsActionable` in memos.tsx and was REPLICATED
+ * VERBATIM into memo-advance-panel.tsx (its own comment says so) — and BOTH copies
+ * tested only `awaitingCompletion || pausedAt`. Cancellation was missing from the
+ * server guards too, so a CANCELLED memo could be advanced through its stages
+ * from the UI: the owner did exactly that in production. Only /skip-committee
+ * happened to carry its own `status === "ملغاة"` line.
+ *
+ * THE THREE BLOCKS, all orthogonal to the stage and each with its own column:
+ *   cancelled (status)          — dead work; nothing may move it
+ *   awaiting completion (latch) — parked on the client
+ *   paused (paused_at)          — parked by us
+ *
+ * ⚠ IT DOES NOT TEST FILED. A terminal stage is the TRANSITION TABLE's job
+ * (validateStageTransition has no outbound edge from مرفوعة); folding it in here
+ * would put one rule in two places and let them disagree.
+ *
+ * ⚠ THERE IS NO UN-CANCEL PATH IN THIS CODEBASE — verified by grep across
+ * server/routes.ts: nothing clears status back off "ملغاة". So this can never
+ * strand a memo that had a way back; if such a path is ever built it must not be
+ * gated on this helper.
+ */
+export function isMemoActionable(m: MemoStateFields | null | undefined): boolean {
+  if (!m) return false;
+  if (isMemoCancelled(m)) return false;
+  if (m.awaitingCompletion) return false;
+  if (m.pausedAt) return false;
+  return true;
 }
 
 /**

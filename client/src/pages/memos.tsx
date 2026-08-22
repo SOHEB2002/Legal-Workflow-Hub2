@@ -113,6 +113,7 @@ import {
   nearestUpcomingHearingDate,
   getMemoDisplayStage,
   isMemoCancelled,
+  isMemoActionable,
 } from "@shared/schema";
 import type {
   Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
@@ -297,16 +298,19 @@ function getMemoPriorityGroup(m: Memo): 1 | 2 | 3 | 4 {
 // helpers, narrowed for memos: cases_review_head is the committee chair
 // (memos belong to cases). Department head is dept-scoped via the
 // case's departmentId; we compute that from the current cases list.
-function memoIsActionable(memo: Memo): boolean {
-  return !memo.awaitingCompletion && !memo.pausedAt;
-}
+// 🔴 MOVED TO shared/schema (isMemoActionable) IN BATCH 11, AND IT GAINED THE
+// MISSING CANCELLATION TERM. It read `!awaitingCompletion && !pausedAt` only, and
+// memo-advance-panel.tsx held a verbatim copy with the same hole — so every
+// review/committee/take-notes control stayed live on a CANCELLED memo, and the
+// server endpoints did not refuse either. The owner advanced a cancelled memo
+// through its stages in production. Imported now; no local copy to drift.
 
 function canDoMemoInternalReview(
   memo: Memo,
   userRole: string,
   userId: string,
 ): boolean {
-  if (!memoIsActionable(memo)) return false;
+  if (!isMemoActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) return false;
   // Phase-9.1 — actor lock matches the server gate on
   // POST /api/memos/:id/internal-review: only the designated peer
@@ -321,7 +325,7 @@ function canDoMemoCommitteeDecision(
   userRole: string,
   isLaborEntity: boolean,
 ): boolean {
-  if (!memoIsActionable(memo)) return false;
+  if (!isMemoActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.COMMITTEE) return false;
   return userRole === "branch_manager" ||
     userRole === (isLaborEntity ? "labor_review_head" : "cases_review_head");
@@ -345,9 +349,12 @@ function canSkipMemoCommittee(
   memoCase: LawCase | null,
   userDeptId: string | null,
 ): boolean {
-  if (!memoIsActionable(memo)) return false;
+  // The explicit `status === "ملغاة"` line that stood here is GONE — not dropped,
+  // absorbed: isMemoActionable now carries cancellation, so this gate keeps the
+  // same behaviour with the rule in one place. It was the only client gate that
+  // had it, which is exactly why the other three leaked.
+  if (!isMemoActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.COMMITTEE) return false;
-  if (memo.status === "ملغاة") return false;
   if (userRole === "branch_manager") return true;
   if (userRole === "department_head") {
     return !!memoCase && !!userDeptId && memoCase.departmentId === userDeptId;
@@ -367,7 +374,7 @@ function canDoMemoTakeNotesOutcome(
   memoCase: { departmentId?: string | null } | null,
   userDeptId: string | null,
 ): boolean {
-  if (!memoIsActionable(memo)) return false;
+  if (!isMemoActionable(memo)) return false;
   if (memo.currentStage !== MemoStage.TAKING_NOTES) return false;
   if (
     userRole === "department_head" &&

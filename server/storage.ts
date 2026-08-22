@@ -1453,6 +1453,27 @@ const pausedLongEnough = (col: AnyPgColumn) =>
 const pausedDaysExpr = (col: AnyPgColumn) =>
   sql<number>`FLOOR(EXTRACT(EPOCH FROM (NOW() - ${col})) / 86400)::int`;
 
+// 🔴 THE SQL COUNTERPART OF shared/schema isActiveMemo — "not cancelled, not
+// filed". Batch 11.
+//
+// It exists as a NAMED fragment rather than inline because the TS helper cannot
+// be called from a WHERE clause, so this is the one place the rule gets
+// re-expressed and it must not be re-expressed a second time. The three terms
+// mirror the helper exactly, arm for arm:
+//   status <> 'ملغاة'                     → isMemoCancelled
+//   COALESCE(current_stage,'') <> 'مرفوعة' → isMemoFiled, the real test
+//   status <> 'مرفوعة'                     → isMemoFiled's LEGACY arm, for
+//                                            pre-Phase-9 rows filed before the
+//                                            stage column existed
+// COALESCE because current_stage is NULLABLE and `NULL <> 'مرفوعة'` is NULL, not
+// TRUE — without it every legacy null-stage memo would drop out of the result.
+//
+// ⚠ IT REPLACES `status NOT IN ('ملغاة','مرفوعة','معتمدة')`, whose مرفوعة and
+// معتمدة arms never matched anything: status stops moving at creation.
+const memoIsActiveSql = sql`${memos.status} <> 'ملغاة'
+  AND COALESCE(${memos.currentStage}, '') <> 'مرفوعة'
+  AND ${memos.status} <> 'مرفوعة'`;
+
 // elapsedWholeDays and latestActivityMsByEntity were REMOVED with feed blocks
 // 20/21 — the escalation was their only caller, and tsc --noUnusedLocals (held
 // at 0) will not tolerate an unreferenced module function. They are in git at
@@ -2917,7 +2938,10 @@ export class DatabaseStorage implements IStorage {
       pausedAt: memos.pausedAt, pausedDays: pausedDaysExpr(memos.pausedAt),
     }).from(memos).where(and(
       pausedLongEnough(memos.pausedAt),
-      sql`${memos.status} NOT IN ('ملغاة', 'مرفوعة', 'معتمدة')`,
+      // 🔴 BATCH 11 — was `status NOT IN ('ملغاة','مرفوعة','معتمدة')`, whose two
+      // non-cancellation arms never matched, so a paused memo that had since been
+      // FILED still raised the paused_aging task and its one-time 3-day notice.
+      memoIsActiveSql,
     ));
     for (const r of memoRows) {
       out.push({
