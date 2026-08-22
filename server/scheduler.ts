@@ -216,12 +216,13 @@ async function sendUnupdatedHearingAlert(hearing: any, allUsers: any[], allNotif
 
     const lawyer = allUsers.find((u: any) => u.id === hearingOwnerId);
     if (lawyer?.departmentId) {
-      // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
-      // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
-      const deptHead = allUsers.find(
-        (u: any) => !!u.departmentId && u.departmentId === lawyer.departmentId && u.role === "department_head" && u.isActive
-      );
-      if (deptHead) recipientIds.push(deptHead.id);
+      // 🔴 BATCH 13 — was `.find(…)`, first head only, so a second head of the
+      // department was never paged. resolveNotificationRecipients appends EVERY
+      // active head and keeps both guards this lookup had: the mandatory
+      // !!u.departmentId (a null/"" dept must never match) and the isActive filter.
+      // (The `.find` on the LAWYER above is a lookup by unique id, not a head
+      // resolution — deliberately left as-is.)
+      recipientIds.push(...resolveNotificationRecipients([], allUsers, { departmentId: lawyer.departmentId }));
     }
   }
 
@@ -537,15 +538,24 @@ async function checkLegalDeadlines() {
         if (!notificationExists(allNotifications, deadline.id, "موعد نظامي فائت", recipientId)) {
           await storage.updateLegalDeadline(deadline.id, { status: "فائت" });
 
-          const recipients = [recipientId];
-          if (caseInfo?.departmentId) {
-            // !!u.departmentId — a null/"" dept must never match; u.isActive mirrors
-            // checkStruckOffExpiry's lookup, so a deactivated head stops being paged.
-            const deptHead = allUsers.find((u: any) => !!u.departmentId && u.departmentId === caseInfo.departmentId && u.role === "department_head" && u.isActive);
-            if (deptHead) recipients.push(deptHead.id);
-          }
-          const branchManager = allUsers.find((u: any) => u.role === "branch_manager");
-          if (branchManager) recipients.push(branchManager.id);
+          // 🔴 BATCH 13 — THE OVERDUE («فائت») LEGAL-DEADLINE ESCALATION, the
+          // highest-stakes of the nine single-head sites: a MISSED STATUTORY
+          // DEADLINE that reached only one of two department heads.
+          //
+          // BOTH lookups were single-match. The head `.find` dropped every co-head,
+          // and the branch_manager `.find` dropped co-managers AND did not check
+          // isActive at all — so a deactivated manager could absorb the escalation
+          // and nobody senior would ever see it.
+          //
+          // resolveNotificationRecipients does the assignee + all-heads fan-out with
+          // the mandatory !!u.departmentId guard, filters to active users, and
+          // de-duplicates — so the managers can simply be listed as candidates and a
+          // head who is also a manager still receives exactly one notice.
+          const recipients = resolveNotificationRecipients(
+            [recipientId, ...allUsers.filter((u: any) => u.isActive && u.role === "branch_manager").map((u: any) => u.id)],
+            allUsers,
+            { departmentId: caseInfo?.departmentId },
+          );
 
           for (const rid of Array.from(new Set(recipients))) {
             await storage.createNotification({
@@ -1728,8 +1738,10 @@ async function checkStruckOffExpiry() {
         // notify the department head alone, never the lawyer actually on it.
         const struckOffLawyerId = caseItem.primaryLawyerId || caseItem.responsibleLawyerId;
         if (struckOffLawyerId) notifyIds.push(struckOffLawyerId);
-        const deptHead = allUsers.find((u: any) => u.departmentId === caseItem.departmentId && u.role === "department_head" && u.isActive);
-        if (deptHead) notifyIds.push(deptHead.id);
+        // 🔴 BATCH 13 — was `.find(…)`, first head only, and it also lacked the
+        // mandatory !!u.departmentId guard, so a head with a NULL department matched
+        // every case with a NULL department. Both are fixed by the shared helper.
+        notifyIds.push(...resolveNotificationRecipients([], allUsers, { departmentId: caseItem.departmentId }));
 
         for (const rid of Array.from(new Set(notifyIds))) {
           await storage.createNotification({

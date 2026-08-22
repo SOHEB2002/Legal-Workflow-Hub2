@@ -3583,6 +3583,50 @@ export default function ConsultationsPage() {
                 <p className="p-3 bg-muted rounded-md">{selectedConsultation.questionSummary}</p>
               </div>
 
+              {/* ==================== المراجع الداخلي (batch 13) ====================
+                  🔴 THE REVIEWER WAS INVISIBLE DURING مراجعة_داخلية. Its only two
+                  renders (the editable Select and the read-only value) both live
+                  inside the committee card below, gated on
+                  currentStage === COMMITTEE — one stage LATER. So during internal
+                  review, exactly when the reviewer is the only thing the record is
+                  waiting on, the dialog named nobody.
+
+                  A SEPARATE BLOCK, NOT A WIDENED GATE on the card below. That card
+                  is «نموذج الإحالة للجنة المراجعة» — a committee REFERRAL form with
+                  six fields. Rendering it at مراجعة_داخلية would surface a referral
+                  form for a referral that has not happened and put a false heading
+                  on screen. This mirrors the CASE view instead
+                  (case-details-dialog.tsx — same stage test, same resolved name),
+                  which is the established shape for this exact question.
+
+                  ⚠ ONE DELIBERATE DIVERGENCE FROM THE CASE VIEW: it also requires
+                  `&& internalReviewerId`, so a null reviewer renders nothing. Here
+                  the block renders on the STAGE ALONE and says «لم يُعيَّن مراجع
+                  داخلي» when the column is empty. That state is reachable — the
+                  reviewer is required on the FORWARD edge into this stage
+                  (/advance-stage) but a department transfer NULLs it
+                  (routes.ts, the isTransfer arm of /assign) and the rollback edge
+                  back into review re-enters with no such requirement. Silence there
+                  would show an empty dialog with no reason why nobody is acting;
+                  the empty state names the gap. */}
+              {selectedConsultation.currentStage === ConsultationStage.INTERNAL_REVIEW && (
+                <div className="text-right border-t pt-4" data-testid="panel-internal-reviewer">
+                  <h4 className="font-semibold mb-2">المراجع الداخلي</h4>
+                  {selectedConsultation.internalReviewerId ? (
+                    <p className="p-3 bg-muted rounded-md" data-testid="internal-reviewer-name">
+                      <BidiText>{getLawyerName(selectedConsultation.internalReviewerId)}</BidiText>
+                    </p>
+                  ) : (
+                    <p
+                      className="p-3 bg-muted rounded-md text-muted-foreground"
+                      data-testid="internal-reviewer-empty"
+                    >
+                      لم يُعيَّن مراجع داخلي
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Committee referral form (نموذج الإحالة للجنة المراجعة).
                   Surfaces only once the consultation reaches لجنة_مراجعة —
                   before that the same fields remain editable inline above
