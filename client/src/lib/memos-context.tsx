@@ -2,6 +2,7 @@ import { createContext, useContext, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Memo, MemoStatusValue, InsertMemo } from "@shared/schema";
+import { isActiveMemo } from "@shared/schema";
 import { useAuth } from "./auth-context";
 import { useCases } from "./cases-context";
 
@@ -104,14 +105,15 @@ export function MemosProvider({ children }: { children: React.ReactNode }) {
 
   const getMemosByHearing = (hearingId: string) => memos.filter(m => m.hearingId === hearingId);
 
-  const getActiveMemos = () => memos.filter(m => !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status));
+  // 🔴 BATCH 10 — both read `status`, which stops moving at creation, so «مرفوعة»
+  // never matched and FILED memos counted as active and as overdue. getOverdueMemos
+  // carried the identical predicate and is fixed with it: leaving it would have kept
+  // the same defect alive one function below the one that was reported.
+  const getActiveMemos = () => memos.filter(isActiveMemo);
 
   const getOverdueMemos = () => {
     const today = new Date().toISOString().split("T")[0];
-    return memos.filter(m => 
-      !["معتمدة", "مرفوعة", "ملغاة"].includes(m.status) && 
-      m.deadline < today
-    );
+    return memos.filter(m => isActiveMemo(m) && m.deadline < today);
   };
 
   const getMemosNeedingReview = () => memos.filter(m => m.status === "قيد_المراجعة");

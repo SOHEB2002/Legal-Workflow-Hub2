@@ -81,7 +81,7 @@ import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate, caseAttendanceLawyerId } from "@shared/schema";
+import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate, caseAttendanceLawyerId, isActiveMemo } from "@shared/schema";
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -105,7 +105,6 @@ import { useToast } from "@/hooks/use-toast";
 import {
   HearingsAdvancedFilters,
   EMPTY_HEARINGS_ADV_FILTERS,
-  PENDING_MEMO_STATUSES,
   type AdvancedHearingsFilters,
 } from "@/components/hearings-advanced-filters";
 
@@ -672,7 +671,9 @@ export default function HearingsPage() {
       if (advFilters.dateTo && h.hearingDate > advFilters.dateTo) return false;
       if (advFilters.withPendingMemos) {
         const linked = getMemosByHearing(h.id);
-        if (!linked.some((m) => PENDING_MEMO_STATUSES.has(m.status))) return false;
+        // 🔴 BATCH 10 — was PENDING_MEMO_STATUSES.has(m.status), which matched every
+        // non-cancelled memo whatever its stage. isActiveMemo is the shared test.
+        if (!linked.some(isActiveMemo)) return false;
       }
       if (basicSearchQ) {
         const c = h.caseId ? getCaseById(h.caseId) : null;
