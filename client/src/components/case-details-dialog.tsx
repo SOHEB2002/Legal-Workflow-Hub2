@@ -1889,11 +1889,28 @@ export function CaseDetailsDialog({
                           <div className="flex items-center gap-2 mt-1 justify-end">
                             {inlineEditField === `hearing-${selectedCase.id}` ? (
                               <>
-                                <Input type="date" value={inlineEditValue} onChange={e => setInlineEditValue(e.target.value)} className="h-7 text-sm w-36" autoFocus data-testid="input-next-hearing-date"
-                                  onKeyDown={async e => {
-                                    if (e.key === "Enter") { await updateCase(selectedCase.id, { nextHearingDate: inlineEditValue || null }); setInlineEditField(null); }
-                                    else if (e.key === "Escape") setInlineEditField(null);
-                                  }} />
+                                {/* 🔴 HijriDatePicker, not <Input type="date"> (batch 14).
+                                    A native date input renders a GREGORIAN-ONLY browser
+                                    picker — no Hijri tab, no year/month panes — which
+                                    pause-until-field.tsx explicitly warns against.
+                                    DROP-IN: the picker emits `${yyyy}-${mm}-${dd}`, the
+                                    same shape the native input produced, and
+                                    inlineEditValue is seeded from
+                                    selectedCase.nextHearingDate and sent verbatim as
+                                    `inlineEditValue || null` — nothing parses it.
+                                    ⚠ THE onKeyDown WENT WITH THE INPUT and is not
+                                    re-created: the picker is a popover with its own
+                                    keyboard handling, and Enter inside it selects a day
+                                    rather than submitting a text field. The ✓ and ✕
+                                    buttons beside it already were the primary
+                                    save/cancel affordance and are unchanged — no way
+                                    out of the edit is lost. */}
+                                <HijriDatePicker
+                                  value={inlineEditValue}
+                                  onChange={setInlineEditValue}
+                                  className="h-7 text-sm w-36"
+                                  data-testid="input-next-hearing-date"
+                                />
                                 <Button variant="ghost" size="sm" onClick={async () => { await updateCase(selectedCase.id, { nextHearingDate: inlineEditValue || null }); setInlineEditField(null); }}><Check className="w-3 h-3" /></Button>
                                 <Button variant="ghost" size="sm" onClick={() => setInlineEditField(null)}><X className="w-3 h-3" /></Button>
                               </>

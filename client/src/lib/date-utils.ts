@@ -151,3 +151,29 @@ export function formatDayMonthArabic(date: Date | string | null | undefined): st
   return formatDateArabic(date, "dd MMMM");
 }
 
+
+// ==================== Arabic weekday name ====================
+// 🔴 HOISTED IN BATCH 14 from its THREE verbatim copies — hearings.tsx, cases.tsx
+// and memos.tsx. hearings.tsx declared it first; cases.tsx copied it for its day
+// separators and memos.tsx copied it again for the same feature, each carrying a
+// note that a third copy was the trigger to hoist. This is that hoist. The three
+// were byte-identical when moved (verified by checksum, not by eye), so nothing
+// had to be chosen between and no behaviour changed.
+//
+// Indexed by JS Date.getDay(), Sunday = 0. An unparseable date yields "" rather
+// than throwing or printing "Invalid Date", which is what all three copies did.
+//
+// ⚠ MOVED VERBATIM, INCLUDING ITS ONE WEAKNESS. `new Date("YYYY-MM-DD")` parses as
+// UTC midnight and getDay() then reads it in the BROWSER's zone, so west of UTC
+// this names the previous weekday. Harmless for this firm (Asia/Riyadh is +3, so
+// UTC midnight is 03:00 the same day) and identical in all three originals — it is
+// preserved rather than quietly changed, because fixing it here would alter what
+// three shipped surfaces render without anyone having asked for it.
+const ARABIC_WEEKDAYS = [
+  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
+] as const;
+
+export function arabicWeekday(date: string): string {
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
+}

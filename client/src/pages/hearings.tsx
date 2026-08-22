@@ -90,16 +90,11 @@ import { useDepartments } from "@/lib/departments-context";
 import type { Hearing } from "@shared/schema";
 import { HearingStatus, HearingResult, HearingType, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
-import { formatTimeAmPm, formatDualDate, formatHijriDateFull } from "@/lib/date-utils";
+import { formatTimeAmPm, formatDualDate, formatHijriDateFull, arabicWeekday } from "@/lib/date-utils";
 
-// Arabic weekday names indexed by JS Date.getDay() (Sunday = 0).
-const ARABIC_WEEKDAYS = [
-  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
-] as const;
-const arabicWeekday = (date: string): string => {
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
-};
+// arabicWeekday MOVED to lib/date-utils in batch 14 — it had been copied verbatim
+// into cases.tsx and memos.tsx for their day separators, and three copies was the
+// documented trigger to hoist. Imported now; behaviour unchanged.
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { useToast } from "@/hooks/use-toast";
 import {

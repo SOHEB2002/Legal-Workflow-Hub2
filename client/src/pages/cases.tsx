@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
-import { formatHijriDateFull, formatDualDate } from "@/lib/date-utils";
+import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { useLocation } from "wouter";
 import { getClientRoleLabel } from "@/lib/client-role";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -342,17 +342,9 @@ const VIOLATION_SEARCH_FIELDS: readonly (keyof LawCase)[] = [
 
 // Copied VERBATIM from hearings.tsx (which declares it module-locally and does
 // not export it) so the day headings on this page speak the hearings page's own
-// vocabulary. Deliberately duplicated rather than hoisted into date-utils: that
-// would edit the hearings page inside a cases-page commit, and this is a pure
-// 3-line lookup with no behaviour to drift. If a THIRD copy is ever wanted,
-// hoist all three at once instead of adding it.
-const ARABIC_WEEKDAYS = [
-  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
-] as const;
-const arabicWeekday = (date: string): string => {
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
-};
+// vocabulary. ✅ THE HOIST THIS NOTE CALLED FOR HAPPENED IN BATCH 14: a third copy
+// appeared in memos.tsx, and all three now import arabicWeekday from
+// lib/date-utils. The three were byte-identical when moved, so nothing changed.
 
 // The bottom group's heading. It must read as a GROUP, not as a date — these
 // rows have no single day in common (a hearing last week, a hearing two years

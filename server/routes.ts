@@ -204,6 +204,7 @@ import {
   type ContractStageValue,
   type MemoStageValue,
   type LawCase,
+  type Consultation,
   type TicketComment,
   type ConsultationTypeValue,
   type ContractTypeValue,
@@ -6863,6 +6864,57 @@ export async function registerRoutes(
     }
   });
 
+  // 🔴 ENTERING مراجعة_داخلية REQUIRES A DESIGNATED REVIEWER — from EITHER direction.
+  //
+  // Batch 14. This block lived inline in /advance-stage and guarded the FORWARD edge
+  // only. /return-stage is a separate handler that wrote `{ currentStage }` and
+  // nothing else, and the consultation rollback rule in validateStageTransition
+  // allows COMMITTEE → INTERNAL_REVIEW (index 4 → 3, so targetIdx < currentIdx) for
+  // a branch_manager, an own-department head, and the assigned lawyer one step back.
+  //
+  // VERIFIED REACHABLE, not theoretical: POST /:id/assign NULLs
+  // internal_reviewer_id on a department transfer (deliberately — the reviewer came
+  // from the SOURCE department's roster), and nothing re-requires one on the way
+  // back in. A transferred consultation rolled back into review therefore sat at
+  // مراجعة_داخلية with a NULL reviewer: block 7 of the tasks feed matches on
+  // internalReviewerId, so NO مهامي task reached anyone, and /internal-review is
+  // locked to (designated reviewer | own-dept head | branch_manager) — leaving no
+  // way in for the very person the record was waiting on.
+  //
+  // ONE implementation, called from both handlers. Returning a discriminated union
+  // rather than writing the response keeps the two call sites in charge of their own
+  // status codes and keeps this function free of `res`.
+  //
+  // ⚠ ALL FIVE CHECKS ARE THE ORIGINAL ONES, MOVED VERBATIM — presence, active user,
+  // not admin_support, same department as the consultation, and not the assignee
+  // (four-eyes). The Arabic messages are unchanged, so the forward edge behaves
+  // exactly as it did.
+  async function resolveConsultationInternalReviewer(
+    consultation: { internalReviewerId?: string | null; departmentId?: string | null; assignedTo?: string | null },
+    bodyReviewerId: unknown,
+  ): Promise<{ ok: true; reviewerId: string } | { ok: false; error: string }> {
+    const overrideReviewer =
+      (typeof bodyReviewerId === "string" && bodyReviewerId) ? bodyReviewerId : undefined;
+    const reviewerId = overrideReviewer || consultation.internalReviewerId || undefined;
+    if (!reviewerId) {
+      return { ok: false, error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" };
+    }
+    const reviewer = await storage.getUser(reviewerId);
+    if (!reviewer || !reviewer.isActive) {
+      return { ok: false, error: "المراجع الداخلي المختار غير صالح" };
+    }
+    if (reviewer.role === "admin_support") {
+      return { ok: false, error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" };
+    }
+    if (reviewer.departmentId !== consultation.departmentId) {
+      return { ok: false, error: "المراجع الداخلي يجب أن يكون من نفس قسم الاستشارة" };
+    }
+    if (reviewerId === consultation.assignedTo) {
+      return { ok: false, error: "لا يمكن أن يكون المراجع الداخلي هو المحامي المسند إليه للاستشارة" };
+    }
+    return { ok: true, reviewerId };
+  }
+
   // POST /api/consultations/:id/advance-stage
   // Body: { targetStage }. Generic forward via validateStageTransition.
   // Used for transitions where no dedicated endpoint applies. The dedicated
@@ -6920,30 +6972,13 @@ export async function registerRoutes(
       // the consultation if set, else the one chosen now (req.body), and
       // persist it so the internal-review action is gated to that reviewer
       // below. Four-eyes: the reviewer can't be the assigned (answering) lawyer.
+      // 🔴 EXTRACTED IN BATCH 14 — the identical requirement now guards the ROLLBACK
+      // edge too. See resolveConsultationInternalReviewer.
       if (targetStage === ConsultationStage.INTERNAL_REVIEW) {
-        const overrideReviewer =
-          (typeof req.body?.internalReviewerId === "string" && req.body.internalReviewerId)
-            ? req.body.internalReviewerId
-            : undefined;
-        const reviewerId = overrideReviewer || consultation.internalReviewerId || undefined;
-        if (!reviewerId) {
-          return res.status(400).json({ error: "يجب اختيار المراجع الداخلي قبل الانتقال للمرحلة" });
-        }
-        const reviewer = await storage.getUser(reviewerId);
-        if (!reviewer || !reviewer.isActive) {
-          return res.status(400).json({ error: "المراجع الداخلي المختار غير صالح" });
-        }
-        if (reviewer.role === "admin_support") {
-          return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
-        }
-        if (reviewer.departmentId !== consultation.departmentId) {
-          return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم الاستشارة" });
-        }
-        if (reviewerId === consultation.assignedTo) {
-          return res.status(400).json({ error: "لا يمكن أن يكون المراجع الداخلي هو المحامي المسند إليه للاستشارة" });
-        }
+        const resolved = await resolveConsultationInternalReviewer(consultation, req.body?.internalReviewerId);
+        if (!resolved.ok) return res.status(400).json({ error: resolved.error });
         // Persist (bootstrap or re-designate) so the internal-review gate works.
-        stageUpdate.internalReviewerId = reviewerId;
+        stageUpdate.internalReviewerId = resolved.reviewerId;
       }
 
       const updated = await storage.updateConsultationAndLog(
@@ -7002,9 +7037,22 @@ export async function registerRoutes(
 
       const fromLabel = ConsultationStageLabels[consultation.currentStage] || consultation.currentStage;
       const toLabel = (ConsultationStageLabels as Record<string, string>)[targetStage] || targetStage;
+
+      // 🔴 BATCH 14 — ROLLING BACK **INTO** مراجعة_داخلية NEEDS A REVIEWER, exactly as
+      // the forward edge does. Same helper, same five checks, same messages; this
+      // handler previously wrote `{ currentStage }` alone, which is how a
+      // department-transferred consultation could land here with a NULL reviewer and
+      // become invisible to the feed and unactionable by anyone.
+      const returnUpdate: Partial<Consultation> = { currentStage: targetStage as ConsultationStageValue };
+      if (targetStage === ConsultationStage.INTERNAL_REVIEW) {
+        const resolved = await resolveConsultationInternalReviewer(consultation, req.body?.internalReviewerId);
+        if (!resolved.ok) return res.status(400).json({ error: resolved.error });
+        returnUpdate.internalReviewerId = resolved.reviewerId;
+      }
+
       const updated = await storage.updateConsultationAndLog(
         consultation.id,
-        { currentStage: targetStage as ConsultationStageValue },
+        returnUpdate,
         {
           activityType: ConsultationActivityType.STAGE_RETURNED,
           description: `إرجاع من ${fromLabel} إلى ${toLabel}`,
