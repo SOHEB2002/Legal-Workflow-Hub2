@@ -92,6 +92,7 @@ import {
   isActiveMemo,
   isMemoCancelled,
   isMemoFiled,
+  adminTrackChoiceApplies,
   ConsultationActivityType,
   getStagesForClassification,
   CollectionTaskTitlePrefix,
@@ -9686,6 +9687,30 @@ export async function registerRoutes(
       }
       if (String(lawCase.adminCaseSubType || "").trim()) {
         return res.status(400).json({ error: "مسار هذه القضية محدد بالفعل" });
+      }
+      // 🔴 THE CLASSIFICATION MAY ALREADY DECIDE THE PATH — the same term the
+      // client gate was missing, added here for parity (visibility ==
+      // authorization). An administrative case entered as منظورة_بالمحكمة resolves
+      // to the in-court path without ever consulting adminCaseSubType, so setting
+      // one would write a column nothing reads and leave a misleading record of a
+      // routing decision that never governed anything.
+      //
+      // Same shared predicate as the button, so the two cannot drift, and
+      // deliberately not a hardcoded classification check — see its declaration.
+      if (!adminTrackChoiceApplies(
+        (lawCase.caseClassification || "قيد_الدراسة") as CaseClassificationValue,
+        department.name,
+        // `?? undefined` — the column is nullable and the resolver's optional
+        // params are `string | undefined`. The value cannot change this answer
+        // either way (clientRole only picks between two in-court memo arrays, and
+        // is ignored entirely on the قيد_الدراسة branch), but it is passed
+        // faithfully rather than dropped so the call reads the same as the
+        // button's.
+        lawCase.clientRole ?? undefined,
+        lawCase.memoRequired,
+        lawCase.isSettlementCase,
+      )) {
+        return res.status(400).json({ error: "مسار هذه القضية محدد بتصنيفها — لا حاجة لاختيار مسار" });
       }
 
       const track = String(req.body.track || "").trim();

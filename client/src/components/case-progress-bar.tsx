@@ -19,7 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
-import { AdminCaseSubType, GrievanceNumberUnavailable } from "@shared/schema";
+import { AdminCaseSubType, GrievanceNumberUnavailable, adminTrackChoiceApplies } from "@shared/schema";
 
 // ==================== TERMINAL / OFF-PATH STAGE DISPLAY ====================
 // None of the terminal stages belongs to ANY array returned by
@@ -435,10 +435,35 @@ export function CaseProgressBar({
   // is false, hiding «المرحلة التالية» and «تجاوز الاستكمال». The instant the
   // track is set the path re-resolves to a 6- or 9-stage array and both become
   // true — which is exactly "after the choice, استلام behaves like any other".
+  //
+  // 🔴 A FIFTH TERM (this batch): the classification must not ALREADY decide the
+  // path. The four terms above have no way to express that, so an administrative
+  // case entered as منظورة_بالمحكمة — which resolves to the four-stage in-court
+  // path on its own, with adminCaseSubType never consulted — still sat at استلام
+  // with a NULL sub-type and was asked a question that cannot apply to it. Ten
+  // production cases created 2026-08-22 were in that state: the bar rendered the
+  // right path and offered «المرحلة التالية», with the track buttons beside it.
+  //
+  // adminTrackChoiceApplies (shared/schema) re-resolves the path with NO track and
+  // returns true only if the answer is the unrouted stub — i.e. only if the
+  // sub-type is genuinely the missing piece. Deliberately NOT `!== "منظورة_بالمحكمة"`:
+  // a future classification with the same property would reintroduce this.
+  //
+  // ⚠ `departmentName === "إداري"` is now strictly redundant (the stub is returned
+  // from the admin arm alone) and is KEPT anyway — it states the intent locally,
+  // without requiring the reader to know the resolver's internals, and it keeps
+  // the question scoped to إداري if another department ever gains a stub.
   const needsAdminTrack =
     isAtReception
     && departmentName === "إداري"
     && !String(adminCaseSubType || "").trim()
+    && adminTrackChoiceApplies(
+      effectiveClassification as CaseClassificationValue,
+      departmentName,
+      clientRole,
+      memoRequired,
+      isSettlementCase,
+    )
     && !!onChooseAdminTrack
     && !disabled;
 
