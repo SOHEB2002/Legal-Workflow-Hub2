@@ -2434,6 +2434,47 @@ export function getStagesForClassification(
   return UnderStudyGeneralStages;
 }
 
+// 🔴 DOES THE ADMIN TRACK QUESTION («مسار التظلم» / «مسار الدعوى») STILL APPLY?
+//
+// Batch 2 gated those buttons on «إداري + استلام + no sub-type», which has no term
+// for a case whose CLASSIFICATION already decides its path. An administrative case
+// entered as منظورة_بالمحكمة resolves to the four-stage in-court path on its own —
+// adminCaseSubType is never consulted for it — yet it sat at استلام with a NULL
+// sub-type and so was asked a question that cannot apply to it. Ten production
+// cases created 2026-08-22 were in exactly that state.
+//
+// 🔴 IT ASKS THE RESOLVER RATHER THAN NAMING A CLASSIFICATION. Hardcoding
+// `!== "منظورة_بالمحكمة"` would re-break the moment a third classification with the
+// same property appeared. The property IS "getStagesForClassification cannot route
+// this case without a track", and the only honest way to test it is to resolve with
+// NO track and see whether the answer is the unrouted stub.
+//
+// Reference equality against AdminUnroutedStages is sound and deliberate: the
+// resolver RETURNS that module-level constant by reference from its one admin arm,
+// and that arm is the ONLY place in the whole function where adminCaseSubType is
+// read. So `=== AdminUnroutedStages` is precisely "the sub-type is what's missing",
+// not a value comparison that a same-shaped array could accidentally satisfy.
+//
+// Deliberately takes no adminCaseSubType parameter — resolving WITHOUT one is the
+// entire question, and accepting it would invite a caller to pass the case's real
+// value and always get false.
+export function adminTrackChoiceApplies(
+  classification: CaseClassificationValue,
+  departmentName?: string,
+  clientRole?: string,
+  memoRequired?: boolean,
+  isSettlementCase?: boolean,
+): boolean {
+  return getStagesForClassification(
+    classification,
+    departmentName,
+    clientRole,
+    memoRequired,
+    isSettlementCase,
+    null,
+  ) === AdminUnroutedStages;
+}
+
 export function getStageLabel(stage: CaseStageValue): string {
   return CaseStageLabels[stage] || stage;
 }
