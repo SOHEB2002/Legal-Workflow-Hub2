@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
-import { formatHijriDateFull, formatDualDate } from "@/lib/date-utils";
+import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
 import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
@@ -235,19 +235,9 @@ function getDeadlineColor(deadline: string): string {
 }
 
 // ==================== DAY-SEPARATOR VOCABULARY ====================
-// Copied VERBATIM from cases.tsx, which copied it verbatim from hearings.tsx
-// (which declares it module-locally and does not export it), so all three pages
-// name a day identically. The cases-page note explains why it is duplicated
-// rather than hoisted into date-utils; that reasoning holds here unchanged —
-// except that this is now the THIRD copy, which is the trigger that note names.
-// 🔴 IF A FOURTH IS EVER WANTED, HOIST ALL FOUR AT ONCE instead of adding it.
-const ARABIC_WEEKDAYS = [
-  "الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت",
-] as const;
-const arabicWeekday = (date: string): string => {
-  const d = new Date(date);
-  return Number.isNaN(d.getTime()) ? "" : ARABIC_WEEKDAYS[d.getDay()];
-};
+// ✅ HOISTED IN BATCH 14. This was the THIRD verbatim copy and the trigger the
+// note here named; arabicWeekday now lives in lib/date-utils and all three pages
+// import it. The copies were byte-identical when moved, so no page changed.
 
 // 🔴 THE HEADING NAMES ITS SOURCE, AND THIS IS WHERE THIS PAGE DELIBERATELY
 // DIVERGES FROM THE CASES PAGE (owner ruling). A memo's sort key is whichever is

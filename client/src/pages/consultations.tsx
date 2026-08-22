@@ -1145,6 +1145,11 @@ export default function ConsultationsPage() {
   const [showReturnDialog, setShowReturnDialog] = useState(false);
   const [returnConsultation, setReturnConsultation] = useState<Consultation | null>(null);
   const [returnTargetStage, setReturnTargetStage] = useState<string>("");
+  // 🔴 BATCH 14 — the rollback dialog now carries its own reviewer picker, because
+  // rolling back INTO مراجعة_داخلية requires a designated reviewer exactly as the
+  // forward edge does. Without it the user would hit a 400 with nothing on screen to
+  // satisfy: this is a DIFFERENT dialog from the advance one, which has its own.
+  const [returnReviewerId, setReturnReviewerId] = useState("");
 
   const [showReminderDialog, setShowReminderDialog] = useState(false);
   const [reminderConsultation, setReminderConsultation] = useState<Consultation | null>(null);
@@ -2055,6 +2060,9 @@ export default function ConsultationsPage() {
     // only choice an assigned_lawyer will see, and a sensible default for
     // dept_head / branch_manager too.
     setReturnTargetStage(targets.length > 0 ? targets[targets.length - 1] : "");
+    // Seed from the record so an unchanged reviewer round-trips; empty after a
+    // department transfer, which is the case the server now refuses.
+    setReturnReviewerId(c.internalReviewerId || "");
     setShowReturnDialog(true);
   };
 
@@ -2062,14 +2070,22 @@ export default function ConsultationsPage() {
     if (!returnConsultation || !returnTargetStage) return;
     setActionInProgress(true);
     try {
+      const returningToReview = returnTargetStage === ConsultationStage.INTERNAL_REVIEW;
+      if (returningToReview && !returnReviewerId) {
+        toast({ title: "اختر المراجع الداخلي", description: "يجب تعيين مراجع داخلي قبل الإرجاع للمراجعة", variant: "destructive" });
+        setActionInProgress(false);
+        return;
+      }
       await apiRequest("POST", `/api/consultations/${returnConsultation.id}/return-stage`, {
         targetStage: returnTargetStage,
+        ...(returningToReview ? { internalReviewerId: returnReviewerId } : {}),
       });
       await refreshConsultations();
       toast({ title: "تم إرجاع الاستشارة للمرحلة السابقة" });
       setShowReturnDialog(false);
       setReturnConsultation(null);
       setReturnTargetStage("");
+      setReturnReviewerId("");
     } catch (err) {
       toast({ title: "فشل إرجاع الاستشارة", description: extractApiError(err), variant: "destructive" });
     } finally {
@@ -4125,7 +4141,7 @@ export default function ConsultationsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={showReturnDialog} onOpenChange={(open) => { if (!open) { setShowReturnDialog(false); setReturnConsultation(null); setReturnTargetStage(""); } }}>
+      <AlertDialog open={showReturnDialog} onOpenChange={(open) => { if (!open) { setShowReturnDialog(false); setReturnConsultation(null); setReturnTargetStage(""); setReturnReviewerId(""); } }}>
         <AlertDialogContent dir="rtl">
           <AlertDialogHeader>
             <AlertDialogTitle>إرجاع الاستشارة لمرحلة سابقة</AlertDialogTitle>
@@ -4165,11 +4181,56 @@ export default function ConsultationsPage() {
               </div>
             );
           })()}
+          {/* 🔴 THE ROLLBACK'S OWN REVIEWER PICKER (batch 14). Mirrors the advance
+              dialog's control field-for-field — same option filter as the server's
+              five checks (active · not admin_support · same department · not the
+              assignee), so a name offered here can never 400.
+              Gated on the RESOLVED target, not on the select above: with a single
+              rollback target that select does not render at all and the stage is
+              pre-set by openReturnDialog, so keying on returnTargetStage is what
+              makes the picker appear in the one-target case too. */}
+          {returnConsultation && user
+            && returnTargetStage === ConsultationStage.INTERNAL_REVIEW && (
+            <div className="mt-3 space-y-1" dir="rtl">
+              <Label className="text-sm font-semibold">
+                المراجع الداخلي <span className="text-red-500">*</span>
+              </Label>
+              <Select
+                value={returnReviewerId || "none"}
+                onValueChange={(v) => setReturnReviewerId(v === "none" ? "" : v)}
+              >
+                <SelectTrigger data-testid="select-return-reviewer">
+                  <SelectValue placeholder="اختر مراجعاً" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— اختر مراجعاً —</SelectItem>
+                  {users
+                    .filter(u =>
+                      u.isActive
+                      && u.role !== "branch_manager" && u.role !== "admin_support"
+                      && u.role !== "hr" && u.role !== "technical_support"
+                      && u.departmentId === returnConsultation.departmentId
+                      && u.id !== returnConsultation.assignedTo
+                    )
+                    .map(u => (
+                      <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                يُعرض المراجع المعيَّن إن وُجد، أو اختر مراجعاً الآن (لا يكون المحامي المسند إليه).
+              </p>
+            </div>
+          )}
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel data-testid="button-cancel-return">إلغاء</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleReturnStage}
-              disabled={actionInProgress || !returnTargetStage}
+              disabled={
+                actionInProgress
+                || !returnTargetStage
+                || (returnTargetStage === ConsultationStage.INTERNAL_REVIEW && !returnReviewerId)
+              }
               data-testid="button-confirm-return"
             >
               تأكيد

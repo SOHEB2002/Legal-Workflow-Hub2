@@ -22,8 +22,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { HijriDatePicker } from "@/components/ui/hijri-date-picker";
 import { Switch } from "@/components/ui/switch";
 import {
   MemoType,
@@ -679,10 +679,20 @@ export function HearingDetailsDialog({
                         {detailHearing.result === "حكم" && (
                           <div>
                             <Label className="text-xs">مهلة الاعتراض (سجل تاريخي)</Label>
-                            <Input
-                              type="date"
+                            {/* 🔴 HijriDatePicker, not <Input type="date"> (batch 14).
+                                A native date input renders a GREGORIAN-ONLY browser
+                                picker — no Hijri tab, no year/month panes — which
+                                pause-until-field.tsx explicitly warns against and
+                                which every other date in this app already avoids.
+                                DROP-IN: the picker emits `${yyyy}-${mm}-${dd}`, the
+                                same shape the native input produced, and this value
+                                is stored and sent verbatim (seeded from
+                                detailHearing.objectionDeadline, sent as
+                                `editObjectionDeadline || null`) — nothing parses or
+                                reformats it on either side. */}
+                            <HijriDatePicker
                               value={editObjectionDeadline}
-                              onChange={(e) => setEditObjectionDeadline(e.target.value)}
+                              onChange={setEditObjectionDeadline}
                               data-testid="input-edit-objection-deadline"
                             />
                           </div>
