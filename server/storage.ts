@@ -657,6 +657,10 @@ export interface IStorage {
   // Idempotency key for the hearing-result hook: one judgment per judgment
   // hearing, so a re-save finds the existing row and creates nothing.
   getJudgmentByHearingId(hearingId: string): Promise<CaseJudgment | undefined>;
+  // Batch 8 — the nightly لائحة اعتراضية sweep's two reads. See the
+  // implementations for why each condition is in SQL.
+  getJudgmentsAwaitingObjectionMemo(today: string, notBefore: string): Promise<CaseJudgment[]>;
+  getJudgmentIdsWithObjectionMemoActivity(judgmentIds: string[]): Promise<Set<string>>;
 
   // ---- سجل الأحكام — THE WRITE PRIMITIVES (batch 2) ----
   // 🔴 CALL THESE ONLY THROUGH server/judgment-record.ts. Both write the judgment
@@ -8852,6 +8856,77 @@ export class DatabaseStorage implements IStorage {
       .orderBy(asc(caseJudgments.sequence))
       .limit(1);
     return rows[0] ? mapDbCaseJudgment(rows[0]) : undefined;
+  }
+
+  // ==================== BATCH 8 — THE DEFERRED لائحة اعتراضية ====================
+  // Rulings whose صك date has ARRIVED and whose objection window is still open —
+  // the candidates checkObjectionMemoDue (scheduler, 08:00) may need to raise a
+  // memo for. EVERY condition is in SQL and the whole thing is one indexed-ish
+  // read of a small table; it must never become getAllCases / getAllMemos.
+  //
+  // THE SIX CONDITIONS, each load-bearing:
+  //   opens_window = true        🔴 STORED INTENT, never re-derived. False for
+  //                              every appeal ruling and every quash, so neither
+  //                              can ever raise an objection.
+  //   outcome IN (ضدنا, جزئي)    the same pair the deed route gates on. لصالحنا
+  //                              has nothing to object to.
+  //   deed_received_date <= today  THE ARRIVAL TEST. A future date is a legitimate
+  //                              EXPECTED date and simply does not match yet —
+  //                              which is the whole deferral.
+  //   objection_deadline >= today  🔴 THE CATCH-UP BOUND, and it is why this needs
+  //                              no watermark column and no "last run" state. A
+  //                              ruling whose window has CLOSED needs no memo —
+  //                              the work is over — so the candidate set is
+  //                              self-expiring and stays at "rulings in an open
+  //                              objection window", a handful at any time. It also
+  //                              makes an outage lossless up to the window's whole
+  //                              length (30 days by default, 10 for المستعجل)
+  //                              rather than one night.
+  //   superseded_at IS NULL      the documented "this ruling still stands" test. A
+  //                              quashed ruling's objection is not raised late.
+  //   deed_received_date >= notBefore  see the caller — the epoch that keeps this a
+  //                              FORWARD-ONLY job instead of a historical sweep.
+  //
+  // ⚠ ALL FIVE DATE COMPARISONS ARE STRING COMPARISONS ON "YYYY-MM-DD", which IS
+  // the calendar comparison for that shape. `today` is resolved by the caller
+  // through firmToday() (Intl, Asia/Riyadh) and passed in, so the whole sweep is
+  // judged against ONE boundary and no row can be read in a second calendar.
+  async getJudgmentsAwaitingObjectionMemo(today: string, notBefore: string): Promise<CaseJudgment[]> {
+    const rows = await db.select().from(caseJudgments).where(and(
+      eq(caseJudgments.opensWindow, true),
+      inArray(caseJudgments.outcome, ["ضدنا", "جزئي"]),
+      sql`${caseJudgments.deedReceivedDate} IS NOT NULL`,
+      sql`${caseJudgments.deedReceivedDate} <= ${today}`,
+      sql`${caseJudgments.deedReceivedDate} >= ${notBefore}`,
+      sql`${caseJudgments.objectionDeadline} IS NOT NULL`,
+      sql`${caseJudgments.objectionDeadline} >= ${today}`,
+      sql`${caseJudgments.supersededAt} IS NULL`,
+    ));
+    return rows.map(mapDbCaseJudgment);
+  }
+
+  // Which of THESE rulings have already had their objection memo raised — one
+  // query for the whole candidate set, never one per ruling. Same shape and same
+  // reasoning as getJudgmentIdsWithAttachment above, including the empty-input
+  // short-circuit (`inArray(col, [])` compiles to a false-y fragment in some
+  // drizzle versions and is a pointless round-trip in all of them).
+  //
+  // 🔴 THIS IS THE TOMBSTONE READ. The marker row is written by
+  // ensureObjectionMemoForCase on the CREATE branch and lives on the CASE's
+  // activity log, so it survives the memo being hard-deleted — which is exactly
+  // what stops the nightly job re-raising a memo somebody deleted on purpose.
+  // Reading the memos table instead would be wrong twice: a deleted memo leaves no
+  // row, and a cancelled one is legitimately re-raisable.
+  async getJudgmentIdsWithObjectionMemoActivity(judgmentIds: string[]): Promise<Set<string>> {
+    if (judgmentIds.length === 0) return new Set();
+    const rows = await db.select({ relatedEntityId: caseActivityLog.relatedEntityId })
+      .from(caseActivityLog)
+      .where(and(
+        eq(caseActivityLog.actionType, "objection_memo_raised"),
+        eq(caseActivityLog.relatedEntityType, "judgment"),
+        inArray(caseActivityLog.relatedEntityId, judgmentIds),
+      ));
+    return new Set(rows.map((r) => String(r.relatedEntityId)));
   }
 
   // ==================== سجل الأحكام — THE WRITE PRIMITIVES ====================
