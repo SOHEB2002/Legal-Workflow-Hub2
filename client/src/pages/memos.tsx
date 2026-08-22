@@ -67,6 +67,8 @@ import {
   MoreVertical,
   Archive,
   Bell,
+  CalendarClock,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -107,6 +109,7 @@ import {
   Priority,
   canChangeMemoStatus,
   canDeleteMemos,
+  nearestUpcomingHearingDate,
 } from "@shared/schema";
 import type {
   Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
@@ -124,7 +127,9 @@ import {
   MemosAdvancedFilters,
   EMPTY_MEMOS_ADV_FILTERS,
   isMemoNonFinal,
+  MEMOS_SORT_VALUES,
   type AdvancedMemosFilters,
+  type MemosSortValue,
 } from "@/components/memos-advanced-filters";
 
 function getStatusBadgeClass(status: MemoStatusValue): string {
@@ -352,7 +357,13 @@ export default function MemosPage() {
     getOverdueMemos,
   } = useMemos();
   const { cases, updateCase } = useCases();
-  const { getHearingsByCase, getHearingById } = useHearings();
+  // `hearings` (the raw list) is taken alongside the two accessors for the
+  // urgency sort — see memoUrgencyKey. It costs NOTHING extra: hearings-context
+  // already holds the whole list in memory for this page, and getHearingsByCase
+  // is an O(n) filter over it, so calling that per memo inside a comparator
+  // would be O(memos · hearings · log memos) on every render. One pass builds a
+  // caseId → date map instead, exactly as the cases page does.
+  const { hearings, getHearingsByCase, getHearingById } = useHearings();
   const { departments, getDepartmentName } = useDepartments();
   const { user, permissions, actingIdentities } = useAuth();
   const { extendedUsers: users, getUserById } = useUsers();
@@ -484,6 +495,19 @@ export default function MemosPage() {
       statuses: [...Object.values(MemoStage), MemoStatus.CANCELLED] as readonly string[],
     }),
   );
+  // The list's primary ordering. Persisted per user + per page like every other
+  // control here, and validated by the SAME oneOf sanitizer the cases page uses,
+  // so a value from a future (or removed) option can never restore into an order
+  // the comparator does not implement — it falls back to "none".
+  //
+  // A SEPARATE KEY from `adv`, not a member of it: the sort is not a filter (it
+  // changes order, not membership), مسح must not clear it, and it must not count
+  // toward the panel's active-filter badge. Same split as cases.sortBy.
+  const [sortBy, setSortBy] = usePersistedFilter<MemosSortValue>(
+    "memos", "sortBy", "none",
+    oneOf(MEMOS_SORT_VALUES as readonly string[], "none") as (raw: unknown) => MemosSortValue | undefined,
+  );
+  const sortByUrgency = sortBy === "urgency";
 
   // STALE-VALUE GUARD for the async department list — see the hearings twin.
   // The `length === 0` bail keeps it from wiping a valid saved value before
@@ -1277,6 +1301,45 @@ export default function MemosPage() {
     [memos],
   );
 
+  // caseId → the soonest session still ahead of the firm ("YYYY-MM-DD"), or absent.
+  // ONE pass over the whole hearings list, memoised on it — NOT recomputed per
+  // comparison. Built unconditionally rather than behind `sortByUrgency` so
+  // switching the sort on never triggers a rebuild; the list is already in memory
+  // either way (hearings-context loads /api/hearings once for this page).
+  //
+  // 🔴 THE RULE IS nearestUpcomingHearingDate FROM shared/schema — the SAME
+  // function the cases-page sort and the server's law_cases.next_hearing_date
+  // recompute call. Its three clauses (not cancelled · no result recorded · date
+  // >= the firm's today) and its Asia/Riyadh string comparison are documented at
+  // that declaration; there is deliberately no second copy here that could be
+  // edited on its own.
+  //
+  // ⚠ It also deliberately avoids hearings-context's getUpcomingHearings /
+  // getTodayHearings, which use toISOString and browser-local midnight — the
+  // 60a4d79 class. Same avoidance the cases page records.
+  //
+  // ⚠ firmToday() is read INSIDE nearestUpcomingHearingDate, so this map encodes
+  // the boundary that held when it was built. A tab left open across Riyadh
+  // midnight keeps yesterday's boundary until the hearings query refetches, which
+  // is acceptable for an ORDERING (a session dated "today" stays at the top one
+  // day longer) and is not a gate.
+  const caseNextHearing = useMemo(() => {
+    const byCase = new Map<string, typeof hearings>();
+    for (const h of hearings) {
+      const caseId = String(h.caseId || "");
+      if (!caseId) continue;
+      const list = byCase.get(caseId);
+      if (list) list.push(h);
+      else byCase.set(caseId, [h]);
+    }
+    const result = new Map<string, string>();
+    byCase.forEach((list, caseId) => {
+      const next = nearestUpcomingHearingDate(list);
+      if (next) result.set(caseId, next);
+    });
+    return result;
+  }, [hearings]);
+
   const filteredMemos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const today = new Date().toISOString().slice(0, 10);
@@ -1359,7 +1422,68 @@ export default function MemosPage() {
       const i = MemoStagesAll.indexOf(m.currentStage as MemoStageValue);
       return i === -1 ? 999 : i;
     };
+    // ==================== الأقرب استحقاقاً — THE URGENCY KEY ====================
+    // 🔴 ONE KEY FROM TWO DATES, not two sorts (owner ruling). The question the
+    // list answers is "what am I about to lose", and a memo can lose either its
+    // case's next session or its own deadline — whichever comes FIRST. Two
+    // separate sort options would fight for the same order and each would hide
+    // the other's date.
+    //
+    // For a لائحة اعتراضية the memo's own deadline IS the objection deadline —
+    // it is written there by ensureObjectionMemoForCase from the judgment's
+    // stored objection_deadline. Nothing is recomputed here; this reads.
+    //
+    // ⚠ THE TWO SIDES ARE FILTERED DIFFERENTLY, ON PURPOSE:
+    //   • the HEARING side is the shared upcoming rule (nearestUpcomingHearingDate
+    //     — not cancelled, no result recorded, date >= the firm's today). A session
+    //     that already happened is not something still to be lost, and using the
+    //     shared helper is what keeps this page, the cases-page sort and the
+    //     stored law_cases.next_hearing_date from ever disagreeing about it.
+    //   • the DEADLINE side is used RAW, with no "still ahead" filter. An overdue
+    //     memo is the most urgent row on the page, not an expired one — it sorts
+    //     to the very top, matching the destructive styling deadlineClass already
+    //     gives it.
+    //
+    // Both are "YYYY-MM-DD", so `<` IS the calendar comparison and Math.min is
+    // spelled as a string comparison — no parsing anywhere, therefore no
+    // timezone able to shift a boundary (the 60a4d79 class).
+    //
+    // 🔴 A TERMINAL MEMO HAS NO KEY and sorts LAST, even when its case has a
+    // session next week. Same ruling the cases page's prescription comparator
+    // already makes for a filed case: a memo that is filed or cancelled cannot be
+    // lost, so it has nothing outstanding for this question. isMemoNonFinal is the
+    // page's existing three-way check, reused rather than restated.
+    const memoUrgencyKey = (m: Memo): string | null => {
+      if (!isMemoNonFinal(m)) return null;
+      const hearing = m.caseId ? (caseNextHearing.get(m.caseId) || null) : null;
+      const deadline = String(m.deadline || "").trim() || null;
+      if (hearing && deadline) return hearing < deadline ? hearing : deadline;
+      return hearing || deadline;
+    };
     return filtered.slice().sort((a, b) => {
+      // 🔴 WHEN THE SORT IS ON IT IS THE PRIMARY KEY, and the whole default
+      // ordering below becomes its TIE-BREAKER — mirroring the cases page. Layering
+      // it under the priority group instead would not be "sorted by what is due
+      // soonest" at all: every unassigned memo (group 1) would still outrank one
+      // due tomorrow, which is the opposite of what the control promises.
+      //
+      // getMemoPriorityGroup is NOT modified and remains the sole ordering rule
+      // whenever the sort is off — this block is skipped entirely, so the default
+      // list is byte-for-byte what it was.
+      if (sortByUrgency) {
+        const ka = memoUrgencyKey(a);
+        const kb = memoUrgencyKey(b);
+        if (ka && kb) {
+          if (ka !== kb) return ka < kb ? -1 : 1;
+        } else if (ka || kb) {
+          // Exactly one has a date → it wins. Everything with NEITHER date sinks
+          // to the bottom — sorted last, never hidden. Same shape as the cases
+          // page's comparators.
+          return ka ? -1 : 1;
+        }
+        // Same date, or both undated → fall through to the default ordering, so
+        // the tie is broken the way this page always broke it.
+      }
       const ga = getMemoPriorityGroup(a);
       const gb = getMemoPriorityGroup(b);
       if (ga !== gb) return ga - gb;
@@ -1368,12 +1492,15 @@ export default function MemosPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
+  }, [memos, cases, filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters, sortByUrgency, caseNextHearing]);
 
   // Rows-per-page is user-configurable and persisted per user + per page.
   const [MEMO_PAGE_SIZE, setMemoPageSize] = usePageSize("memos");
   const [memoPage, setMemoPage] = useState(1);
-  useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters]);
+  // sortBy is in here for the same reason the filters are: changing the ORDER
+  // makes the current page number meaningless — page 3 of the old order is not
+  // page 3 of the new one — so the pager returns to the top. Mirrors the cases page.
+  useEffect(() => { setMemoPage(1); }, [filterStatus, filterDept, filterAssignedTo, searchQuery, advFilters, sortBy]);
   const memoTotalPages = Math.max(1, Math.ceil(filteredMemos.length / MEMO_PAGE_SIZE));
   const pagedMemos = filteredMemos.slice((memoPage - 1) * MEMO_PAGE_SIZE, memoPage * MEMO_PAGE_SIZE);
   const handleMemoPageSizeChange = (size: number) => { setMemoPageSize(size); setMemoPage(1); };
@@ -1496,8 +1623,43 @@ export default function MemosPage() {
                 role: u.role,
                 departmentId: u.departmentId,
               }))}
+              sortBy={sortBy}
+              onSortByChange={setSortBy}
             />
           </div>
+
+          {/* 🔴 THE ACTIVE-SORT CHIP — the answer to "the panel is closed and the
+              sort is still on". Without it the only difference an active sort
+              makes is that the rows are in an order the user cannot account for,
+              which reads as a bug rather than as a setting; and because the state
+              is PERSISTED, it would still be on at the next visit with nothing on
+              screen explaining why.
+              It says ordering explicitly ("مرتبة حسب…"), and names what sank, so
+              nobody reads the bottom of the list as missing data. Its ✕ turns the
+              sort off without opening the panel — the panel's مسح does not reach
+              it (مسح clears the filter draft, and this is not a filter). Same
+              component and same rules as the cases page's chip. */}
+          {sortBy !== "none" && (
+            <div className="mt-3">
+              <Badge
+                variant="secondary"
+                className="gap-2 py-1 pr-3 pl-2 font-normal"
+                data-testid="badge-memos-sort-active"
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
+                مرتبة حسب الأقرب استحقاقاً — الجلسة القادمة أو الموعد النهائي، أيهما أقرب، وما لا موعد له في الأسفل
+                <button
+                  type="button"
+                  onClick={() => setSortBy("none")}
+                  className="rounded-sm hover:bg-muted-foreground/20 p-0.5"
+                  aria-label="إلغاء الترتيب"
+                  data-testid="button-clear-memos-sort"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Badge>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {!isLoading && filteredMemos.length === 0 ? (
