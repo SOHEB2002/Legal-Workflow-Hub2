@@ -350,7 +350,33 @@ const VIOLATION_SEARCH_FIELDS: readonly (keyof LawCase)[] = [
 // rows have no single day in common (a hearing last week, a hearing two years
 // ago, and a case that never had one all land here), so any date-shaped label
 // would be a lie about at least some of them.
-const NO_UPCOMING_HEARING_LABEL = "بدون جلسة قادمة";
+//
+// ⚠ BATCH 20 RE-WORDED IT, and the old text is not recoverable by accident. It
+// said «بدون جلسة قادمة», which named ONE of the two dates this sort now weighs —
+// a case with no hearing but a live objection deadline is no longer in this group
+// at all, so the old label would have been false about the group it heads. It also
+// deliberately drops «قادم»: an objection deadline can be in the PAST (see
+// CASE_URGENCY_SOURCE_LABEL), so nothing here may imply the dates above are
+// upcoming — the same ruling NO_PRESCRIPTION_DATE_LABEL below records.
+const NO_UPCOMING_HEARING_LABEL = "بدون موعد";
+
+// 🔴 BATCH 20 — WHY A ROW SITS UNDER A DAY. The hearing sort now keys on whichever
+// is SOONER, the next session or the current ruling's objection deadline, so a
+// bare date would leave the reader unable to tell which of the two put the case
+// there. Same problem the memos page hit in batch 8b and the same answer: carry
+// the source alongside the day and name it in the heading.
+//
+// ⚠ «مهلة اعتراض» CAN BE IN THE PAST. Unlike a hearing — nearestUpcomingHearingDate
+// returns only future sessions — the objection deadline is taken as stored, so an
+// expired window sorts to the very top. That is deliberate and matches the memos
+// page's treatment of a memo deadline: an objection window that has run out is the
+// loudest thing on the page, not something to hide.
+const CASE_URGENCY_SOURCE_LABEL = {
+  hearing: "جلسة",
+  objection: "مهلة اعتراض",
+} as const;
+
+type CaseUrgencySource = keyof typeof CASE_URGENCY_SOURCE_LABEL;
 
 // The prescription sort's own bottom-group heading. Same shape and same reason as
 // the one above — it must read as a GROUP, not as a date, because these rows
@@ -366,7 +392,7 @@ const NO_PRESCRIPTION_DATE_LABEL = "بدون تاريخ تقادم";
 
 // 🔴 THE PRESCRIPTION SORT KEY — ONE DEFINITION, read by BOTH the comparator and
 // the day headings. Hoisted out of the filteredCases comparator for exactly the
-// reason hearingDayOf reads nextHearingRanks instead of re-deriving: a heading
+// reason caseUrgency reads nextHearingRanks instead of re-deriving: a heading
 // must never disagree with the rows it sits above. It is a pure read of two
 // fields already on the row — computePrescriptionDate is NOT called here and is
 // not called in the render path at all; the stored prescription_date IS its
@@ -1274,6 +1300,53 @@ export default function CasesPage() {
   // the gates that made this a documented bug class, none of which are here.
   const nextHearingRanks = useMemo(() => buildNextHearingRanks(hearings), [hearings]);
 
+  // 🔴 BATCH 20 — THE COMBINED URGENCY KEY: whichever is SOONER, the case's next
+  // upcoming session or its CURRENT ruling's objection deadline. One map, built
+  // once per render of the inputs, read by BOTH the comparator and the day
+  // headings — so a heading can never disagree with the rows under it, the same
+  // rule prescriptionDayOf already follows.
+  //
+  // MIRRORS memos.tsx's memoUrgency (batch 8) deliberately: same shape
+  // ({ day, source }), same three-branch pick, same "both present → compare the
+  // strings" test. Both dates are "YYYY-MM-DD", so `<=` IS the calendar
+  // comparison with no parsing.
+  //
+  // ⚠ TIE GOES TO THE HEARING (`hearing <= deadline`). Same date, one heading —
+  // and the session is the externally fixed one, so it is the truthful label for
+  // a day that carries both. The comparator's source tie-break below sorts
+  // hearings first for the same reason.
+  //
+  // 🔴 THE DEADLINE IS THE JUDGMENT'S, NOT THE MEMO'S. It arrives as
+  // currentJudgmentObjectionDeadline, stamped on GET /api/cases from the CURRENT
+  // ruling (case_judgments, highest sequence) — the same row currentJudgmentHasDeed
+  // and currentJudgmentOutcome already come from, so this sort and the صك badges
+  // reason about the same ruling. It is null until the صك receipt is recorded,
+  // which is precisely when the window starts to exist.
+  //
+  // Read structurally (`as { … }`, not a cast to any): these list-only stamps are
+  // deliberately absent from the LawCase interface so they can never reach an
+  // insert or update path — the same access shape attachment-indicators.ts uses
+  // for hasJudgmentRecord.
+  const caseUrgency = useMemo(() => {
+    const map = new Map<string, { day: string; source: CaseUrgencySource }>();
+    for (const c of cases) {
+      const hearing = nextHearingRanks.get(c.id)?.upcoming || null;
+      const deadline = String(
+        (c as { currentJudgmentObjectionDeadline?: string | null }).currentJudgmentObjectionDeadline || "",
+      ).trim() || null;
+      if (hearing && deadline) {
+        map.set(c.id, hearing <= deadline
+          ? { day: hearing, source: "hearing" }
+          : { day: deadline, source: "objection" });
+      } else if (hearing) {
+        map.set(c.id, { day: hearing, source: "hearing" });
+      } else if (deadline) {
+        map.set(c.id, { day: deadline, source: "objection" });
+      }
+    }
+    return map;
+  }, [cases, nextHearingRanks]);
+
   const filteredCases = useMemo(() => {
     const matched = cases.filter((c) => {
       const clientName = c.clientId ? getClientName(c.clientId) : "";
@@ -1404,19 +1477,46 @@ export default function CasesPage() {
       if (sortByNextHearing) {
         const ra = nextHearingRanks.get(a.id);
         const rb = nextHearingRanks.get(b.id);
-        const ua = ra?.upcoming || null;
-        const ub = rb?.upcoming || null;
-        // Both have an upcoming session → nearest first ("YYYY-MM-DD" sorts
-        // lexicographically, so this is a calendar comparison with no parsing).
+        // 🔴 BATCH 20 — THE KEY IS NOW THE COMBINED ONE, not `ra.upcoming`. It is
+        // whichever comes first, the next session or the current ruling's
+        // objection deadline; caseUrgency built it, and the day headings read the
+        // SAME map, so heading and row can never disagree.
+        //
+        // The bottom-block ordering further down still reads ra/rb.lastPast, and
+        // that is correct: a case reaches that block only when it has NEITHER
+        // date, so "what happened most recently" is still a purely hearing-shaped
+        // question there. Nothing about it changed.
+        const ea = caseUrgency.get(a.id) || null;
+        const eb = caseUrgency.get(b.id) || null;
+        const ua = ea?.day || null;
+        const ub = eb?.day || null;
+        // Both have a date → nearest first ("YYYY-MM-DD" sorts lexicographically,
+        // so this is a calendar comparison with no parsing).
         if (ua && ub) {
           if (ua !== ub) return ua < ub ? -1 : 1;
+          // 🔴 SAME DAY → ORDER BY SOURCE, and this clause is what makes the day
+          // headings honest. Without it a day's rows interleave (جلسة, مهلة, جلسة…),
+          // which under a per-source heading emits several headings for one date
+          // and looks broken — and under one combined heading would let one case's
+          // source silently label another's. Ordering by source makes each day's
+          // rows CONTIGUOUS blocks, so every heading is true for every row beneath
+          // it. Lifted from memos.tsx's batch-8b comparator, which solved exactly
+          // this.
+          //
+          // Hearings first, matching that page: a court session is externally
+          // fixed and cannot be moved, and it keeps the top of each day reading
+          // the way this page's headings already did before the widening.
+          const sa = ea!.source === "hearing" ? 0 : 1;
+          const sb = eb!.source === "hearing" ? 0 : 1;
+          if (sa !== sb) return sa - sb;
         } else if (ua || ub) {
           // Exactly one has one → it wins. This is the owner's ruling that
-          // everything without an upcoming session sinks to the BOTTOM — sorted
-          // last, never hidden.
+          // everything with NEITHER date sinks to the BOTTOM — sorted last, never
+          // hidden.
           return ua ? -1 : 1;
         } else {
-          // NEITHER has an upcoming session. Ordering WITHIN the bottom block,
+          // NEITHER has an upcoming session NOR an objection deadline. Ordering
+          // WITHIN the bottom block,
           // and this is a deliberate ruling rather than a leftover:
           // A case whose session was YESTERDAY sits ABOVE one that never had a
           // hearing, and the recently-past ones are ordered most-recent-first.
@@ -1436,8 +1536,9 @@ export default function CasesPage() {
             return pa ? -1 : 1;
           }
         }
-        // Same date, or both never-had-a-hearing → fall through to the default
-        // ordering below, so the tie is broken the way the page always broke it.
+        // Same date AND same source, or both undated → fall through to the
+        // default ordering below, so the tie is broken the way the page always
+        // broke it.
       }
       const ga = getCasePriorityGroup(a, !!caseHasActiveMemoMap.get(a.id)?.hasActive);
       const gb = getCasePriorityGroup(b, !!caseHasActiveMemoMap.get(b.id)?.hasActive);
@@ -1447,7 +1548,7 @@ export default function CasesPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [cases, searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks]);
+  }, [cases, searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks, caseUrgency]);
 
   // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
   // must not be again:
@@ -1579,31 +1680,50 @@ export default function CasesPage() {
   const pagedCases = filteredCases.slice((casePage - 1) * PAGE_SIZE, casePage * PAGE_SIZE);
 
   // ==================== DAY SEPARATORS (sort-active only) ====================
-  // The hearing day a case belongs to, or null for the bottom group. Reads the
-  // SAME nextHearingRanks map the sort itself orders by, so a heading can never
-  // disagree with the rows under it — no second derivation.
-  const hearingDayOf = (c: LawCase): string | null =>
-    nextHearingRanks.get(c.id)?.upcoming ?? null;
-
   // 🔴 ONE MECHANISM, ONE GATE, BOTH SORTS. The separators were hearing-specific
-  // in batch 3; the prescription sort now shares them rather than growing a
-  // second implementation. The ONLY per-sort parts are (a) which day a row
-  // belongs to and (b) what the bottom group is called — everything downstream
-  // (the suppression rule, the emit rule, the markup, the date formatting) is
-  // literally the same code for both.
+  // in batch 3; the prescription sort shares them since c21d1f7 rather than
+  // growing a second implementation. The ONLY per-sort parts are (a) which day a
+  // row belongs to and (b) what the bottom group is called — everything
+  // downstream (the suppression rule, the emit rule, the markup, the date
+  // formatting) is literally the same code for both.
+  //
+  // 🔴 BATCH 20 — THE ENTRY NOW CARRIES ITS SOURCE, not just a day. The hearing
+  // sort weighs two different kinds of date, so a heading has to say WHICH put the
+  // case there; the prescription sort has exactly one kind and renders exactly as
+  // it did (its source is never displayed — see the render).
   //
   // Each arm reads the value its OWN comparator sorts by, which is what makes a
   // heading incapable of disagreeing with the rows beneath it: hearing → the
-  // nextHearingRanks map, prescription → prescriptionDayOf. "none" returns null
-  // for every row, but showDaySeparators is false then anyway, so nothing renders.
-  const sortDayOf = (c: LawCase): string | null =>
-    sortByNextHearing ? hearingDayOf(c)
-      : sortByPrescription ? prescriptionDayOf(c)
-        : null;
+  // caseUrgency map the comparator keys on, prescription → prescriptionDayOf.
+  // "none" returns null for every row, but showDaySeparators is false then
+  // anyway, so nothing renders.
+  const sortEntryOf = (c: LawCase): { day: string; source: CaseUrgencySource | "prescription" } | null => {
+    if (sortByNextHearing) return caseUrgency.get(c.id) ?? null;
+    if (sortByPrescription) {
+      const day = prescriptionDayOf(c);
+      return day ? { day, source: "prescription" } : null;
+    }
+    return null;
+  };
 
-  // The bottom group's heading, named after the ACTIVE sort. The hearing wording
-  // says "قادمة"; the prescription wording must not, because those dates can be
-  // in the past (see NO_PRESCRIPTION_DATE_LABEL).
+  // The GROUP KEY IS day + source, not day alone, because the hearing sort now
+  // renders one heading per (day, source) pair — two cases on the same date for
+  // different reasons are two groups. "" stands in for the bottom group; no real
+  // key can collide with it, since every real key starts with a "YYYY-MM-DD".
+  //
+  // ⚠ Calls sortEntryOf rather than restating the rule. The page got away with
+  // writing its key twice before (once for the suppression test, once in the
+  // render) while the rule was a single `?? ""`; two fields joined is exactly the
+  // shape that drifts — the note memos.tsx carries about this page.
+  const sortGroupKeyOf = (c: LawCase): string => {
+    const e = sortEntryOf(c);
+    return e ? `${e.day}|${e.source}` : "";
+  };
+
+  // The bottom group's heading, named after the ACTIVE sort. Neither wording says
+  // "قادم" any more: both sorts can now put a PAST date above this label — an
+  // objection window that has run out, or an overdue prescription date — and a
+  // bottom group promising "upcoming" above them would be false.
   const noDayLabel = sortByPrescription
     ? NO_PRESCRIPTION_DATE_LABEL
     : NO_UPCOMING_HEARING_LABEL;
@@ -1621,11 +1741,10 @@ export default function CasesPage() {
   // any sort added later.
   const showDaySeparators = useMemo(() => {
     if (sortBy === "none") return false;
-    const keys = new Set(pagedCases.map((c) => sortDayOf(c) ?? ""));
-    return keys.size > 1;
-    // sortDayOf closes over sortBy + nextHearingRanks only, both listed.
+    return new Set(pagedCases.map(sortGroupKeyOf)).size > 1;
+    // sortGroupKeyOf closes over sortBy + caseUrgency only, both listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortBy, pagedCases, nextHearingRanks]);
+  }, [sortBy, pagedCases, caseUrgency]);
   // Changing the size resets to page 1 — the old page number is meaningless
   // against a different slice size (page 4 of 15 may not exist at 50).
   const handlePageSizeChange = (size: number) => { setPageSize(size); setCasePage(1); };
@@ -1956,7 +2075,10 @@ export default function CasesPage() {
               >
                 <CalendarClock className="h-3.5 w-3.5" />
                 {sortByNextHearing
-                  ? "مرتبة حسب الجلسة القادمة — الأقرب أولاً، وما لا جلسة قادمة له في الأسفل"
+                  // Batch 20 — matches the widened radio option word for word on
+                  // its first clause, and its "what sank" clause now names the
+                  // BOTTOM GROUP's real rule (neither date), not just hearings.
+                  ? "مرتبة حسب أقرب موعد (جلسة أو مهلة اعتراض) — الأقرب أولاً، وما لا موعد له في الأسفل"
                   : "مرتبة حسب تاريخ التقادم — الأقرب أولاً، وما لا يسري عليه تقادم في الأسفل"}
                 <button
                   type="button"
@@ -2069,14 +2191,21 @@ export default function CasesPage() {
                 // construction — the separator is emitted WITH a row, never on
                 // its own, so an empty one is impossible.
                 //
-                // sortDayOf, not hearingDayOf: the same rows and the same rule
-                // serve BOTH sorts, and the active one decides which date the
-                // grouping is on. Neither call recomputes anything — each arm
-                // reads what its comparator already sorted by.
-                const dayKey = sortDayOf(c);
-                const prevDayKey = idx === 0 ? undefined : sortDayOf(pagedCases[idx - 1]);
+                // sortGroupKeyOf, not a hearing-specific key: the same rows and
+                // the same rule serve BOTH sorts, and the active one decides which
+                // date the grouping is on. Nothing here recomputes anything — each
+                // arm reads what its comparator already sorted by.
+                //
+                // 🔴 BATCH 20 — THE BOUNDARY IS (day, source), so a date carrying
+                // both a session and an objection deadline emits TWO headings and
+                // each is true for the rows under it. The comparator's source
+                // tie-break is what makes those rows contiguous; without it this
+                // would emit a heading every time the source alternated.
+                const groupKey = sortGroupKeyOf(c);
+                const prevGroupKey = idx === 0 ? undefined : sortGroupKeyOf(pagedCases[idx - 1]);
                 const showSeparator =
-                  showDaySeparators && (idx === 0 || dayKey !== prevDayKey);
+                  showDaySeparators && (idx === 0 || groupKey !== prevGroupKey);
+                const entry = sortEntryOf(c);
                 // Hijri via the hearings page's OWN helpers (formatHijriDateFull +
                 // arabicWeekday), so the two pages name a day identically. The
                 // Gregorian is added VISIBLY beside it rather than through
@@ -2089,7 +2218,7 @@ export default function CasesPage() {
                 {showSeparator && (
                   <TableRow
                     className="hover:bg-transparent border-0"
-                    data-testid={`row-day-separator-${dayKey ?? "none"}`}
+                    data-testid={`row-day-separator-${entry ? `${entry.day}-${entry.source}` : "none"}`}
                   >
                     {/* colSpan 10 — the table's column count is FIXED: ten
                         <col> entries, ten unconditional <TableHead>s, and the
@@ -2099,13 +2228,26 @@ export default function CasesPage() {
                       colSpan={10}
                       className="bg-muted/60 py-1.5 text-right text-xs font-semibold text-muted-foreground"
                     >
-                      {dayKey ? (
+                      {entry ? (
                         <span className="flex flex-wrap items-center gap-x-2">
-                          <span>{arabicWeekday(dayKey)}</span>
-                          <span>{formatHijriDateFull(dayKey)}</span>
+                          <span>{arabicWeekday(entry.day)}</span>
+                          <span>{formatHijriDateFull(entry.day)}</span>
                           <LtrInline className="font-normal opacity-80">
-                            {formatDualDate(dayKey).gregorian}
+                            {formatDualDate(entry.day).gregorian}
                           </LtrInline>
+                          {/* 🔴 THE SOURCE SUFFIX — hearing sort ONLY, and that
+                              gate is what keeps the prescription sort's headings
+                              BYTE-IDENTICAL to what c21d1f7 shipped. Prescription
+                              has exactly one kind of date, so naming it would be
+                              noise; the hearing sort now has two, so a bare date
+                              would leave the reader unable to tell why the case is
+                              there. Same separator + label shape as memos.tsx. */}
+                          {entry.source !== "prescription" && (
+                            <>
+                              <span aria-hidden="true" className="opacity-50">—</span>
+                              <span>{CASE_URGENCY_SOURCE_LABEL[entry.source]}</span>
+                            </>
+                          )}
                         </span>
                       ) : (
                         noDayLabel

@@ -566,7 +566,15 @@ export function CasesAdvancedFilters({
             <div className="flex flex-col gap-1">
               {([
                 { value: "none", label: "بدون ترتيب (الافتراضي)" },
-                { value: "hearing", label: "حسب الجلسة القادمة (الأقرب أولاً)" },
+                // 🔴 BATCH 20 RE-WORDED THIS OPTION, and shipping the old text
+                // would have been a lie. It said «حسب الجلسة القادمة», but the sort
+                // now keys on whichever comes first — the next session OR the
+                // current ruling's objection deadline — so it answers "what am I
+                // about to lose", not "when is my next session". A case with no
+                // hearing at all can now rank at the very top, which the old label
+                // gave the user no way to predict. Still ONE option in the same
+                // place (owner ruling): only what it keys on widened.
+                { value: "hearing", label: "حسب أقرب موعد — جلسة أو مهلة اعتراض" },
                 { value: "prescription", label: "حسب تاريخ التقادم (الأقرب أولاً)" },
               ] as const).map((opt) => (
                 <label

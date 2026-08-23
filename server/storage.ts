@@ -726,6 +726,12 @@ export type CurrentJudgmentSummary = {
   hearingId: string | null;
   outcome: string | null;
   hasDeed: boolean;
+  // Batch 20 — the CURRENT ruling's objection deadline, so the cases page's
+  // "soonest deadline" sort can weigh it against the next hearing. It is the
+  // JUDGMENT's own window (deed receipt + objectionWindowDays), NOT the objection
+  // memo's deadline — the two are different dates on different rows, and the memo
+  // is only re-dated FROM this one.
+  objectionDeadline: string | null;
 };
 
 // The handle drizzle hands a db.transaction callback. Derived from db itself
@@ -8911,13 +8917,24 @@ export class DatabaseStorage implements IStorage {
       hearingId: caseJudgments.hearingId,
       outcome: caseJudgments.outcome,
       sequence: caseJudgments.sequence,
+      // Batch 20 — ONE MORE COLUMN on a query this list read already makes. No
+      // new query, no new join, no per-case lookup: the row is already being
+      // selected to answer hearingId / outcome / hasDeed.
+      objectionDeadline: caseJudgments.objectionDeadline,
     }).from(caseJudgments).orderBy(asc(caseJudgments.caseId), asc(caseJudgments.sequence));
 
     // Ordered ascending, so the last write per case wins — that is the highest
     // sequence, i.e. the current ruling.
-    const current = new Map<string, { id: string; hearingId: string | null; outcome: string | null }>();
+    const current = new Map<string, {
+      id: string; hearingId: string | null; outcome: string | null; objectionDeadline: string | null;
+    }>();
     for (const r of rows) {
-      current.set(r.caseId, { id: r.id, hearingId: r.hearingId ?? null, outcome: r.outcome ?? null });
+      current.set(r.caseId, {
+        id: r.id,
+        hearingId: r.hearingId ?? null,
+        outcome: r.outcome ?? null,
+        objectionDeadline: r.objectionDeadline ?? null,
+      });
     }
 
     const attached = await db.select({ judgmentId: judgmentAttachments.judgmentId })
@@ -8934,6 +8951,7 @@ export class DatabaseStorage implements IStorage {
         hearingId: j.hearingId,
         outcome: j.outcome,
         hasDeed: attachedIds.has(j.id),
+        objectionDeadline: j.objectionDeadline,
       });
     }
     return out;

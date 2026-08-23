@@ -4253,6 +4253,14 @@ export async function registerRoutes(
         currentJudgmentHearingId: judgmentSummaries.get(c.id)?.hearingId ?? null,
         currentJudgmentOutcome: judgmentSummaries.get(c.id)?.outcome ?? null,
         currentJudgmentHasDeed: judgmentSummaries.get(c.id)?.hasDeed ?? false,
+        //   • currentJudgmentObjectionDeadline (batch 20) — the CURRENT ruling's
+        //     own objection window, so the cases page can sort a case by whichever
+        //     is sooner, its next hearing or this. 🔴 THE JUDGMENT'S deadline, not
+        //     the objection MEMO's: the memo is re-dated FROM this value and can
+        //     be edited by hand, so keying a sort on the memo would sort by a
+        //     figure a user can move. Null until the صك receipt is recorded, which
+        //     is exactly when the window starts existing.
+        currentJudgmentObjectionDeadline: judgmentSummaries.get(c.id)?.objectionDeadline ?? null,
         // DERIVED, never stored, and computed HERE because this is the last point
         // at which stageHistory still exists — the destructure above strips it.
         // Uses the SHARED caseReachedJudgmentStage so the client's صك gates
