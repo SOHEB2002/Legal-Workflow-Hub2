@@ -2406,11 +2406,30 @@ export function getStagesForClassification(
     if (isSettlementCase) {
       return InCourtSettlementStages;
     }
-    if (memoRequired) {
-      return clientRole === "مدعى_عليه"
-        ? InCourtDefendantMemoStages
-        : InCourtPlaintiffMemoStages;
-    }
+    // 🔴 AN IN-COURT CASE ALWAYS TAKES THE SHORT PATH (owner ruling, batch 15).
+    // This used to branch on memoRequired and clientRole, returning
+    // InCourtDefendantMemoStages / InCourtPlaintiffMemoStages. Both are MUTABLE
+    // fields, so adding a memo to a case RESHAPED ITS PATH RETROACTIVELY: a case
+    // correctly walking [استلام · استكمال_البيانات · دراسة · منظورة] would, the
+    // moment a memo was attached, be re-rendered against a 7-stage array whose
+    // index 2 is a drafting stage it had never visited — its bar changed out from
+    // under it and it was stranded mid-way through a path it never chose.
+    //
+    // The ruling: A MEMO IS AN INDEPENDENT ENTITY WITH ITS OWN FULL LIFECYCLE, and
+    // the case path must not mirror it. 60+ production cases already run this way.
+    // memoRequired and clientRole are NOT removed as fields — they simply stop
+    // selecting a path. Unfinished memo work stays visible through the «مذكرة جارية»
+    // badge (cases.tsx, priority group 3), which is derived from the memos
+    // themselves via isActiveMemo and needs no term here.
+    //
+    // isSettlementCase above is UNTOUCHED — a different axis, and the owner did not
+    // rule on it.
+    //
+    // ⚠ `clientRole` and `memoRequired` are now unread by this function. They are
+    // KEPT IN THE SIGNATURE deliberately: ~30 call sites pass them positionally,
+    // and removing them would be a mechanical edit across the whole path-consumer
+    // census for no behavioural gain. tsconfig sets noUnusedLocals but not
+    // noUnusedParameters, so this is not a gate failure.
     return InCourtNoMemoStages;
   }
 
