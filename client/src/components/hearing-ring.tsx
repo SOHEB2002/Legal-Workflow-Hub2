@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Bell, BellOff, CheckCircle, Gavel } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useHearings } from "@/lib/hearings-context";
+import { useClients } from "@/lib/clients-context";
 import { useToast } from "@/hooks/use-toast";
 import { BidiText } from "@/components/ui/bidi-text";
 import { extractApiError } from "@/lib/utils";
@@ -43,7 +44,11 @@ const TIER_HEADLINE: Record<string, string> = {
 const RING_POLL_MS = 30_000;
 
 export function HearingRing() {
-  const { user, actingIdentities } = useAuth();
+  // `users` and `getClientName` read lists these providers have ALREADY fetched
+  // (AuthProvider and ClientsProvider both wrap this component in App.tsx), so
+  // naming the lawyer and the client in the modal issues no request of its own.
+  const { user, users, actingIdentities } = useAuth();
+  const { getClientName } = useClients();
   const { checkInHearing } = useHearings();
   const { toast } = useToast();
 
@@ -265,6 +270,20 @@ export function HearingRing() {
               { attendingLawyerId: item.attendingLawyerId },
               { departmentId: item.caseDepartmentId },
             );
+            // Batch 18 — both names resolved from lists the app has ALREADY
+            // loaded, so neither costs a request:
+            //   • getClientName is the shared clients-context resolver every
+            //     other page uses (فرد → individualName, else companyName), so
+            //     the ring names a client identically to the cases list. Its own
+            //     empty-id branch returns "غير مرتبط بعميل", which is not worth a
+            //     line in an alert, so an absent id is skipped before calling it.
+            //   • the lawyer is the `users.find` idiom hearings.tsx:431 uses.
+            //     Falls back to nothing rather than to "—": an unresolvable name
+            //     should drop the line, not print a placeholder.
+            const clientName = item.caseClientId ? getClientName(item.caseClientId) : "";
+            const attendingName = item.attendingLawyerId
+              ? (users.find((u) => u.id === item.attendingLawyerId)?.name || "")
+              : "";
             return (
               <div
                 key={item.hearingId}
@@ -277,6 +296,36 @@ export function HearingRing() {
                 <div className="mt-1 text-xs text-muted-foreground">
                   القضية رقم <BidiText>{item.caseNumber}</BidiText>
                   {item.courtName ? <> — <BidiText>{item.courtName}</BidiText></> : null}
+                </div>
+                {/* 🔴 BATCH 18 — WHO the session is against, for EVERY tier. Added
+                    BENEATH the headline, which is untouched: a recipient rung at
+                    T-8 or T-5 needs to recognise the matter without leaving the
+                    modal, and a case number alone does not do that.
+
+                    Every value is resolved from data already in hand — the client
+                    id and the opponent string ride the payload off the parent-case
+                    join, the client's name comes from the loaded clients list and
+                    the lawyer's from the loaded roster — so nothing here issues a
+                    request while a safety alert is on screen.
+
+                    Each line renders only when it has a value: a case with no
+                    opponent recorded shows no empty "الخصم:" label. */}
+                <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                  {clientName && (
+                    <div data-testid={`ring-client-${item.hearingId}`}>
+                      العميل: <BidiText>{clientName}</BidiText>
+                    </div>
+                  )}
+                  {item.caseOpponentName && (
+                    <div data-testid={`ring-opponent-${item.hearingId}`}>
+                      الخصم: <BidiText>{item.caseOpponentName}</BidiText>
+                    </div>
+                  )}
+                  {attendingName && (
+                    <div data-testid={`ring-attending-${item.hearingId}`}>
+                      المترافع: <BidiText>{attendingName}</BidiText>
+                    </div>
+                  )}
                 </div>
                 <div className="mt-3 flex gap-2">
                   {mayPrepare && (

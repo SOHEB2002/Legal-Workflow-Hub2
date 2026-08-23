@@ -14617,6 +14617,11 @@ export async function registerRoutes(
           hearingAtIso: hearingAt.toISOString(),
           attendingLawyerId: r.attendingLawyerId ?? null,
           caseDepartmentId: r.caseDepartmentId ?? null,
+          // Batch 18 — the client id (resolved to a name in the browser) and the
+          // opponent's name, both off the parent-case join this query already
+          // makes. No extra join, no extra query on the 30s poll.
+          caseClientId: r.caseClientId ?? null,
+          caseOpponentName: r.caseOpponentName ?? null,
         });
       }
       res.json(items);

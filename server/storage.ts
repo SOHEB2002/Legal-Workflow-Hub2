@@ -2470,6 +2470,7 @@ export class DatabaseStorage implements IStorage {
       id: string; caseId: string; hearingDate: string; hearingTime: string | null;
       courtName: string | null; attendingLawyerId: string | null; caseNumber: string | null;
       caseDepartmentId: string | null;
+      caseClientId: string | null; caseOpponentName: string | null;
     }[]
   > {
     const conditions = [
@@ -2492,6 +2493,22 @@ export class DatabaseStorage implements IStorage {
       // the parent case, the same hop canActOnHearing makes. Taken from the
       // innerJoin that is already here for the case number, so it costs nothing.
       caseDepartmentId: lawCases.departmentId,
+      // 🔴 BATCH 18 — the ring modal names the CLIENT and the OPPONENT, so the
+      // recipient knows which session is being chased without opening anything.
+      //
+      // BOTH COME FROM THE innerJoin THAT IS ALREADY HERE, so this adds NO join
+      // and NO query to a statement that runs once a minute in the scheduler and
+      // on every logged-in user's 30s poll — two more columns off a row already
+      // being read. That is why the CLIENT ID is selected rather than the client's
+      // NAME: a name would have meant a second LEFT JOIN to `clients` on the hot
+      // path, and the browser already holds the whole clients list (ClientsProvider
+      // wraps this component and GET /api/clients is unfiltered), so it resolves
+      // the name locally for free.
+      //
+      // opponent_name — the OPPONENT, deliberately NOT opponent_lawyer. The two are
+      // separate columns on law_cases and the owner asked for the party.
+      caseClientId: lawCases.clientId,
+      caseOpponentName: lawCases.opponentName,
     }).from(hearings)
       .innerJoin(lawCases, eq(hearings.caseId, lawCases.id))
       .where(and(...conditions));
@@ -2505,15 +2522,36 @@ export class DatabaseStorage implements IStorage {
   // reach — not the whole staff table, every minute, forever. Only three columns
   // are selected, and the caller applies resolveHearingRingTier to each.
   //
-  // viewer / hr are NOT filtered here — resolveHearingRingTier excludes them
-  // from the DEPARTMENT tier, and doing it in one place keeps the rule single.
+  // 🔴 BATCH 18 — THE DEPARTMENT ARM IS NOW `department_head` ONLY, matching the
+  // narrowed tier 2 in resolveHearingRingTier. This is a COST change, not a
+  // correctness one: the predicate is still the single authority and would have
+  // discarded every non-head row anyway. It matters because this query runs once
+  // a minute in the scheduler AND on every logged-in user's 30s poll, so
+  // returning a whole department's staff to throw all of it away was the one
+  // avoidable cost in the hot path.
+  //
+  // The admin_support / branch_manager arm is UNTOUCHED and still firm-wide with
+  // no department scope — they are the cross-department safety net and neither
+  // reliably carries a departmentId.
+  //
+  // ⚠ THE ATTENDING LAWYER IS STILL NOT NECESSARILY IN THIS SET, and both callers
+  // already handle that by adding them separately (scheduler.ts's per-row
+  // attendingLawyerId branch, and the check-in stop fan-out's own Set). Narrowing
+  // here makes that MORE often true, not newly true.
+  //
+  // viewer / hr are NOT filtered here — resolveHearingRingTier is the single
+  // place role rules live, and its positive department_head test now excludes
+  // them from tier 2 outright.
   async getRingRecipientCandidates(departmentIds: string[]): Promise<
     { id: string; role: string; departmentId: string | null }[]
   > {
     const roleOrDept = departmentIds.length > 0
       ? or(
           inArray(users.role, ["admin_support", "branch_manager"]),
-          inArray(users.departmentId, departmentIds),
+          and(
+            eq(users.role, "department_head"),
+            inArray(users.departmentId, departmentIds),
+          ),
         )
       : inArray(users.role, ["admin_support", "branch_manager"]);
     return await db.select({

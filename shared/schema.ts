@@ -6781,6 +6781,25 @@ export interface HearingRingItem {
    */
   attendingLawyerId: string | null;
   caseDepartmentId: string | null;
+  /**
+   * 🔴 BATCH 18 — WHO the session is against, so a recipient woken at T-8 knows
+   * WHICH matter is being chased without opening anything.
+   *
+   * IDs and raw strings, never resolved names, and that is the cost decision:
+   * both are columns of the parent case the ring query ALREADY joins, so they
+   * add no join to a statement that runs on every user's 30s poll. The client id
+   * is resolved to a display name in the browser against the clients list
+   * ClientsProvider has already loaded — the same getClientName every other page
+   * uses — so no name lookup reaches the database.
+   *
+   * The attending lawyer's NAME is likewise resolved client-side, from
+   * attendingLawyerId above against the roster useAuth() already holds. That id
+   * was already in this payload for canCheckInHearing, so naming the person costs
+   * nothing new either.
+   */
+  caseClientId: string | null;
+  /** The OPPONENT (law_cases.opponent_name) — never their lawyer. */
+  caseOpponentName: string | null;
 }
 
 /**
@@ -6799,13 +6818,39 @@ export interface HearingRingItem {
  * (which answers for the requesting user) and the scheduler (which resolves the
  * whole recipient set), so the two can never disagree about who rings.
  *
- * 🔴 viewer AND hr ARE EXCLUDED FROM THE DEPARTMENT TIER (owner-approved).
- * `viewer` is blocked from every mutation by viewerWriteGuard, so it could not
- * even acknowledge the ring it was given — an undismissable modal by
- * construction. `hr` has no role in a court session. Both are pure noise, and
- * they are excluded from the DEPARTMENT tier only: neither can reach the other
- * three, which are keyed on being the attending lawyer or holding a specific
- * role.
+ * 🔴 BATCH 18 — TIER 2 IS THE DEPARTMENT'S HEADS, NOT ITS MEMBERS (owner ruling).
+ * It admitted every active user in the case's department; it now admits only
+ * `department_head`. ALL of them — this is a per-user membership predicate over a
+ * roster, never a `.find`, so a department with two heads rings both, and the
+ * documented single-head defect class cannot occur here by construction.
+ *
+ * TWO CONSEQUENCES, both owner-ruled and deliberately unguarded:
+ *   • A plain department employee stops ringing. Intended: tier 2 is now a SUBSET
+ *     of canCheckInHearing (attending lawyer | own-dept head | branch_manager), so
+ *     the ring no longer wakes people who cannot press تحضير.
+ *   • A branch_manager sitting IN the case's department shifts T-8 → T-5, because
+ *     the reduce() below gives each user their LONGEST lead and they no longer
+ *     qualify for the department tier. Theoretical — branch managers carry no
+ *     department in the owner's data.
+ *
+ * ⚠ viewer AND hr — THE EXCLUSION IS NOW REDUNDANT, AND THE COMPILER PROVED IT.
+ * The instruction for this batch was to KEEP the two `role !== …` terms with a
+ * note. That is not expressible: once the positive `=== "department_head"` test is
+ * in place, `tsc` rejects both comparisons with TS2367 ("types have no overlap"),
+ * so retaining them fails the project's tsc-0 gate. They are removed, and the
+ * reasoning they carried is preserved HERE instead, which is what the instruction
+ * was protecting.
+ *
+ * Verified before removing: the exclusion NEVER served another tier. Tiers 1/3/4
+ * key on being the attending lawyer, or on holding admin_support / branch_manager,
+ * and none of them consults it — so a viewer who is an attending lawyer could
+ * always ring at tier 1 and still can. Nothing outside tier 2 changed.
+ *
+ * The original owner-approved reasoning, kept findable: `viewer` is blocked from
+ * every mutation by viewerWriteGuard and so could not even acknowledge the ring it
+ * was given (an undismissable modal by construction), and `hr` has no role in a
+ * court session. Both are now excluded a fortiori — neither role is
+ * `department_head`.
  */
 export function resolveHearingRingTier(
   user: { id: string; role: string; departmentId?: string | null } | null | undefined,
@@ -6818,8 +6863,19 @@ export function resolveHearingRingTier(
   }
   // 🔴 !!user.departmentId is mandatory, per the standing rule: without it a
   // user with a null department matches every case with a null department.
+  //
+  // The department compared is the CASE'S (hearing.caseDepartmentId ←
+  // law_cases.department_id, resolved in getRingCandidateHearingsForDate), NOT
+  // the attending lawyer's — they can differ, and the case's is the right one.
+  // ⚠ The `role !== "viewer" && role !== "hr"` terms that stood here are GONE —
+  // and they were removed under protest of the compiler, not by choice. Keeping
+  // them was the instruction; `tsc` refuses it: once the positive
+  // `=== "department_head"` narrowing is in place, both comparisons are
+  // provably impossible and raise TS2367 ("types have no overlap"), which the
+  // project's tsc-0 gate treats as a build failure. The reasoning they carried is
+  // preserved in full in the doc comment above.
   if (
-    user.role !== "viewer" && user.role !== "hr"
+    user.role === "department_head"
     && !!user.departmentId
     && !!hearing.caseDepartmentId
     && user.departmentId === hearing.caseDepartmentId
