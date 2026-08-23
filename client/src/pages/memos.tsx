@@ -63,6 +63,7 @@ import {
   Check,
   ChevronsUpDown,
   UserCog,
+  Pencil,
   Pause,
   Play,
   MoreVertical,
@@ -113,7 +114,9 @@ import {
   nearestUpcomingHearingDate,
   getMemoDisplayStage,
   isMemoCancelled,
+  isMemoFiled,
   isMemoActionable,
+  MemoEditableDetailFields,
 } from "@shared/schema";
 import type {
   Memo, MemoTypeValue, MemoStatusValue, MemoStageValue,
@@ -794,6 +797,70 @@ export default function MemosPage() {
     }
   };
 
+  // ==================== BATCH 16 — THE EDIT DIALOG ====================
+  // Same shape as the reassign dialog directly above: a nullable target memo IS
+  // the open state, a draft object for the inputs, and one submit handler that
+  // goes through the memos-context `updateMemo` (the PATCH the page already uses).
+  // No new dialog pattern, no new mutation path.
+  const [editMemoDialog, setEditMemoDialog] = useState<Memo | null>(null);
+  const [editMemoDraft, setEditMemoDraft] = useState({
+    title: "",
+    description: "",
+    memoType: "" as string,
+    memoTypeOther: "",
+    deadline: "",
+    priority: "",
+  });
+
+  const openEditMemoDialog = (memo: Memo) => {
+    setEditMemoDraft({
+      title: memo.title || "",
+      description: memo.description || "",
+      memoType: memo.memoType || "",
+      memoTypeOther: memo.memoTypeOther || "",
+      deadline: memo.deadline || "",
+      priority: memo.priority || "",
+    });
+    setEditMemoDialog(memo);
+  };
+
+  // The server writes an activity row only for values that ACTUALLY differ, and
+  // the button mirrors that: with nothing changed there is nothing to submit.
+  // Computed off the SHARED field list so the two sides cannot drift on what
+  // "changed" means. memoTypeOther is folded into the memoType term rather than
+  // listed — it is that field's dependent input, not a sixth field.
+  const editMemoHasChanges = (): boolean => {
+    if (!editMemoDialog) return false;
+    return MemoEditableDetailFields.some(
+      (f) => String(editMemoDraft[f] ?? "") !== String(editMemoDialog[f] ?? ""),
+    ) || (editMemoDraft.memoType === MemoType.OTHER
+          && editMemoDraft.memoTypeOther !== (editMemoDialog.memoTypeOther || ""));
+  };
+
+  const handleEditMemo = async () => {
+    if (!editMemoDialog) return;
+    setSubmitting(true);
+    try {
+      await updateMemo(editMemoDialog.id, {
+        title: editMemoDraft.title.trim(),
+        description: editMemoDraft.description,
+        memoType: editMemoDraft.memoType as MemoTypeValue,
+        // Sent alongside the type, exactly as the create dialog pairs them. The
+        // server clears it for any type other than "أخرى", so a stale qualifier
+        // cannot survive a type change.
+        memoTypeOther: editMemoDraft.memoType === MemoType.OTHER ? editMemoDraft.memoTypeOther : "",
+        deadline: editMemoDraft.deadline,
+        priority: editMemoDraft.priority,
+      });
+      toast({ title: "تم تحديث بيانات المذكرة" });
+      setEditMemoDialog(null);
+    } catch (e: any) {
+      toast({ title: "خطأ", description: e?.message || "فشل تعديل المذكرة", variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // 🔴 FOUND BY THE HELPER-CALL SWEEP, not by a comment. Its role term is
   // canChangeMemoStatus(user.role) — a shared permission-helper CALL, the third
   // form the same authority decision is written in here, and the one neither the
@@ -899,6 +966,38 @@ export default function MemosPage() {
   };
 
   const isMemoPaused = (memo: Memo): boolean => !!memo.pausedAt;
+
+  // ==================== BATCH 16 — EDIT THE MEMO'S OWN DATA ====================
+  // Restates the server gate on PATCH /api/memos/:id for the five detail fields,
+  // so visibility === authorization and no button is rendered that 403s.
+  //
+  // 🔴 THE ROLE HALF IS canPauseMemo's SET, NOT A NEW PREDICATE — branch_manager |
+  // admin_support | own-dept department_head (resolved through the PARENT CASE,
+  // since memos carry no departmentId) | the memo assignee. That is exactly what
+  // the server's canActOnMemo(user, memo, ctx, ["branch_manager","admin_support"])
+  // resolves to, and it is the owner's stated set for this action. It is delegation
+  // -aware through hasEffectiveRole / isDeptHeadFor, matching the server's
+  // actingIdentitiesFor expansion.
+  //
+  // ⚠ THE SERVER'S FIELD GATE IS WIDER, and that is deliberate, not a mismatch to
+  // "fix". PATCH's existing non-status gate also admits cases_review_head and
+  // labor_review_head (the two committee chairs) because the same request may
+  // carry reviewNotes / reviewerId — their own annotations. This batch did NOT
+  // narrow that gate: narrowing an existing permission was not in scope and
+  // CLAUDE.md forbids incidental permission changes. So a chair could still edit
+  // these fields by direct API; they are simply not shown the button, which is the
+  // safe direction and matches the owner's stated set.
+  //
+  // THE STAGE HALF is batch 10's shared helpers, the same two the server checks —
+  // isMemoFiled is two-termed on purpose (current_stage OR the legacy
+  // status="مرفوعة"), so a pre-Phase-9 filed memo is caught here too.
+  const canEditMemoDetails = (memo: Memo): boolean => {
+    if (!user) return false;
+    if (isMemoFiled(memo) || isMemoCancelled(memo)) return false;
+    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
+    if (isDeptHeadFor(actingIdentities, cases.find(c => c.id === memo.caseId)?.departmentId)) return true;
+    return !!memo.assignedTo && memo.assignedTo === user.id;
+  };
 
   const TERMINAL_MEMO_STATUSES = new Set(["معتمدة", "مرفوعة", "ملغاة"]);
 
@@ -2224,6 +2323,154 @@ export default function MemosPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ==================== BATCH 16 — EDIT MEMO DATA ====================
+          Controls copied in shape from the ADD dialog below (same Label + Select /
+          Input / Textarea / HijriDatePicker idiom, same order), so the two forms
+          read as one vocabulary. It is deliberately NOT the add dialog reused:
+          that form also owns caseId, assignedTo and content — three fields this
+          action must not touch — and gating half a form is how those get edited
+          by accident.
+
+          🔴 THE DEADLINE USES HijriDatePicker, never a raw <input type="date">
+          (batch 14 removed the last two; this is not the third).
+
+          NOT PRESENT, and their absence IS the design: المحامي المكلف (the
+          reassign dialog owns it, with its own department-tier carve-out) and
+          المراجع الداخلي (the four-eyes rule owns it). */}
+      <Dialog open={!!editMemoDialog} onOpenChange={(open) => !open && setEditMemoDialog(null)}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="w-5 h-5" />
+              تعديل بيانات المذكرة
+            </DialogTitle>
+          </DialogHeader>
+          {editMemoDialog && (
+            <div className="space-y-4">
+              <div>
+                <Label>نوع المذكرة *</Label>
+                <Select
+                  value={editMemoDraft.memoType}
+                  onValueChange={(value) => setEditMemoDraft({ ...editMemoDraft, memoType: value, memoTypeOther: "" })}
+                  // 🔴 An auto-generated memo's TYPE is its identity — three
+                  // server paths find it by memoType alone (the objection
+                  // creator's dedup, the appeal promotion, and the by-type
+                  // exclusion in cancelActiveCaseMemos). Changing it would orphan
+                  // the memo, so the control is DISABLED rather than offered and
+                  // refused; the server 400s the same case. The other four fields
+                  // stay editable on these memos.
+                  disabled={editMemoDialog.isAutoGenerated}
+                >
+                  <SelectTrigger data-testid="select-edit-memo-type">
+                    <SelectValue placeholder="اختر النوع" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(MemoTypeLabels).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {editMemoDialog.isAutoGenerated && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    لا يمكن تغيير نوع مذكرة تم إنشاؤها تلقائياً
+                  </p>
+                )}
+                {editMemoDraft.memoType === MemoType.OTHER && !editMemoDialog.isAutoGenerated && (
+                  <Input
+                    data-testid="input-edit-memo-type-other"
+                    value={editMemoDraft.memoTypeOther}
+                    onChange={(e) => setEditMemoDraft({ ...editMemoDraft, memoTypeOther: e.target.value })}
+                    placeholder="حدد نوع المذكرة"
+                    className="mt-2"
+                  />
+                )}
+              </div>
+              <div>
+                <Label>العنوان *</Label>
+                <Input
+                  data-testid="input-edit-memo-title"
+                  value={editMemoDraft.title}
+                  onChange={(e) => setEditMemoDraft({ ...editMemoDraft, title: e.target.value })}
+                  placeholder="عنوان المذكرة"
+                />
+              </div>
+              <div>
+                <Label>الوصف</Label>
+                <Textarea
+                  data-testid="input-edit-memo-description"
+                  value={editMemoDraft.description}
+                  onChange={(e) => setEditMemoDraft({ ...editMemoDraft, description: e.target.value })}
+                  placeholder="وصف المذكرة..."
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>الأولوية</Label>
+                  <Select
+                    value={editMemoDraft.priority}
+                    onValueChange={(value) => setEditMemoDraft({ ...editMemoDraft, priority: value })}
+                  >
+                    <SelectTrigger data-testid="select-edit-memo-priority">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="عاجل">عاجل</SelectItem>
+                      <SelectItem value="عالي">عالي</SelectItem>
+                      <SelectItem value="متوسط">متوسط</SelectItem>
+                      <SelectItem value="منخفض">منخفض</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>الموعد النهائي *</Label>
+                  <HijriDatePicker
+                    data-testid="input-edit-memo-deadline"
+                    value={editMemoDraft.deadline}
+                    onChange={(value) => setEditMemoDraft({ ...editMemoDraft, deadline: value })}
+                    placeholder="اختر الموعد النهائي"
+                  />
+                  {/* ⚠ HONEST, NOT DECORATIVE. An objection memo's deadline is
+                      DERIVED from the judgment row (صك receipt date + window) and
+                      ensureObjectionMemoForCase RE-DATES the memo whenever a
+                      receipt is re-recorded — so a hand edit here is legitimate
+                      but not durable on this one kind of memo. Saying so beats
+                      silently reverting it later. */}
+                  {editMemoDialog.isAutoGenerated
+                    && editMemoDialog.memoType === MemoType.OBJECTION && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      تُحتسب هذه المهلة من تاريخ استلام الصك؛ قد تُعاد إلى القيمة المحسوبة عند إعادة تسجيل الاستلام
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              data-testid="button-cancel-edit-memo"
+              onClick={() => setEditMemoDialog(null)}
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-save-edit-memo"
+              onClick={handleEditMemo}
+              disabled={
+                !editMemoDraft.title.trim()
+                || !editMemoDraft.memoType
+                || !editMemoDraft.deadline
+                || !editMemoHasChanges()
+                || submitting
+              }
+            >
+              {submitting && <Loader2 className="w-4 h-4 ml-2 animate-spin" />}
+              حفظ
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -2769,6 +3016,25 @@ export default function MemosPage() {
                     >
                       <Ban className="w-4 h-4 ml-2" />
                       لا يحتاج مذكرة
+                    </Button>
+                  )}
+                  {/* Batch 16 — edit the memo's OWN data. Lives in the detail
+                      dialog's existing action row, beside the other per-memo
+                      actions, because that row is already this page's single
+                      place for "things you can do to this memo" — a second
+                      affordance elsewhere would be the duplication the memo
+                      module keeps paying for. The gate is canEditMemoDetails,
+                      which carries BOTH the role set and the filed/cancelled
+                      stage test, so a filed memo simply shows no button. */}
+                  {canEditMemoDetails(detailMemo) && (
+                    <Button
+                      data-testid="button-edit-memo-details"
+                      variant="outline"
+                      onClick={() => openEditMemoDialog(detailMemo)}
+                      disabled={submitting}
+                    >
+                      <Pencil className="w-4 h-4 ml-2" />
+                      تعديل البيانات
                     </Button>
                   )}
                   {user && canDeleteMemos(user.role) && (

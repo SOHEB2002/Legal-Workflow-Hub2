@@ -213,6 +213,15 @@ export interface IStorage {
   getMemosByHearing(hearingId: string): Promise<Memo[]>;
   createMemo(data: Partial<Memo>): Promise<Memo>;
   updateMemo(id: string, data: Partial<Memo>): Promise<Memo | undefined>;
+  updateMemoDetailsAndLog(
+    id: string,
+    data: Partial<Memo>,
+    log: {
+      performedBy: string;
+      performerName: string;
+      changes: { field: string; label: string; from: string; to: string }[];
+    },
+  ): Promise<Memo | undefined>;
   deleteMemo(id: string): Promise<boolean>;
 
   // Support Tickets
@@ -3399,12 +3408,20 @@ export class DatabaseStorage implements IStorage {
     return mapDbMemo(newMemo);
   }
 
-  async updateMemo(id: string, data: Partial<Memo>): Promise<Memo | undefined> {
-    const existing = await this.getMemoById(id);
-    if (!existing) return undefined;
-
+  // 🔴 THE ONE PLACE `memos` DATE-MODE COLUMNS ARE CONVERTED. Extracted from
+  // updateMemo in batch 16 so updateMemoDetailsAndLog below shares it rather than
+  // restating it — and that share is not tidiness, it is the countermeasure to a
+  // documented bug CLASS in this codebase: the Memo interface types these fields
+  // as `string` while the columns are drizzle date-mode, so an ISO string that
+  // reaches `.set()` unconverted TYPECHECKS PERFECTLY and 500s at runtime inside
+  // drizzle's `value.toISOString()`. A second hand-written copy is exactly how the
+  // hearings `checked_in_at` bug happened.
+  //
+  // FIVE columns are destructured, FOUR converted: createdAt is discarded (never
+  // rewritten) and updatedAt is always overwritten with now.
+  private buildMemoUpdatePayload(data: Partial<Memo>): Record<string, unknown> {
     const { createdAt, updatedAt, startedAt, completedAt, submittedAt, reviewedAt, dataCompletionLastAckAt, ...updateFields } = data;
-    const updateData: any = { ...updateFields, updatedAt: new Date() };
+    const updateData: Record<string, unknown> = { ...updateFields, updatedAt: new Date() };
     if (startedAt) updateData.startedAt = new Date(startedAt);
     if (completedAt) updateData.completedAt = new Date(completedAt);
     if (submittedAt) updateData.submittedAt = new Date(submittedAt);
@@ -3412,9 +3429,73 @@ export class DatabaseStorage implements IStorage {
     if (dataCompletionLastAckAt !== undefined) {
       updateData.dataCompletionLastAckAt = dataCompletionLastAckAt ? new Date(dataCompletionLastAckAt) : null;
     }
+    return updateData;
+  }
 
-    await db.update(memos).set(updateData).where(eq(memos.id, id));
+  async updateMemo(id: string, data: Partial<Memo>): Promise<Memo | undefined> {
+    const existing = await this.getMemoById(id);
+    if (!existing) return undefined;
+
+    await db.update(memos).set(this.buildMemoUpdatePayload(data)).where(eq(memos.id, id));
     return this.getMemoById(id);
+  }
+
+  // Batch 16 — an edit to the memo's OWN data (title / description / type /
+  // deadline / priority), written together with its audit row.
+  //
+  // ONE TRANSACTION, mirroring skipMemoCommittee exactly: the field update and the
+  // memo_activity_log insert either both land or neither does. That matters more
+  // here than for a stage move, because the log row is the ONLY record of what the
+  // previous values were — the memo row itself keeps no history, so a lost insert
+  // makes the change unattributable and unrecoverable.
+  //
+  // Takes the FULL Partial<Memo> the route already built (not just the five
+  // fields) and runs it through the shared payload builder, so this is the same
+  // write updateMemo would have performed — it does not become a second, subtly
+  // different update path.
+  //
+  // memo_activity_log (unlike case_activity_log) has NO userName column — the
+  // timeline resolves performedBy client-side — so the acting display name is
+  // stamped into the description and metadata, which is what makes a delegated
+  // edit read "… (نيابةً عن …)". Same reason skipMemoCommittee does it.
+  async updateMemoDetailsAndLog(
+    id: string,
+    data: Partial<Memo>,
+    log: {
+      performedBy: string;
+      performerName: string;
+      changes: { field: string; label: string; from: string; to: string }[];
+    },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      await tx.update(memos)
+        .set({ ...this.buildMemoUpdatePayload(data), updatedAt: now })
+        .where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.DETAILS_EDITED,
+        // The Arabic sentence carries the whole change set, because nothing in the
+        // UI reads `metadata` today (memos have no activity-timeline view — the
+        // known memos-only display gap) and the contracts precedent is that a row
+        // whose `description` is self-contained renders correctly wherever a
+        // timeline is eventually built.
+        description:
+          `تعديل بيانات المذكرة بواسطة ${log.performerName} — `
+          + log.changes.map((c) => `${c.label}: «${c.from || "—"}» ← «${c.to || "—"}»`).join("، "),
+        metadata: {
+          performerName: log.performerName,
+          changes: log.changes,
+        },
+        performedBy: log.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
   }
 
   async deleteMemo(id: string): Promise<boolean> {
