@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
 import { usePersistedFilter, oneOf, anyString, objectLike } from "@/hooks/use-persisted-state";
@@ -74,6 +74,7 @@ import {
   Search,
   Flag,
   Paperclip,
+  RotateCcw,
 } from "lucide-react";
 import { isHearingMissingMinutes, isHearingActor, canCheckInHearing } from "@/lib/attachment-indicators";
 import { useHearings } from "@/lib/hearings-context";
@@ -81,7 +82,7 @@ import { extractApiError } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useCases } from "@/lib/cases-context";
 import { useMemos } from "@/lib/memos-context";
-import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate, caseAttendanceLawyerId, isActiveMemo } from "@shared/schema";
+import { CaseStageLabels, HearingResultLabels, isFirmFuture, isHearingCheckInLate, caseAttendanceLawyerId, isActiveMemo, isMemoFiled } from "@shared/schema";
 import type { CaseStageValue } from "@shared/schema";
 import { useClients } from "@/lib/clients-context";
 import { useAuth } from "@/lib/auth-context";
@@ -139,7 +140,11 @@ export default function HearingsPage() {
     getUpcomingHearings,
   } = useHearings();
   const { cases, getCaseById } = useCases();
-  const { getMemosByHearing } = useMemos();
+  // `memos` alongside the existing accessor: this page ALREADY consumes
+  // memos-context, and that context is one shared react-query on ["/api/memos"]
+  // — so reading the whole list here costs NO new request, and the badge below
+  // needs the full list because its scope is the CASE, not the hearing.
+  const { memos, getMemosByHearing } = useMemos();
   const { getClientName } = useClients();
   const { user, users, isViewer, actingIdentities } = useAuth();
   const { departments, getDepartmentName } = useDepartments();
@@ -149,6 +154,41 @@ export default function HearingsPage() {
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["/api/hearings"] });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ==================== BATCH 19 — THE MEMO BADGE ====================
+  // 🔴 THE SCOPE IS THE CASE, NOT THE HEARING (owner ruling). Memos carry a
+  // hearing_id, but the badge answers "does this hearing's MATTER have memo work
+  // outstanding", so getMemosByHearing is deliberately NOT used here — it is the
+  // linked-memos list in the details dialog and stays that.
+  //
+  // ONE MEMOISED PASS over the already-loaded list, keyed by caseId — never a
+  // per-row lookup, which on a 50-row page would be 50 scans of every memo in the
+  // firm. Recomputes only when the shared ["/api/memos"] query changes, which is
+  // also what makes the badge self-refreshing: every memo mutation in the app
+  // invalidates that key, so this map rebuilds and the badge re-renders with no
+  // wiring of its own.
+  //
+  // TWO STATES, PRECEDENCE ACTIVE > FILED (owner ruling: outstanding work wins).
+  // A case with both an active and a filed memo reads «مذكرة جارية». Expressed as
+  // "once active, never downgraded" rather than as an ordering of the scan, so
+  // the result cannot depend on the order memos arrive in.
+  //
+  // isActiveMemo / isMemoFiled are batch 10's SHARED helpers — no new predicate.
+  // They are not complements: a CANCELLED memo is neither, and correctly produces
+  // no badge, which is the same three-state distinction the hearing dialog's
+  // linked-memo list already makes.
+  const caseMemoBadgeMap = useMemo(() => {
+    const map = new Map<string, "active" | "filed">();
+    for (const m of memos) {
+      if (!m.caseId) continue;
+      if (isActiveMemo(m)) {
+        map.set(m.caseId, "active");
+      } else if (isMemoFiled(m) && map.get(m.caseId) !== "active") {
+        map.set(m.caseId, "filed");
+      }
+    }
+    return map;
+  }, [memos]);
 
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [caseComboOpen, setCaseComboOpen] = useState(false);
@@ -1356,6 +1396,56 @@ export default function HearingsPage() {
                                   {hearing.result === HearingResult.JUDGMENT && hearing.judgmentSide && (
                                     <span className="mr-1">({hearing.judgmentSide})</span>
                                   )}
+                                </Badge>
+                              )}
+                              {/* 🔴 BATCH 19 — THE PARENT CASE'S MEMO STATE.
+                                  Placed directly under the status badge, inside
+                                  the existing stack, so it reads as one more fact
+                                  about the row rather than a new column.
+
+                                  RULE, in order (owner):
+                                    1. hearing.result recorded → NOTHING, whatever
+                                       the memos say. Hence `!hearing.result` as
+                                       the first term: a resulted hearing is done
+                                       and must not carry memo state. It is the
+                                       SAME test the result badge two lines above
+                                       renders on, so the two can never both show.
+                                    2. else an ACTIVE memo on the case → مذكرة جارية
+                                    3. else a FILED memo on the case → مذكرة مرفوعة
+                                    4. else nothing.
+                                  Steps 2/3 and their precedence live in
+                                  caseMemoBadgeMap; this is only the render.
+
+                                  LOOK MIRRORS cases.tsx's «مذكرة جارية» badge —
+                                  same outline variant, same blue tokens, same
+                                  RotateCcw icon — so one memo means one visual
+                                  across pages. It uses `text-xs` rather than that
+                                  page's `text-[10px] px-1 py-0` to match ITS
+                                  neighbours in this stack: the cases badge is
+                                  sized for a dense 10px cluster, this row is not.
+                                  The FILED variant is the same badge in the
+                                  emerald the app already uses for مرفوعة
+                                  (getStageBadgeClass), so "done" reads as done. */}
+                              {!hearing.result && caseMemoBadgeMap.get(hearing.caseId) === "active" && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300"
+                                  data-testid={`badge-case-memo-active-${hearing.id}`}
+                                  title="توجد مذكرة جارية على قضية هذه الجلسة"
+                                >
+                                  <RotateCcw className="w-3 h-3 ml-1" />
+                                  مذكرة جارية
+                                </Badge>
+                              )}
+                              {!hearing.result && caseMemoBadgeMap.get(hearing.caseId) === "filed" && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-xs border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                  data-testid={`badge-case-memo-filed-${hearing.id}`}
+                                  title="رُفعت مذكرة على قضية هذه الجلسة ولا توجد مذكرة جارية"
+                                >
+                                  <CheckCircle className="w-3 h-3 ml-1" />
+                                  مذكرة مرفوعة
                                 </Badge>
                               )}
                               {hearing.opponentResponseRequired && (
