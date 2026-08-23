@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
-import { MemoStage, isMemoActionable, type Memo, type MemoStageValue } from "@shared/schema";
+import { MemoStage, isMemoActionable, memoUsesShortPath, type Memo, type MemoStageValue } from "@shared/schema";
 
 // SHARED memo lawyer-side advance panel. Extracted VERBATIM from memos.tsx: the
 // linear-path advance buttons (RECEIVED→DRAFTING, READY→FILED) and the
@@ -117,6 +117,13 @@ export function MemoAdvancePanel({
     if (m.currentStage === MemoStage.DRAFTING && targetStage === MemoStage.INTERNAL_REVIEW) {
       return isLawyer || isHeadOrManager;
     }
+    // 🔴 BATCH 17 — the «أخرى» short path's replacement for the line above. Same
+    // actors, because it is the same act: the drafter declaring the work finished.
+    // The two are mutually exclusive by the render gates below (each button also
+    // tests memoUsesShortPath), so no memo is ever offered both.
+    if (m.currentStage === MemoStage.DRAFTING && targetStage === MemoStage.READY) {
+      return isLawyer || isHeadOrManager;
+    }
     if (m.currentStage === MemoStage.READY && targetStage === MemoStage.FILED) {
       return isLawyer || isHeadOrManager || isAdminSupport;
     }
@@ -146,7 +153,16 @@ export function MemoAdvancePanel({
           بدء التحرير
         </Button>
       )}
-      {memo.currentStage === MemoStage.DRAFTING && canAdvanceMemoStage(memo, MemoStage.INTERNAL_REVIEW) && (
+      {/* 🔴 BATCH 17 — THE FORK. Both buttons leave تحرير; which one exists is
+          decided by memoUsesShortPath, the SAME predicate that picks the
+          transition table on the server and the path in the stages bar. An «أخرى»
+          memo is never shown "إرسال للمراجعة الداخلية" (its table has no such
+          edge, so the server would 400 it), and every other memo is never shown
+          "إنهاء التحرير" (likewise). The two conditions are exact complements, so
+          تحرير always has exactly one outbound button. */}
+      {!memoUsesShortPath(memo.memoType)
+        && memo.currentStage === MemoStage.DRAFTING
+        && canAdvanceMemoStage(memo, MemoStage.INTERNAL_REVIEW) && (
         <Button
           data-testid="button-memo-advance-to-internal-review"
           onClick={openSendToReviewDialog}
@@ -154,6 +170,21 @@ export function MemoAdvancePanel({
         >
           <AlertTriangle className="w-4 h-4 ml-2" />
           إرسال للمراجعة الداخلية
+        </Button>
+      )}
+      {/* The short path's تحرير → جاهزة_للرفع. No reviewer dialog, because there is
+          no internal review to designate one for — it advances directly, exactly
+          like بدء التحرير above. */}
+      {memoUsesShortPath(memo.memoType)
+        && memo.currentStage === MemoStage.DRAFTING
+        && canAdvanceMemoStage(memo, MemoStage.READY) && (
+        <Button
+          data-testid="button-memo-advance-to-ready"
+          onClick={() => handleAdvanceMemoStage(memo, MemoStage.READY)}
+          disabled={disabled}
+        >
+          <CheckCircle className="w-4 h-4 ml-2" />
+          إنهاء التحرير
         </Button>
       )}
       {memo.currentStage === MemoStage.READY && canAdvanceMemoStage(memo, MemoStage.FILED) && (
