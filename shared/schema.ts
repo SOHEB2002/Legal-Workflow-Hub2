@@ -6933,11 +6933,18 @@ export type PrescriptionResult = {
   /** Only on "no-rule" — why no clock applies, for the panel's explanation.
    *  "awaiting-result": the grievance IS filed and its answer is outstanding —
    *  the one genuinely silent state. It replaced "outcome-unknown", which used to
-   *  also cover the NOT-filed case that now runs a clock of its own. */
-  noRuleCause?: "accepted" | "awaiting-result" | "unrouted";
+   *  also cover the NOT-filed case that now runs a clock of its own.
+   *  "in-court": the CLASSIFICATION already resolved the path, so no track was
+   *  ever asked for and none can be. Split out of "unrouted", which named a
+   *  decision nobody could make for these cases — see computePrescriptionDate. */
+  noRuleCause?: "accepted" | "awaiting-result" | "unrouted" | "in-court";
 };
 
 export type PrescriptionCaseInput = {
+  /** Read ONLY to tell an in-court case from a genuinely unrouted one (the
+   *  "in-court" noRuleCause). It selects no rule and changes no date — every
+   *  computation below still keys on the track and the three date inputs. */
+  caseClassification?: CaseClassificationValue | null;
   currentStage?: string | null;
   stageHistory?: Array<{ stage?: string | null; timestamp?: string | null } | null> | null;
   adminCaseSubType?: string | null;
@@ -7191,8 +7198,43 @@ export function computePrescriptionDate(c: PrescriptionCaseInput): PrescriptionR
   const sub = String(c.adminCaseSubType || "").trim();
 
   // Track not chosen → nothing to compute. The batch-2 buttons set it.
+  //
+  // 🔴 TWO REASONS FOR "NO TRACK", ONE OF WHICH NAMED AN IMPOSSIBLE DECISION.
+  // An administrative case entered as منظورة_بالمحكمة never has a sub-type — its
+  // path comes from its CLASSIFICATION, and batch 12 correctly removed the track
+  // buttons from it. It nonetheless landed here and reported "unrouted", i.e.
+  // «لم يُحدَّد المسار», telling the reader the case waits on an input nobody can
+  // supply. It now gets its own cause and its own wording; "unrouted" is kept for
+  // the genuinely undecided قيد_الدراسة case, where that label is correct and the
+  // buttons still render.
+  //
+  // Asks the batch-12 question through the SAME resolver rather than naming a
+  // classification, so a future classification with the same property is covered:
+  // adminTrackChoiceApplies re-resolves with NO track and is true only for the
+  // unrouted stub. The department is pinned to "إداري" because this rule IS the
+  // administrative one (its only display site is gated on that department), and
+  // because the resolver reads adminCaseSubType nowhere else that pin is what
+  // keeps the question "does the TRACK still decide this case's path?" rather
+  // than landing on the resolver's general default arm.
+  //
+  // 🔴 THE SPLIT IS INSIDE THIS ARM, NOT ABOVE IT — DELIBERATE. Hoisting the
+  // classification test above the sub-type test would also catch a case that HAS
+  // a track and was later promoted to منظورة_بالمحكمة (hearing creation, judgment
+  // recording, a reopen into منظورة): that case computes a date today, and the
+  // hoisted test would return null and CLEAR it on the next recompute. This is a
+  // labelling change only — every case that computes a date still computes the
+  // same one, and both arms here return the `{ date: null, reason: "no-rule" }`
+  // this line already returned.
   if (sub !== AdminCaseSubType.CASE && sub !== AdminCaseSubType.GRIEVANCE) {
-    return { date: null, reason: "no-rule", noRuleCause: "unrouted" };
+    const trackStillDecides = adminTrackChoiceApplies(
+      c.caseClassification ?? "قيد_الدراسة",
+      "إداري",
+    );
+    return {
+      date: null,
+      reason: "no-rule",
+      noRuleCause: trackStillDecides ? "unrouted" : "in-court",
+    };
   }
 
   // FROZEN ONCE FILED (owner ruling R3): the stored value stays exactly as it

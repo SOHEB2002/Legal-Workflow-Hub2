@@ -1390,6 +1390,18 @@ export function CaseDetailsDialog({
                               ) : note;
                             }
                             if (p.reason === "no-rule") {
+                              // 🔴 A WHOLE SENTENCE, NOT A CAUSE CLAUSE. The case
+                              // was entered منظورة_بالمحكمة, so its path came from
+                              // its classification and no track was ever asked for
+                              // — «لا يسري التقادم — لم يُحدَّد المسار» named a
+                              // decision nobody can make. Owner's wording, verbatim,
+                              // and it does not compose with the «لا يسري التقادم —»
+                              // prefix the other causes carry, so it returns here.
+                              if (p.noRuleCause === "in-court") {
+                                return (
+                                  <span className={small}>التقادم لم يُحسب، القضية أُدخلت منظورة</span>
+                                );
+                              }
                               const cause =
                                 p.noRuleCause === "accepted" ? "تظلم مقبول"
                                 // The grievance IS filed and its answer is
