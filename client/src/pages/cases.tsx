@@ -352,6 +352,36 @@ const VIOLATION_SEARCH_FIELDS: readonly (keyof LawCase)[] = [
 // would be a lie about at least some of them.
 const NO_UPCOMING_HEARING_LABEL = "بدون جلسة قادمة";
 
+// The prescription sort's own bottom-group heading. Same shape and same reason as
+// the one above — it must read as a GROUP, not as a date, because these rows
+// arrive here for three different reasons (the track carries no prescription
+// rule; the rule applies but its input dates are not entered yet; or the clock
+// STOPPED because the case was filed) and no single day is common to them.
+//
+// ⚠ It deliberately does NOT say "قادم" the way the hearing label does. A
+// prescription deadline can be, and often is, in the PAST — an overdue one is the
+// most urgent row on the page, not an expired one — so nothing on this sort may
+// imply the dates above it are upcoming.
+const NO_PRESCRIPTION_DATE_LABEL = "بدون تاريخ تقادم";
+
+// 🔴 THE PRESCRIPTION SORT KEY — ONE DEFINITION, read by BOTH the comparator and
+// the day headings. Hoisted out of the filteredCases comparator for exactly the
+// reason hearingDayOf reads nextHearingRanks instead of re-deriving: a heading
+// must never disagree with the rows it sits above. It is a pure read of two
+// fields already on the row — computePrescriptionDate is NOT called here and is
+// not called in the render path at all; the stored prescription_date IS its
+// persisted result.
+//
+// Null means "sorts last" and covers all three no-date reasons at once — no rule,
+// missing input, and STOPPED — which is the owner's ruling that a filed case drops
+// to the bottom: the sort answers "what am I about to lose", and a filed case
+// cannot be lost.
+const prescriptionDayOf = (c: LawCase): string | null => {
+  if (prescriptionClockStopped(c)) return null;
+  const stored = String(c.prescriptionDate || "").trim();
+  return stored || null;
+};
+
 // ==================== الترتيب حسب الجلسة القادمة ====================
 // 🔴 SOURCED FROM THE HEARINGS LIST, NOT law_cases.next_hearing_date — and that
 // is the load-bearing decision here, not an implementation detail.
@@ -1344,22 +1374,17 @@ export default function CasesPage() {
       const i = CaseStagesOrder.indexOf(c.currentStage as CaseStageValue);
       return i === -1 ? 999 : i;
     };
-    // The prescription sort key, or null for "sorts last". Null covers all three
-    // no-date reasons at once — no-rule, missing-input and STOPPED — which is the
-    // owner's ruling that a filed case drops to the bottom: the sort answers
-    // "what am I about to lose", and a filed case cannot be lost.
-    const prescriptionSortKey = (c: LawCase): string | null => {
-      if (prescriptionClockStopped(c)) return null;
-      const stored = String(c.prescriptionDate || "").trim();
-      return stored || null;
-    };
+    // ⚠ The prescription sort key now lives at module scope as prescriptionDayOf,
+    // because the day headings read the SAME function. It was a local here until
+    // the headings needed it; moving it was the alternative to a second copy in
+    // the render path, which is precisely the shape that drifts.
     return matched.slice().sort((a, b) => {
       // Same shape as the hearing comparator directly below: nearest first,
       // no-date last, then fall through to the default ordering for ties. Both
       // are "YYYY-MM-DD" so `<` IS the calendar comparison — no parsing.
       if (sortByPrescription) {
-        const pa = prescriptionSortKey(a);
-        const pb = prescriptionSortKey(b);
+        const pa = prescriptionDayOf(a);
+        const pb = prescriptionDayOf(b);
         if (pa && pb) {
           if (pa !== pb) return pa < pb ? -1 : 1;
         } else if (pa || pb) {
@@ -1560,17 +1585,47 @@ export default function CasesPage() {
   const hearingDayOf = (c: LawCase): string | null =>
     nextHearingRanks.get(c.id)?.upcoming ?? null;
 
+  // 🔴 ONE MECHANISM, ONE GATE, BOTH SORTS. The separators were hearing-specific
+  // in batch 3; the prescription sort now shares them rather than growing a
+  // second implementation. The ONLY per-sort parts are (a) which day a row
+  // belongs to and (b) what the bottom group is called — everything downstream
+  // (the suppression rule, the emit rule, the markup, the date formatting) is
+  // literally the same code for both.
+  //
+  // Each arm reads the value its OWN comparator sorts by, which is what makes a
+  // heading incapable of disagreeing with the rows beneath it: hearing → the
+  // nextHearingRanks map, prescription → prescriptionDayOf. "none" returns null
+  // for every row, but showDaySeparators is false then anyway, so nothing renders.
+  const sortDayOf = (c: LawCase): string | null =>
+    sortByNextHearing ? hearingDayOf(c)
+      : sortByPrescription ? prescriptionDayOf(c)
+        : null;
+
+  // The bottom group's heading, named after the ACTIVE sort. The hearing wording
+  // says "قادمة"; the prescription wording must not, because those dates can be
+  // in the past (see NO_PRESCRIPTION_DATE_LABEL).
+  const noDayLabel = sortByPrescription
+    ? NO_PRESCRIPTION_DATE_LABEL
+    : NO_UPCOMING_HEARING_LABEL;
+
   // 🔴 SUPPRESSED WHEN THE PAGE HOLDS ONLY ONE GROUP. A separator's whole job is
   // to mark a boundary; with nothing to separate it is chrome that says nothing.
   // This is what keeps a single-case page, an all-bottom-group page, and a filter
   // that narrows to one day from each growing a stray heading.
   // "" stands in for the bottom group in the key set — no real day key can
   // collide with it, since every real key is a "YYYY-MM-DD".
+  //
+  // ⚠ The gate is on the ENUM, not on one member: `sortBy === "none"` is the only
+  // state with no ordering to mark boundaries in. Testing sortByNextHearing here
+  // (as it did before the prescription sort shared this) would silently exclude
+  // any sort added later.
   const showDaySeparators = useMemo(() => {
-    if (!sortByNextHearing) return false;
-    const keys = new Set(pagedCases.map((c) => nextHearingRanks.get(c.id)?.upcoming ?? ""));
+    if (sortBy === "none") return false;
+    const keys = new Set(pagedCases.map((c) => sortDayOf(c) ?? ""));
     return keys.size > 1;
-  }, [sortByNextHearing, pagedCases, nextHearingRanks]);
+    // sortDayOf closes over sortBy + nextHearingRanks only, both listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy, pagedCases, nextHearingRanks]);
   // Changing the size resets to page 1 — the old page number is meaningless
   // against a different slice size (page 4 of 15 may not exist at 50).
   const handlePageSizeChange = (size: number) => { setPageSize(size); setCasePage(1); };
@@ -2006,17 +2061,22 @@ export default function CasesPage() {
                       : priorityGroup === 4
                         ? "opacity-80"
                         : "";
-                // A heading is emitted above the FIRST row of each hearing day.
+                // A heading is emitted above the FIRST row of each day group.
                 // The comparison is against the previous row ON THIS PAGE, which
                 // is deliberate: the pager is a plain slice, so page 2 opens with
                 // its own heading rather than inheriting one the reader cannot
                 // see. Every heading therefore has rows beneath it by
                 // construction — the separator is emitted WITH a row, never on
                 // its own, so an empty one is impossible.
-                const hearingDay = hearingDayOf(c);
-                const prevHearingDay = idx === 0 ? undefined : hearingDayOf(pagedCases[idx - 1]);
+                //
+                // sortDayOf, not hearingDayOf: the same rows and the same rule
+                // serve BOTH sorts, and the active one decides which date the
+                // grouping is on. Neither call recomputes anything — each arm
+                // reads what its comparator already sorted by.
+                const dayKey = sortDayOf(c);
+                const prevDayKey = idx === 0 ? undefined : sortDayOf(pagedCases[idx - 1]);
                 const showSeparator =
-                  showDaySeparators && (idx === 0 || hearingDay !== prevHearingDay);
+                  showDaySeparators && (idx === 0 || dayKey !== prevDayKey);
                 // Hijri via the hearings page's OWN helpers (formatHijriDateFull +
                 // arabicWeekday), so the two pages name a day identically. The
                 // Gregorian is added VISIBLY beside it rather than through
@@ -2029,7 +2089,7 @@ export default function CasesPage() {
                 {showSeparator && (
                   <TableRow
                     className="hover:bg-transparent border-0"
-                    data-testid={`row-day-separator-${hearingDay ?? "none"}`}
+                    data-testid={`row-day-separator-${dayKey ?? "none"}`}
                   >
                     {/* colSpan 10 — the table's column count is FIXED: ten
                         <col> entries, ten unconditional <TableHead>s, and the
@@ -2039,16 +2099,16 @@ export default function CasesPage() {
                       colSpan={10}
                       className="bg-muted/60 py-1.5 text-right text-xs font-semibold text-muted-foreground"
                     >
-                      {hearingDay ? (
+                      {dayKey ? (
                         <span className="flex flex-wrap items-center gap-x-2">
-                          <span>{arabicWeekday(hearingDay)}</span>
-                          <span>{formatHijriDateFull(hearingDay)}</span>
+                          <span>{arabicWeekday(dayKey)}</span>
+                          <span>{formatHijriDateFull(dayKey)}</span>
                           <LtrInline className="font-normal opacity-80">
-                            {formatDualDate(hearingDay).gregorian}
+                            {formatDualDate(dayKey).gregorian}
                           </LtrInline>
                         </span>
                       ) : (
-                        NO_UPCOMING_HEARING_LABEL
+                        noDayLabel
                       )}
                     </TableCell>
                   </TableRow>
