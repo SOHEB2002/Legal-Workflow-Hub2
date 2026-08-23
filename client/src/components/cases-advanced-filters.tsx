@@ -574,7 +574,7 @@ export function CasesAdvancedFilters({
                 // hearing at all can now rank at the very top, which the old label
                 // gave the user no way to predict. Still ONE option in the same
                 // place (owner ruling): only what it keys on widened.
-                { value: "hearing", label: "حسب أقرب موعد — جلسة أو مهلة اعتراض" },
+                { value: "hearing", label: "حسب أقرب موعد قادم — جلسة أو مهلة اعتراض" },
                 { value: "prescription", label: "حسب تاريخ التقادم (الأقرب أولاً)" },
               ] as const).map((opt) => (
                 <label

@@ -4261,6 +4261,13 @@ export async function registerRoutes(
         //     figure a user can move. Null until the صك receipt is recorded, which
         //     is exactly when the window starts existing.
         currentJudgmentObjectionDeadline: judgmentSummaries.get(c.id)?.objectionDeadline ?? null,
+        //   • currentJudgmentOpensWindow — does an objection window EXIST on that
+        //     ruling. Batch 20 shipped the deadline WITHOUT this and the sort read
+        //     the date blind; on production 21 of the 34 rows carrying a deadline
+        //     have opens_window = false, so a historical record of a window that
+        //     never opened was ranking cases to the top. Defaults FALSE, so a case
+        //     with no ruling at all contributes no deadline.
+        currentJudgmentOpensWindow: judgmentSummaries.get(c.id)?.opensWindow ?? false,
         // DERIVED, never stored, and computed HERE because this is the last point
         // at which stageHistory still exists — the destructure above strips it.
         // Uses the SHARED caseReachedJudgmentStage so the client's صك gates

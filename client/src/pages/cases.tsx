@@ -351,14 +351,25 @@ const VIOLATION_SEARCH_FIELDS: readonly (keyof LawCase)[] = [
 // ago, and a case that never had one all land here), so any date-shaped label
 // would be a lie about at least some of them.
 //
-// ⚠ BATCH 20 RE-WORDED IT, and the old text is not recoverable by accident. It
-// said «بدون جلسة قادمة», which named ONE of the two dates this sort now weighs —
-// a case with no hearing but a live objection deadline is no longer in this group
-// at all, so the old label would have been false about the group it heads. It also
-// deliberately drops «قادم»: an objection deadline can be in the PAST (see
-// CASE_URGENCY_SOURCE_LABEL), so nothing here may imply the dates above are
-// upcoming — the same ruling NO_PRESCRIPTION_DATE_LABEL below records.
-const NO_UPCOMING_HEARING_LABEL = "بدون موعد";
+// ⚠ RE-WORDED TWICE, and the second revision undid half of the first. Batch 20
+// widened it from «بدون جلسة قادمة» — which named only ONE of the two dates the
+// sort weighs — and also dropped «قادم», on the grounds that an objection deadline
+// could be in the PAST and so a "upcoming" promise would be false about the rows
+// above it.
+//
+// 🔴 THAT SECOND GROUND IS GONE. liveObjectionDeadlineOf now refuses any deadline
+// that has passed (term 2), so NO past date can rank on this sort — the hearing
+// side never could — and «قادم» is honest again. It is restored, because the
+// bottom group is now exactly "nothing upcoming", and the vaguer «بدون موعد» would
+// under-describe it.
+//
+// The batch-20 half that STANDS: it must not say «جلسة». A case with no session
+// but a live objection window is not in this group.
+//
+// ⚠ Contrast NO_PRESCRIPTION_DATE_LABEL below, which correctly still has no
+// «قادم» — that sort deliberately ranks OVERDUE prescription dates at the top.
+// The two labels differ on purpose; do not "make them consistent".
+const NO_UPCOMING_HEARING_LABEL = "بدون موعد قادم";
 
 // 🔴 BATCH 20 — WHY A ROW SITS UNDER A DAY. The hearing sort now keys on whichever
 // is SOONER, the next session or the current ruling's objection deadline, so a
@@ -366,17 +377,85 @@ const NO_UPCOMING_HEARING_LABEL = "بدون موعد";
 // there. Same problem the memos page hit in batch 8b and the same answer: carry
 // the source alongside the day and name it in the heading.
 //
-// ⚠ «مهلة اعتراض» CAN BE IN THE PAST. Unlike a hearing — nearestUpcomingHearingDate
-// returns only future sessions — the objection deadline is taken as stored, so an
-// expired window sorts to the very top. That is deliberate and matches the memos
-// page's treatment of a memo deadline: an objection window that has run out is the
-// loudest thing on the page, not something to hide.
+// ⚠ BOTH SOURCES ARE NOW GUARANTEED FUTURE-DATED. nearestUpcomingHearingDate
+// returns only sessions from the firm's today onward (untouched by this fix), and
+// liveObjectionDeadlineOf refuses any deadline that has passed. Batch 20 let an
+// expired window rank to the very top; it no longer can, which is what makes
+// «قادم» honest again in the labels.
 const CASE_URGENCY_SOURCE_LABEL = {
   hearing: "جلسة",
   objection: "مهلة اعتراض",
 } as const;
 
 type CaseUrgencySource = keyof typeof CASE_URGENCY_SOURCE_LABEL;
+
+// 🔴 IS THERE A LIVE OBJECTION WINDOW ON THIS CASE — the fix batch 20 needed.
+//
+// Batch 20 read case_judgments.objection_deadline as a bare DATE and asked nothing
+// else, so a stored record of a window that never opened, or one that expired
+// months ago, ranked a finished case to the top of the page. On production 21 of
+// the 34 rows carrying a deadline have opens_window = false. THE DATA IS CORRECT —
+// opens_window = false is truthful and the date is the record of what the window
+// was — so this is fixed by asking the right question here, never by touching a
+// row.
+//
+// Returns the deadline only when ALL THREE hold:
+//
+//   1. THE WINDOW EXISTS — the CURRENT ruling's opens_window is true. Stored
+//      intent, decided when the ruling was recorded, so it is authoritative and
+//      not re-derived. Absent/false → no window ever opened → no date.
+//
+//   2. IT HAS NOT PASSED — `deadline >= firmToday()`, lexicographic on
+//      "YYYY-MM-DD" against the FIRM'S calendar day (Asia/Riyadh via Intl), never
+//      a UTC slice. The date-boundary bug class is documented at the top of
+//      CLAUDE.md and cost a production outage; `>=` keeps the LAST day of the
+//      window live, which is the day it matters most.
+//
+//   3. THE CASE IS STILL AT محكوم_حكم_ابتدائي.
+//
+// 🔴 TERM 3 IS A POSITIVE STAGE TEST, AND IT REPLACES THE TERMINAL-SET EXCLUSION
+// THE FIX WAS SPECIFIED WITH — because that exclusion would have silently killed
+// the feature. The spec said to exclude محكوم_حكم_ابتدائي · محكوم_حكم_نهائي ·
+// مشطوبة · مقفلة, but محكوم_حكم_ابتدائي is the ONLY stage on which a live objection
+// window can exist:
+//   • opensWindow is written as `!judgmentIsAppeal && judgmentFinal === false`
+//     (routes.ts) — a first-instance, objectionable ruling;
+//   • ALLOWED_CASE_TRANSITIONS routes exactly that ruling منظورة → محكوم_حكم_ابتدائي,
+//     whose only exits are منظورة_استئناف and مقفلة.
+// So excluding it would have left zero qualifying cases. The positive test
+// delivers the stated INTENT of term 3 — "a finished case has nothing left to
+// lose" — strictly more completely: every member of the shared TerminalCaseStages
+// set (مقفلة · مشطوبة · تحصيل · مؤرشفة · محكوم_حكم_نهائي · محكوم_حكم_ابتدائي) is
+// excluded by it except the one that must not be.
+//
+// 🔴 IT IS ALSO THE FOURTH TERM — "the objection was already FILED" — for free,
+// and WITHOUT coupling the sort to a memo. Every route that answers the objection
+// question moves the case OFF this stage: filing the لائحة اعتراضية
+// (promoteCaseOnObjectionFiled), «تم الاستئناف» and «الخصم استأنف»
+// (POST /appeal-outcome), creating a court hearing here, «لم يستأنف» (→
+// محكوم_حكم_نهائي), and closure (→ مقفلة). A case that has appealed is at
+// منظورة_استئناف and contributes nothing. Keying on the memo's stage instead would
+// have coupled this sort to a record the user can retype (batch 17) or edit
+// (batch 16) — the exact reason batch 20 keyed on the judgment row.
+//
+// ⚠ ONE KNOWN GAP, accepted: promoteCaseOnObjectionFiled is best-effort inside a
+// swallowed try/catch, so a filing whose promotion FAILED leaves the case at
+// محكوم_حكم_ابتدائي and it keeps ranking. That case is genuinely desynchronised and
+// showing it is the better failure.
+//
+// Read structurally — these list-only stamps are deliberately absent from LawCase
+// so they can never reach an insert or update path.
+function liveObjectionDeadlineOf(c: LawCase, today: string): string | null {
+  const j = c as {
+    currentJudgmentObjectionDeadline?: string | null;
+    currentJudgmentOpensWindow?: boolean;
+  };
+  if (!j.currentJudgmentOpensWindow) return null;
+  if (c.currentStage !== "محكوم_حكم_ابتدائي") return null;
+  const deadline = String(j.currentJudgmentObjectionDeadline || "").trim();
+  if (!deadline) return null;
+  return deadline >= today ? deadline : null;
+}
 
 // The prescription sort's own bottom-group heading. Same shape and same reason as
 // the one above — it must read as a GROUP, not as a date, because these rows
@@ -1329,11 +1408,10 @@ export default function CasesPage() {
   // for hasJudgmentRecord.
   const caseUrgency = useMemo(() => {
     const map = new Map<string, { day: string; source: CaseUrgencySource }>();
+    const today = firmToday();
     for (const c of cases) {
       const hearing = nextHearingRanks.get(c.id)?.upcoming || null;
-      const deadline = String(
-        (c as { currentJudgmentObjectionDeadline?: string | null }).currentJudgmentObjectionDeadline || "",
-      ).trim() || null;
+      const deadline = liveObjectionDeadlineOf(c, today);
       if (hearing && deadline) {
         map.set(c.id, hearing <= deadline
           ? { day: hearing, source: "hearing" }
@@ -2075,10 +2153,12 @@ export default function CasesPage() {
               >
                 <CalendarClock className="h-3.5 w-3.5" />
                 {sortByNextHearing
-                  // Batch 20 — matches the widened radio option word for word on
-                  // its first clause, and its "what sank" clause now names the
-                  // BOTTOM GROUP's real rule (neither date), not just hearings.
-                  ? "مرتبة حسب أقرب موعد (جلسة أو مهلة اعتراض) — الأقرب أولاً، وما لا موعد له في الأسفل"
+                  // Matches the widened radio option word for word on its first
+                  // clause, and its "what sank" clause names the BOTTOM GROUP's
+                  // real rule (neither date), not just hearings. «قادم» restored
+                  // alongside NO_UPCOMING_HEARING_LABEL — both dates this sort
+                  // weighs are now guaranteed to be in the future.
+                  ? "مرتبة حسب أقرب موعد قادم (جلسة أو مهلة اعتراض) — الأقرب أولاً، وما لا موعد قادم له في الأسفل"
                   : "مرتبة حسب تاريخ التقادم — الأقرب أولاً، وما لا يسري عليه تقادم في الأسفل"}
                 <button
                   type="button"

@@ -732,6 +732,13 @@ export type CurrentJudgmentSummary = {
   // memo's deadline — the two are different dates on different rows, and the memo
   // is only re-dated FROM this one.
   objectionDeadline: string | null;
+  // 🔴 THE FIX AFTER BATCH 20 — "does an objection window EXIST at all?". Batch 20
+  // shipped the deadline WITHOUT this and the sort read the date blind: on
+  // production 21 of 34 rows carrying a deadline have opens_window = false, so a
+  // historical record of a window that never opened was ranking cases to the top
+  // of the page. STORED INTENT, decided when the ruling was recorded — see the
+  // column comment — so it is the authoritative answer, not a derivation.
+  opensWindow: boolean;
 };
 
 // The handle drizzle hands a db.transaction callback. Derived from db itself
@@ -8921,12 +8928,15 @@ export class DatabaseStorage implements IStorage {
       // new query, no new join, no per-case lookup: the row is already being
       // selected to answer hearingId / outcome / hasDeed.
       objectionDeadline: caseJudgments.objectionDeadline,
+      // Same row again — the deadline is meaningless without it.
+      opensWindow: caseJudgments.opensWindow,
     }).from(caseJudgments).orderBy(asc(caseJudgments.caseId), asc(caseJudgments.sequence));
 
     // Ordered ascending, so the last write per case wins — that is the highest
     // sequence, i.e. the current ruling.
     const current = new Map<string, {
-      id: string; hearingId: string | null; outcome: string | null; objectionDeadline: string | null;
+      id: string; hearingId: string | null; outcome: string | null;
+      objectionDeadline: string | null; opensWindow: boolean;
     }>();
     for (const r of rows) {
       current.set(r.caseId, {
@@ -8934,6 +8944,7 @@ export class DatabaseStorage implements IStorage {
         hearingId: r.hearingId ?? null,
         outcome: r.outcome ?? null,
         objectionDeadline: r.objectionDeadline ?? null,
+        opensWindow: r.opensWindow ?? false,
       });
     }
 
@@ -8952,6 +8963,7 @@ export class DatabaseStorage implements IStorage {
         outcome: j.outcome,
         hasDeed: attachedIds.has(j.id),
         objectionDeadline: j.objectionDeadline,
+        opensWindow: j.opensWindow,
       });
     }
     return out;
