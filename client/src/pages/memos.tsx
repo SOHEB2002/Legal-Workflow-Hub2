@@ -361,6 +361,42 @@ function canSkipMemoCommittee(
   );
 }
 
+// 🔴 BATCH 21 — "تجاوز المراجعة الداخلية". Restates the SERVER rule on
+// POST /api/memos/:id/skip-internal-review verbatim → visibility == authorization.
+//
+// Same actor set as canSkipMemoCommittee below PLUS admin_support (the batch-21
+// owner ruling adds it to this family; the /skip-committee gates are untouched).
+// Only the stage differs — مراجعة_داخلية instead of لجنة_مراجعة.
+//
+// FOUR-EYES DELIBERATELY DOES NOT APPLY (owner, explicitly): the assignee — the
+// drafter — may skip the review of their own draft. The mandatory reason and the
+// activity row are the control. The internal-review DECISION control
+// (canDoMemoInternalReview) keeps its designated-reviewer lock untouched.
+//
+// isMemoActionable carries the cancelled / paused / awaiting checks, and the
+// stage test excludes a filed memo by construction (مرفوعة ≠ مراجعة_داخلية) — the
+// server additionally asserts isMemoFiled for a direct-API caller.
+function canSkipMemoInternalReview(
+  memo: Memo,
+  userRole: string,
+  userId: string,
+  memoCase: LawCase | null,
+  userDeptId: string | null,
+): boolean {
+  if (!isMemoActionable(memo)) return false;
+  if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) return false;
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head") {
+    return !!memoCase && !!userDeptId && memoCase.departmentId === userDeptId;
+  }
+  if (!!memo.assignedTo && memo.assignedTo === userId) return true;
+  return !!memoCase && (
+    memoCase.primaryLawyerId === userId
+    || memoCase.responsibleLawyerId === userId
+    || (Array.isArray(memoCase.assignedLawyers) && memoCase.assignedLawyers.includes(userId))
+  );
+}
+
 function canDoMemoTakeNotesOutcome(
   memo: Memo,
   userRole: string,
@@ -1201,6 +1237,13 @@ export default function MemosPage() {
   const [skipCommitteeMemo, setSkipCommitteeMemo] = useState<Memo | null>(null);
   const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
 
+  // Batch 21 — the same override one stage earlier. Its own state and its own
+  // dialog, exactly as the committee skip is separate from the committee decision:
+  // different stage, different target, and the two must never be confused.
+  const [showSkipInternalReviewDialog, setShowSkipInternalReviewDialog] = useState(false);
+  const [skipInternalReviewMemo, setSkipInternalReviewMemo] = useState<Memo | null>(null);
+  const [skipInternalReviewReason, setSkipInternalReviewReason] = useState("");
+
   const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
   const [takeNotesMemo, setTakeNotesMemo] = useState<Memo | null>(null);
   const [takeNotesNotes, setTakeNotesNotes] = useState("");
@@ -1236,6 +1279,16 @@ export default function MemosPage() {
     setShowSkipCommitteeDialog(false);
     setSkipCommitteeMemo(null);
     setSkipCommitteeReason("");
+  };
+  const openSkipInternalReviewDialog = (m: Memo) => {
+    setSkipInternalReviewMemo(m);
+    setSkipInternalReviewReason("");
+    setShowSkipInternalReviewDialog(true);
+  };
+  const closeSkipInternalReviewDialog = () => {
+    setShowSkipInternalReviewDialog(false);
+    setSkipInternalReviewMemo(null);
+    setSkipInternalReviewReason("");
   };
   const openTakeNotesDialog = (m: Memo) => {
     setTakeNotesMemo(m);
@@ -1305,6 +1358,27 @@ export default function MemosPage() {
       closeSkipCommitteeDialog();
     } catch (err) {
       toast({ title: "فشل تجاوز لجنة المراجعة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setReviewActionInProgress(false);
+    }
+  };
+
+  // Batch 21. Deliberately does NOT name the destination in its toast: the server
+  // resolves it from the memo's own path (لجنة_مراجعة normally, جاهزة_للرفع in a
+  // department with no committee), so a hardcoded phrase here could contradict
+  // what actually happened. The stage bar behind the dialog shows the truth.
+  const handleSkipInternalReview = async () => {
+    if (!skipInternalReviewMemo) return;
+    const reason = skipInternalReviewReason.trim();
+    if (!reason) return;
+    setReviewActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/memos/${skipInternalReviewMemo.id}/skip-internal-review`, { reason });
+      await queryClient.invalidateQueries({ queryKey: ["/api/memos"] });
+      toast({ title: "تم تجاوز المراجعة الداخلية" });
+      closeSkipInternalReviewDialog();
+    } catch (err) {
+      toast({ title: "فشل تجاوز المراجعة الداخلية", description: extractApiError(err), variant: "destructive" });
     } finally {
       setReviewActionInProgress(false);
     }
@@ -2928,6 +3002,29 @@ export default function MemosPage() {
                       المراجعة الداخلية
                     </Button>
                   )}
+                  {/* Batch 21 — the reasoned override, beside the decision it
+                      overrides. Destructive framing (like تجاوز لجنة المراجعة
+                      further down) so it can never be mistaken for recording a
+                      review: its actor set is the wider skip set, and it DELETES
+                      the review rather than deciding it. */}
+                  {user && canSkipMemoInternalReview(
+                    detailMemo,
+                    user.role,
+                    user.id,
+                    getMemoCase(detailMemo),
+                    user.departmentId,
+                  ) && (
+                    <Button
+                      data-testid={`button-skip-internal-review-${detailMemo.id}`}
+                      variant="outline"
+                      onClick={() => openSkipInternalReviewDialog(detailMemo)}
+                      disabled={submitting}
+                      className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                    >
+                      <AlertTriangle className="w-4 h-4 ml-2" />
+                      تجاوز المراجعة الداخلية
+                    </Button>
+                  )}
                   {user && canDoMemoCommitteeDecision(detailMemo, user.role, getDepartmentName(cases.find((c) => c.id === detailMemo.caseId)?.departmentId || "") === "عمالي") && (
                     <Button
                       data-testid={`button-committee-decision-${detailMemo.id}`}
@@ -3475,6 +3572,62 @@ export default function MemosPage() {
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Batch 21 — skip-internal-review dialog. Same shape as the skip-committee
+          dialog below (its own state, mandatory reason, destructive framing), one
+          stage earlier. The destination is NOT named in the copy: the server
+          resolves it from this memo's own path, so promising a stage here could
+          be wrong for a department with no committee. */}
+      <Dialog
+        open={showSkipInternalReviewDialog}
+        onOpenChange={(open) => { if (!open) closeSkipInternalReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل المذكرة إلى <strong>المرحلة التالية في مسارها</strong> دون قرار مراجعة
+              داخلية. يُسجَّل هذا الإجراء في سجل نشاط المذكرة مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              يبقى قرار المراجعة الداخلية — عند عدم التجاوز — محصوراً بالمراجع الداخلي
+              المعيَّن أو مدير الفرع.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-memo-skip-internal-review-reason"
+                value={skipInternalReviewReason}
+                onChange={(e) => setSkipInternalReviewReason(e.target.value)}
+                placeholder="سبب تجاوز المراجعة الداخلية (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSkipInternalReviewDialog}
+              data-testid="button-cancel-memo-skip-internal-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-memo-skip-internal-review"
+              onClick={handleSkipInternalReview}
+              disabled={reviewActionInProgress || !skipInternalReviewReason.trim()}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              تأكيد التجاوز
             </Button>
           </DialogFooter>
         </DialogContent>

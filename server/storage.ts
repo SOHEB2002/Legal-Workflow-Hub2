@@ -451,6 +451,14 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
   ): Promise<LawCase | undefined>;
+  // Batch 21 — the same override one stage earlier: مراجعة_داخلية (or its تظلم
+  // twin) → THE NEXT STAGE ON THE CASE'S OWN PATH. toStage is resolved by the
+  // ROUTE (getStagesForClassification), never fixed here — internal review sits on
+  // seven different paths whose next stage differs.
+  skipCaseInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
+  ): Promise<LawCase | undefined>;
   // The COMMITTEE DECISION itself (إحالة_للجنة_المراجعة → منظورة | جاهزة_للرفع |
   // الأخذ_بالملاحظات). Same one-transaction shape as skipCaseCommittee, plus the
   // two review columns. Cases have NO committee-decisions table (consultations and
@@ -499,6 +507,12 @@ export interface IStorage {
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
   ): Promise<Memo | undefined>;
+  // Batch 21 — مراجعة_داخلية → the next stage on the memo's own path, resolved by
+  // the route through getMemoStagePath (a labor memo has no committee stage).
+  skipMemoInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
+  ): Promise<Memo | undefined>;
   returnConsultationToCommittee(
     id: string,
     input: { notes: string; performedBy: string },
@@ -512,6 +526,12 @@ export interface IStorage {
   skipConsultationCommittee(
     id: string,
     input: { reason: string; performedBy: string; performerName: string },
+  ): Promise<Consultation | undefined>;
+  // Batch 21 — مراجعة_داخلية → the next stage on the consultation's own path,
+  // resolved by the route (a labor consultation has no committee stage).
+  skipConsultationInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
   ): Promise<Consultation | undefined>;
 
   // ==================== Contracts module ====================
@@ -4098,6 +4118,52 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // 🔴 BATCH 21 — "تجاوز المراجعة الداخلية" for a memo. Mirrors skipMemoCommittee
+  // directly above, with the TARGET PASSED IN rather than fixed: the next stage
+  // after مراجعة_داخلية is لجنة_مراجعة on a department that has a committee and
+  // جاهزة_للرفع on one that does not (memoStagesForDepartment hides it for عمالي),
+  // so a hardcoded value would strand a labor memo off its own path. The route
+  // resolves it through getMemoStagePath — batch 17's single memo path resolver —
+  // and hands it here.
+  //
+  // ⚠ An «أخرى» memo can never reach this writer: its four-stage short path has no
+  // مراجعة_داخلية at all, so the endpoint's stage guard excludes it by construction
+  // — the same way batch 17 left /skip-committee long-path-only.
+  //
+  // internal_reviewer_id is DELIBERATELY NOT CLEARED — see the endpoint.
+  async skipMemoInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
+  ): Promise<Memo | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(memos).where(eq(memos.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(memos).set({
+        currentStage: input.toStage,
+        updatedAt: now,
+      }).where(eq(memos.id, id));
+      await tx.insert(memoActivityLog).values({
+        id: randomUUID(),
+        memoId: id,
+        activityType: MemoActivityType.INTERNAL_REVIEW_SKIPPED,
+        description: `تجاوز المراجعة الداخلية بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: input.toStage,
+        },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(memos).where(eq(memos.id, id));
+      return updated ? mapDbMemo(updated) : undefined;
+    });
+  }
+
   // ==================== Support Tickets ====================
 
   async getAllSupportTickets(): Promise<SupportTicket[]> {
@@ -7224,6 +7290,49 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
+  // 🔴 BATCH 21 — "تجاوز المراجعة الداخلية" for a consultation. Mirrors
+  // skipConsultationCommittee directly above, and skipContractInternalReview
+  // (which shipped first and is this feature's model), with ONE difference: the
+  // TARGET IS PASSED IN rather than fixed. The next stage after مراجعة_داخلية is
+  // لجنة_مراجعة on a department that HAS a committee and جاهزة_للإرسال on one that
+  // does not (consultationStagesForDepartment hides it for عمالي), so a hardcoded
+  // value would strand a labor consultation on a stage its own path lacks. The
+  // route resolves it; this stays a pure writer.
+  //
+  // internal_reviewer_id is DELIBERATELY NOT CLEARED — see the endpoint.
+  async skipConsultationInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
+  ): Promise<Consultation | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const truncated = input.reason.slice(0, 120);
+      await tx.update(consultations).set({
+        currentStage: input.toStage,
+        updatedAt: now,
+      }).where(eq(consultations.id, id));
+      await tx.insert(consultationActivityLog).values({
+        id: randomUUID(),
+        consultationId: id,
+        activityType: ConsultationActivityType.INTERNAL_REVIEW_SKIPPED,
+        description: `تجاوز المراجعة الداخلية بواسطة ${input.performerName} — ${truncated}`,
+        metadata: {
+          reason: input.reason,
+          performerName: input.performerName,
+          fromStage,
+          toStage: input.toStage,
+        },
+        performedBy: input.performedBy,
+        performedAt: now,
+      });
+      const [updated] = await tx.select().from(consultations).where(eq(consultations.id, id));
+      return updated ? mapDbConsultation(updated) : undefined;
+    });
+  }
+
   async getConsultationNoteOutcomes(consultationId: string): Promise<ConsultationNoteOutcome[]> {
     const rows = await db.select().from(consultationNoteOutcomes)
       .where(eq(consultationNoteOutcomes.consultationId, consultationId))
@@ -7547,6 +7656,64 @@ export class DatabaseStorage implements IStorage {
         details: input.reason.slice(0, 120),
         previousValue: fromStage,
         newValue: targetStage,
+        createdAt: now,
+      });
+      const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      return updated ? mapDbCase(updated) : undefined;
+    });
+  }
+
+  // 🔴 BATCH 21 — "تجاوز المراجعة الداخلية" for a case. Mirrors skipCaseCommittee
+  // above field-for-field, with ONE deliberate difference:
+  //
+  //   • THE TARGET IS PASSED IN, not hardcoded. skipCaseCommittee can fix
+  //     جاهزة_للرفع because its endpoint guards caseClassification ===
+  //     قيد_الدراسة, so exactly one post-committee stage is reachable. Internal
+  //     review has no such guard and sits on FIVE different paths (commercial,
+  //     labor, general, admin-تظلم, admin-قضية) plus both in-court variants, whose
+  //     next stage after مراجعة_داخلية is not the same value. The ROUTE resolves it
+  //     through getStagesForClassification — the skip-data-completion precedent —
+  //     and hands it here, so the path rule lives in one place and this stays a
+  //     pure writer.
+  //
+  // internal_reviewer_id is DELIBERATELY NOT CLEARED — see the endpoint.
+  async skipCaseInternalReview(
+    id: string,
+    input: { reason: string; performedBy: string; performerName: string; toStage: string },
+  ): Promise<LawCase | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(lawCases).where(eq(lawCases.id, id));
+      if (!existing) return undefined;
+      const now = new Date();
+      const fromStage = existing.currentStage;
+      const existingHistory = Array.isArray(existing.stageHistory)
+        ? existing.stageHistory
+        : [];
+      const stageHistory = [
+        ...existingHistory,
+        {
+          stage: input.toStage,
+          timestamp: now.toISOString(),
+          userId: input.performedBy,
+          userName: input.performerName,
+          notes: `تجاوز المراجعة الداخلية — ${input.reason}`,
+        },
+      ];
+      await tx.update(lawCases).set({
+        currentStage: input.toStage,
+        stageHistory,
+        updatedAt: now,
+      }).where(eq(lawCases.id, id));
+      await tx.insert(caseActivityLog).values({
+        id: nanoid(),
+        caseId: id,
+        userId: input.performedBy,
+        userName: input.performerName,
+        actionType: "internal_review_skipped",
+        title: "تجاوز المراجعة الداخلية",
+        details: input.reason.slice(0, 120),
+        previousValue: fromStage,
+        newValue: input.toStage,
         createdAt: now,
       });
       const [updated] = await tx.select().from(lawCases).where(eq(lawCases.id, id));

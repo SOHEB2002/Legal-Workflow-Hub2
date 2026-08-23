@@ -102,6 +102,10 @@ interface CaseProgressBarProps {
   // one above, so this action is gated on the callback's presence, NOT on
   // canReviewCases.
   onSkipCommittee?: (reason: string) => void;
+  // Batch 21 — "تجاوز المراجعة الداخلية". Same conditional-callback idiom as
+  // onSkipCommittee above: the parent supplies it ONLY when the user satisfies the
+  // server's rule, so the button cannot render for anyone the endpoint would 403.
+  onSkipInternalReview?: (reason: string) => void;
   onPlatformReviewAddNotes?: (notes: string) => void;
   onPlatformReviewResubmit?: () => void;
   hasPlatformNotes?: boolean;
@@ -180,6 +184,7 @@ export function CaseProgressBar({
   onReviewCommitteeApprove,
   onReviewCommitteeAddNotes,
   onSkipCommittee,
+  onSkipInternalReview,
   onPlatformReviewAddNotes,
   onPlatformReviewResubmit,
   hasPlatformNotes = false,
@@ -245,6 +250,7 @@ export function CaseProgressBar({
   const [returnToCommitteeNotes, setReturnToCommitteeNotes] = useState("");
   const [committeeReviewNotes, setCommitteeReviewNotes] = useState("");
   const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
+  const [skipInternalReviewReason, setSkipInternalReviewReason] = useState("");
   const normalizedStage = currentStage;
   const effectiveClassification = caseClassification || "قيد_الدراسة";
   let stagesOrder = getStagesForClassification(
@@ -569,6 +575,11 @@ export function CaseProgressBar({
   // change nothing for the case that motivated the batch while quietly widening
   // a chair's seat. Revisit only as a deliberate committee-delegation decision.
   const isAtReviewCommittee = normalizedStage === "إحالة_للجنة_المراجعة";
+  // ⚠ Batch 21 needed exactly this test and found isAtInternalReview ALREADY
+  // DEFINED above (:557) with the identical two-stage rule — مراجعة_داخلية plus
+  // the admin تظلم track's مراجعة_داخلية_للتظلم. Reused rather than restated; a
+  // second copy is how the grievance arm would eventually get dropped from one of
+  // them. Cases are the only entity with two internal-review stages.
   const showReviewCommitteeActions =
     isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove &&
     (userRole === "branch_manager" ||
@@ -700,6 +711,12 @@ export function CaseProgressBar({
   // The reason is MANDATORY (the server 400s without it), so the confirm button
   // stays disabled until something is typed — the same rule the memo-cancel
   // ("لا يحتاج مذكرة") dialog applies.
+  const handleSkipInternalReview = () => {
+    if (!onSkipInternalReview || !skipInternalReviewReason.trim()) return;
+    onSkipInternalReview(skipInternalReviewReason.trim());
+    setSkipInternalReviewReason("");
+  };
+
   const handleSkipCommittee = () => {
     if (!onSkipCommittee || !skipCommitteeReason.trim()) return;
     onSkipCommittee(skipCommitteeReason.trim());
@@ -1187,6 +1204,60 @@ export function CaseProgressBar({
           passes the server's rule → visibility == authorization. Styled as a
           destructive-outline SECONDARY action so it reads as an override and
           cannot be confused with the green "لا يوجد ملاحظات" approve button. */}
+      {/* Batch 21 — "تجاوز المراجعة الداخلية". Same block shape, same
+          destructive-outline framing and the same conditional-callback gate as
+          the committee skip directly below, one stage earlier. Renders on BOTH
+          internal-review stages (see isAtInternalReview).
+
+          The destination is described as "the next stage on its path" rather than
+          named: the server resolves it from the case's own resolved path, which
+          differs by department, classification and admin track — so naming one
+          stage here would be wrong for most cases. */}
+      {isAtInternalReview && onSkipInternalReview && (
+        <div className="flex items-center justify-center" data-testid="row-skip-internal-review">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                data-testid="button-skip-internal-review"
+              >
+                <AlertTriangle className="w-4 h-4 ml-1" />
+                تجاوز المراجعة الداخلية
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>تجاوز مرحلة المراجعة الداخلية</AlertDialogTitle>
+                <AlertDialogDescription>
+                  سيتم نقل القضية إلى <strong>المرحلة التالية في مسارها</strong> دون قرار
+                  مراجعة داخلية. يُسجَّل هذا الإجراء في سجل النشاط مع اسمك والسبب. السبب إلزامي.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <Textarea
+                placeholder="سبب تجاوز المراجعة الداخلية (إلزامي)..."
+                value={skipInternalReviewReason}
+                onChange={(e) => setSkipInternalReviewReason(e.target.value)}
+                className="mt-2"
+                data-testid="input-skip-internal-review-reason"
+              />
+              <AlertDialogFooter className="gap-2">
+                <AlertDialogCancel onClick={() => setSkipInternalReviewReason("")}>إلغاء</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleSkipInternalReview}
+                  disabled={!skipInternalReviewReason.trim()}
+                  data-testid="button-confirm-skip-internal-review"
+                >
+                  تأكيد التجاوز
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      )}
+
       {isAtReviewCommittee && onSkipCommittee && (
         <div className="flex items-center justify-center" data-testid="row-skip-committee">
           <AlertDialog>

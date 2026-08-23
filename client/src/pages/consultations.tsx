@@ -365,6 +365,33 @@ function canSkipCommittee(
   return !!consultation.assignedTo && consultation.assignedTo === userId;
 }
 
+// 🔴 BATCH 21 — "تجاوز المراجعة الداخلية". Restates the SERVER rule on
+// POST /api/consultations/:id/skip-internal-review verbatim → visibility ==
+// authorization. Same shape as canSkipCommittee above, with two differences:
+//   • admin_support is in the actor set (the batch-21 owner ruling adds it to this
+//     family; canSkipCommittee above is UNTOUCHED and still excludes it);
+//   • NO WRITTEN-only guard. canSkipCommittee needs one because its target
+//     (جاهزة_للإرسال) is absent from the phone/procedural paths; here the server
+//     derives the target from the row's own resolved path, and neither of those
+//     paths contains مراجعة_داخلية anyway, so the stage test is sufficient.
+//
+// FOUR-EYES DELIBERATELY DOES NOT APPLY (owner, explicitly): the assignee may skip
+// the review of their own draft. The internal-review DECISION control keeps its
+// own, narrower gate untouched.
+function canSkipInternalReview(
+  consultation: Consultation,
+  userRole: string,
+  userId: string,
+  userDeptId: string | null,
+): boolean {
+  if (consultation.status !== "active") return false;
+  if (consultation.pausedAt || consultation.awaitingCompletion) return false;
+  if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) return false;
+  if (userRole === "branch_manager" || userRole === "admin_support") return true;
+  if (userRole === "department_head") return consultation.departmentId === userDeptId;
+  return !!consultation.assignedTo && consultation.assignedTo === userId;
+}
+
 // Mirrors the role gate on POST /api/consultations/:id/take-notes-outcome.
 // Recording the outcome is the assigned lawyer's job; dept_head and
 // branch_manager can also record on their behalf. Dept-scope check
@@ -1175,6 +1202,11 @@ export default function ConsultationsPage() {
   const [skipCommitteeConsultation, setSkipCommitteeConsultation] = useState<Consultation | null>(null);
   const [skipCommitteeReason, setSkipCommitteeReason] = useState("");
 
+  // Batch 21 — the same override one stage earlier, with its own state and dialog.
+  const [showSkipInternalReviewDialog, setShowSkipInternalReviewDialog] = useState(false);
+  const [skipInternalReviewConsultation, setSkipInternalReviewConsultation] = useState<Consultation | null>(null);
+  const [skipInternalReviewReason, setSkipInternalReviewReason] = useState("");
+
   const [showTakeNotesDialog, setShowTakeNotesDialog] = useState(false);
   const [takeNotesConsultation, setTakeNotesConsultation] = useState<Consultation | null>(null);
   const [takeNotesNotes, setTakeNotesNotes] = useState("");
@@ -1525,6 +1557,39 @@ export default function ConsultationsPage() {
     }
   };
 
+  const openSkipInternalReviewDialog = (c: Consultation) => {
+    setSkipInternalReviewConsultation(c);
+    setSkipInternalReviewReason("");
+    setShowSkipInternalReviewDialog(true);
+  };
+
+  const closeSkipInternalReviewDialog = () => {
+    setShowSkipInternalReviewDialog(false);
+    setSkipInternalReviewConsultation(null);
+    setSkipInternalReviewReason("");
+  };
+
+  // Batch 21. The toast does NOT name the destination: the server resolves it from
+  // the consultation's own path (لجنة_مراجعة normally, جاهزة_للإرسال in a
+  // department with no committee), so a fixed phrase could contradict what
+  // actually happened.
+  const handleSkipInternalReview = async () => {
+    if (!skipInternalReviewConsultation) return;
+    const reason = skipInternalReviewReason.trim();
+    if (!reason) return;
+    setActionInProgress(true);
+    try {
+      await apiRequest("POST", `/api/consultations/${skipInternalReviewConsultation.id}/skip-internal-review`, { reason });
+      await refreshConsultations();
+      toast({ title: "تم تجاوز المراجعة الداخلية" });
+      closeSkipInternalReviewDialog();
+    } catch (err) {
+      toast({ title: "فشل تجاوز المراجعة الداخلية", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setActionInProgress(false);
+    }
+  };
+
   const openTakeNotesDialog = (c: Consultation) => {
     setTakeNotesConsultation(c);
     setTakeNotesNotes("");
@@ -1838,6 +1903,9 @@ export default function ConsultationsPage() {
       getReturnTargets(c, role, id, dept, getDepartmentName(c.departmentId)));
   const canSkipCommitteeFor = (c: Consultation) =>
     anyIdentity(actingIdentities, (role, id, dept) => canSkipCommittee(c, role, id, dept));
+  // Batch 21 — same delegation-aware adapter shape as its sibling directly above.
+  const canSkipInternalReviewFor = (c: Consultation) =>
+    anyIdentity(actingIdentities, (role, id, dept) => canSkipInternalReview(c, role, id, dept));
   // Added by the follow-the-comments pass: these five endpoints joined the
   // delegation-aware set in the server batch (canActOnConsultationWorkflowState
   // / canCloseConsultationTier / the convert-to-case scope check), so the
@@ -3414,6 +3482,22 @@ export default function ConsultationsPage() {
                         lawyer), it is WRITTEN-only, and it skips the committee
                         rather than recording its decision. The gate restates the
                         server's rule verbatim → visibility == authorization. */}
+                    {/* Batch 21 — the same reasoned override one stage earlier.
+                        Same destructive framing as its sibling below so neither
+                        can be mistaken for recording a decision; it DELETES the
+                        review rather than deciding it. */}
+                    {canSkipInternalReviewFor(selectedConsultation) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        data-testid={`dialog-button-skip-internal-review-${selectedConsultation.id}`}
+                        onClick={() => openSkipInternalReviewDialog(selectedConsultation)}
+                        className="border-destructive/60 text-destructive hover:bg-destructive/10"
+                      >
+                        <AlertTriangle className="w-4 h-4 ml-1" />
+                        تجاوز المراجعة الداخلية
+                      </Button>
+                    )}
                     {canSkipCommitteeFor(selectedConsultation) && (
                       <Button
                         size="sm"
@@ -4345,6 +4429,61 @@ export default function ConsultationsPage() {
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               اعتماد
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Batch 21 — skip-internal-review dialog. Same shape as the skip-committee
+          dialog below, one stage earlier. The destination is NOT named: the server
+          resolves it from this consultation's own path, so promising a stage here
+          could be wrong for a department with no committee. */}
+      <Dialog
+        open={showSkipInternalReviewDialog}
+        onOpenChange={(open) => { if (!open) closeSkipInternalReviewDialog(); }}
+      >
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              تجاوز مرحلة المراجعة الداخلية
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              سيتم نقل الاستشارة إلى <strong>المرحلة التالية في مسارها</strong> دون قرار مراجعة
+              داخلية. يُسجَّل هذا الإجراء في سجل نشاط الاستشارة مع اسمك والسبب. السبب إلزامي.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              يبقى قرار المراجعة الداخلية — عند عدم التجاوز — محصوراً بالمراجع الداخلي
+              المعيَّن أو رئيس القسم أو مدير الفرع.
+            </p>
+            <div>
+              <Label>سبب التجاوز <span className="text-red-500">*</span></Label>
+              <Textarea
+                data-testid="input-skip-internal-review-reason"
+                value={skipInternalReviewReason}
+                onChange={(e) => setSkipInternalReviewReason(e.target.value)}
+                placeholder="سبب تجاوز المراجعة الداخلية (إلزامي)..."
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              onClick={closeSkipInternalReviewDialog}
+              data-testid="button-cancel-skip-internal-review"
+            >
+              إلغاء
+            </Button>
+            <Button
+              data-testid="button-confirm-skip-internal-review"
+              onClick={handleSkipInternalReview}
+              disabled={actionInProgress || !skipInternalReviewReason.trim()}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+            >
+              تأكيد التجاوز
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -446,6 +446,55 @@ export function CaseStagePanel({
           }
         } : undefined
       }
+      // 🔴 BATCH 21 — "تجاوز المراجعة الداخلية". Same conditional-callback idiom as
+      // onSkipCommittee above: passed ONLY when the user satisfies the SERVER's
+      // rule for POST /api/cases/:id/skip-internal-review, so the button never
+      // renders for someone the endpoint would 403.
+      //
+      // THE SET IS THE SKIP-COMMITTEE ONE PLUS admin_support — the batch-21 owner
+      // ruling adds it to this family. onSkipCommittee above is UNTOUCHED and
+      // still excludes it.
+      //
+      // ⚠ NO UNDER-STUDY GUARD, unlike onSkipCommittee. That one needs it because
+      // its server target is fixed at جاهزة_للرفع, which is the under-study
+      // post-committee stage and wrong for an in-court case. Here the server
+      // DERIVES the target from the case's own resolved path, so an in-court case
+      // at مراجعة_داخلية (reachable through the ordinary UI —
+      // InCourtDefendantMemoStages contains that stage) is moved correctly along
+      // its own path instead of being refused.
+      //
+      // FOUR-EYES DELIBERATELY DOES NOT APPLY (owner, explicitly): the assignee may
+      // skip the review of their own draft; the mandatory reason and the activity
+      // row are the control.
+      onSkipInternalReview={
+        user && (
+          hasEffectiveRole(actingIdentities, "branch_manager", "admin_support") ||
+          isDeptHeadFor(actingIdentities, caseItem.departmentId) ||
+          anyIdentity(actingIdentities, (_r, id) =>
+            caseItem.primaryLawyerId === id ||
+            caseItem.responsibleLawyerId === id ||
+            (Array.isArray(caseItem.assignedLawyers) && caseItem.assignedLawyers.includes(id)))
+        ) ? async (reason: string) => {
+          setStageTransitioning(true);
+          try {
+            await apiRequest("POST", `/api/cases/${caseItem.id}/skip-internal-review`, { reason });
+            await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
+            await refreshCases();
+            // Does NOT name the destination — the server resolved it from the
+            // case's own path, so a fixed phrase here could contradict it.
+            toast({ title: "تم تجاوز المراجعة الداخلية" });
+            onChanged?.();
+          } catch (err) {
+            toast({
+              title: "تعذّر تجاوز المراجعة الداخلية",
+              description: extractApiError(err),
+              variant: "destructive",
+            });
+          } finally {
+            setStageTransitioning(false);
+          }
+        } : undefined
+      }
       // 🔴 GATE MIRRORS THE SERVER'S canEditCaseViolationDetails EXACTLY —
       // branch_manager | admin_support | own-dept department_head | assigned
       // lawyer, delegation-aware through actingIdentities. Same shape as the

@@ -4261,6 +4261,12 @@ export const ConsultationActivityType = {
   // MemoActivityType.COMMITTEE_SKIPPED. Type-only: activity_type is free text,
   // so no migration.
   COMMITTEE_SKIPPED:      "committee_skipped",
+  // Batch 21 — the consultation was moved OFF مراجعة_داخلية to the next stage on
+  // its own path WITHOUT an internal-review decision. Sibling of
+  // COMMITTEE_SKIPPED above and of ContractActivityType.INTERNAL_REVIEW_SKIPPED,
+  // which shipped first and is the model. Type-only: activity_type is free text,
+  // so no migration.
+  INTERNAL_REVIEW_SKIPPED: "internal_review_skipped",
   DELIVERY_EXTENDED:      "delivery_extended",
   CONVERTED_TO_CASE:      "converted_to_case",
   EARLY_CLOSED:           "early_closed",
@@ -4304,6 +4310,7 @@ export const ConsultationActivityTypeLabels: Record<ConsultationActivityTypeValu
   take_notes_outcome:       "نتيجة الأخذ بالملاحظات",
   returned_to_committee:    "إعادة للجنة المراجعة",
   committee_skipped:        "تجاوز لجنة المراجعة",
+  internal_review_skipped:  "تجاوز المراجعة الداخلية",
   delivery_extended:        "تمديد تاريخ التسليم",
   converted_to_case:        "تحويل إلى قضية",
   early_closed:             "إغلاق مبكر",
@@ -4945,6 +4952,11 @@ export const MemoActivityType = {
   // case_activity_log actionType "committee_skipped". Type-only addition:
   // activity_type is a free-text column, so no migration.
   COMMITTEE_SKIPPED:      "committee_skipped",
+  // Batch 21 — the memo was moved OFF مراجعة_داخلية to the next stage on its own
+  // path WITHOUT an internal-review decision. Sibling of COMMITTEE_SKIPPED and of
+  // ContractActivityType.INTERNAL_REVIEW_SKIPPED, which shipped first and is the
+  // model. Type-only — activity_type is free text, so no migration.
+  INTERNAL_REVIEW_SKIPPED: "internal_review_skipped",
   PAUSED:                 "paused",
   UNPAUSED:               "unpaused",
   AWAIT_COMPLETION:       "await_completion",
@@ -4978,6 +4990,7 @@ export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   take_notes_outcome:     "نتيجة الأخذ بالملاحظات",
   returned_to_committee:  "إعادة للجنة المراجعة",
   committee_skipped:      "تجاوز لجنة المراجعة",
+  internal_review_skipped: "تجاوز المراجعة الداخلية",
   paused:                 "تعليق",
   unpaused:               "إلغاء التعليق",
   await_completion:       "بانتظار استكمال المرفقات والبيانات",

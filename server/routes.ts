@@ -7466,6 +7466,115 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/consultations/:id/skip-internal-review
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز المراجعة الداخلية". Batch 21.
+  //
+  // 🔴 THE MODEL IS POST /api/contracts/:id/skip-internal-review (4970876,
+  // owner-approved), restated for consultations. /skip-committee above is
+  // untouched.
+  //
+  // 🔴 THE ONE PERMISSION NOTE FOR THIS WHOLE BATCH — admin_support IS NEW TO THIS
+  // FAMILY. Every existing skip gate (all four /skip-committee endpoints AND the
+  // contracts /skip-internal-review) is branch_manager | own-dept department_head |
+  // assignee, with NO admin_support. The batch-21 owner ruling names it explicitly
+  // in the standard set, so the three new endpoints carry it and the contracts one
+  // was aligned to match — otherwise the same button would answer to two different
+  // gates depending on the entity. The /skip-committee gates are NOT touched.
+  //
+  // 🔴 THE TARGET IS RESOLVED, NEVER HARDCODED (owner ruling). After مراجعة_داخلية
+  // the next stage is لجنة_مراجعة on a department that HAS a committee and
+  // جاهزة_للإرسال on one that does not — consultationStagesForDepartment hides the
+  // committee for عمالي — so a fixed value would strand a labor consultation on a
+  // stage its own path does not contain. Resolved through
+  // getConsultationStagesForType + consultationStagesForDepartment, the pair the
+  // stage bar and the rollback validator already use.
+  //
+  // ⚠ NO WRITTEN-ONLY GUARD IS NEEDED, unlike /skip-committee. That endpoint needs
+  // one because its FIXED target (جاهزة_للإرسال) does not exist on the
+  // phone/procedural paths at all, so a stranded row would be written off-path.
+  // Here the target is derived FROM the row's own resolved path, so a
+  // phone/procedural consultation cannot be sent anywhere its path lacks — and in
+  // fact cannot pass the stage guard either, since neither of those paths contains
+  // مراجعة_داخلية. Deriving the target removed the need for the guard rather than
+  // ignoring it.
+  //
+  // FOUR-EYES DOES NOT APPLY (owner, explicitly). The assignee may skip the review
+  // of their own draft; the mandatory reason + the activity row are the control.
+  // The internal-review DECISION endpoint keeps its four-eyes lock untouched.
+  //
+  // Deliberately bypasses validateStageTransition — the /skip-committee precedent.
+  app.post("/api/consultations/:id/skip-internal-review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز المراجعة الداخلية مطلوب" });
+
+      const consultation = await storage.getConsultationById(String(req.params.id));
+      if (!consultation) return res.status(404).json({ error: "الاستشارة غير موجودة" });
+
+      if (consultation.status !== "active") {
+        return res.status(400).json({ error: "الاستشارة ليست نشطة" });
+      }
+      if (consultation.pausedAt || consultation.awaitingCompletion) {
+        return res.status(400).json({ error: "الاستشارة في حالة لا تسمح بتجاوز المراجعة الداخلية" });
+      }
+      if (consultation.currentStage !== ConsultationStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "الاستشارة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      const cReviewDept = consultation.departmentId
+        ? await storage.getDepartmentById(consultation.departmentId)
+        : null;
+      const cReviewPath = consultationStagesForDepartment(
+        cReviewDept?.name,
+        getConsultationStagesForType(resolveConsultationType(consultation.consultationType)),
+      );
+      const cReviewIdx = cReviewPath.indexOf(ConsultationStage.INTERNAL_REVIEW);
+      const cReviewTarget = cReviewIdx >= 0 ? cReviewPath[cReviewIdx + 1] : undefined;
+      if (!cReviewTarget) {
+        return res.status(400).json({
+          error: "لا يمكن تجاوز المراجعة الداخلية — مسار هذه الاستشارة لا يتضمّن مرحلة تالية للمراجعة",
+        });
+      }
+
+      // Delegation-aware, copied from /skip-committee. Scope is null —
+      // consultations carry no caseId, so only all_cases delegations apply.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || u.role === "admin_support"
+        || (u.role === "department_head" && !!u.departmentId && consultation.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, consultation));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز المراجعة الداخلية" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, null, performer?.name || reqUser.id);
+      const updated = await storage.skipConsultationInternalReview(consultation.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+        toStage: cReviewTarget,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز المراجعة الداخلية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[consultations/skip-internal-review] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
   // POST /api/consultations/:id/take-notes-outcome
   // Body: { outcome, notes }. Inserts a consultation_note_outcomes row.
   // Per spec §3.2.1, ALL outcomes (DONE | NOT_DONE | PARTIAL) advance to
@@ -8816,6 +8925,133 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("[cases/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/cases/:id/skip-internal-review
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز المراجعة الداخلية". Batch 21.
+  //
+  // 🔴 THE MODEL IS POST /api/contracts/:id/skip-internal-review, which shipped
+  // first (4970876) and is owner-approved. This is that endpoint restated for
+  // cases, with the two differences cases force: TWO origin stages, and a RESOLVED
+  // target. Nothing about /skip-committee is touched.
+  //
+  // TWO ORIGIN STAGES, and both are required. Cases are the ONLY entity with two
+  // internal-review stages — CaseStage.INTERNAL_REVIEW (مراجعة_داخلية) on the
+  // ordinary paths and CaseStage.GRIEVANCE_INTERNAL_REVIEW (مراجعة_داخلية_للتظلم)
+  // on the admin تظلم track. Accepting only the first would leave every grievance
+  // case unable to use this action, with nothing on screen to explain why.
+  //
+  // 🔴 THE TARGET IS RESOLVED, NEVER HARDCODED (owner ruling). /skip-committee can
+  // fix جاهزة_للرفع because it guards caseClassification === قيد_الدراسة, leaving
+  // exactly one reachable post-committee stage. Internal review has no such guard:
+  // it sits on the commercial, labor, general, admin-تظلم, admin-قضية and both
+  // in-court paths, and the stage that follows it is NOT the same value on all of
+  // them. Resolved through getStagesForClassification + indexOf + 1 — the
+  // skip-data-completion precedent (:4861), including its refusal when the path
+  // yields no next stage rather than writing an off-path value.
+  //
+  // ⚠ IF THE NEXT STAGE IS إحالة_للجنة_المراجعة, THAT IS WHERE IT GOES. Skipping
+  // the committee as well is what /skip-committee is for; this action does one
+  // thing.
+  //
+  // AUTHORIZED ROLES — the /skip-committee identity block verbatim, PLUS
+  // admin_support per the batch-21 owner ruling. See the shared note at the
+  // consultations twin for why admin_support is new to this family.
+  //
+  // FOUR-EYES DOES NOT APPLY (owner, explicitly: «عادي نعطيه الصلاحية دام فيه
+  // تسبيب وتبرير ويتحمل المسؤولية»). The assignee — the drafter — may skip the
+  // review of their own draft; the MANDATORY REASON and the activity row are the
+  // control. The internal-review DECISION endpoint keeps its four-eyes lock: this
+  // deletes the review, it does not decide it.
+  //
+  // Deliberately bypasses validateStageTransition — the precedent /skip-committee
+  // and /reopen already set. No transition-table entry is added, so this override
+  // is unreachable through /advance-stage.
+  app.post("/api/cases/:id/skip-internal-review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز المراجعة الداخلية مطلوب" });
+
+      const lawCase = await storage.getCaseById(String(req.params.id));
+      if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
+
+      if (lawCase.currentStage !== CaseStage.INTERNAL_REVIEW
+          && lawCase.currentStage !== CaseStage.GRIEVANCE_INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "القضية ليست في مرحلة المراجعة الداخلية" });
+      }
+      if (lawCase.pausedAt || lawCase.awaitingCompletion) {
+        return res.status(400).json({ error: "القضية في حالة لا تسمح بتجاوز المراجعة الداخلية" });
+      }
+      // The /skip-committee closed-case guard, verbatim. Not stage-hardened for the
+      // same reason it gives: the stage guard above already makes a مقفلة case
+      // unreachable, and tsc rejects the comparison as having no overlap.
+      if (lawCase.status === "مغلق" || lawCase.isArchived) {
+        return res.status(400).json({ error: "لا يمكن تجاوز المراجعة الداخلية في قضية مغلقة أو مؤرشفة" });
+      }
+
+      // THE TARGET. Same resolution the skip-data-completion endpoint performs,
+      // including its "refuse rather than guess" ending: an admin case with no
+      // track resolves to AdminUnroutedStages (["استلام"]), which contains no
+      // internal-review stage at all, so indexOf returns -1 and the case is told
+      // to pick a track instead of being written somewhere off its own path.
+      const reviewDept = lawCase.departmentId
+        ? await storage.getDepartmentById(lawCase.departmentId)
+        : null;
+      const reviewPath = getStagesForClassification(
+        lawCase.caseClassification as CaseClassificationValue,
+        reviewDept?.name,
+        lawCase.clientRole ?? undefined,
+        !!lawCase.memoRequired,
+        !!lawCase.isSettlementCase,
+        lawCase.adminCaseSubType,
+      );
+      const reviewIdx = reviewPath.indexOf(lawCase.currentStage as CaseStageValue);
+      const reviewTarget: CaseStageValue | undefined =
+        reviewIdx >= 0 ? reviewPath[reviewIdx + 1] : undefined;
+      if (!reviewTarget) {
+        return res.status(400).json({
+          error: "لا يمكن تجاوز المراجعة الداخلية في هذه القضية — مسارها لا يتضمّن مرحلة تالية للمراجعة. إذا كانت قضية إدارية، حدّد مسارها أولاً (مسار التظلم أو مسار الدعوى).",
+        });
+      }
+
+      // Delegation-aware, copied from /skip-committee: evaluate against every
+      // acting identity (self + any delegator this user stands in for, scoped to
+      // this case). With no delegation this is exactly the actor.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, lawCase.id).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || u.role === "admin_support"
+        || (u.role === "department_head" && !!u.departmentId && u.departmentId === lawCase.departmentId)
+        || isAssignedLawyer({ id: u.id }, lawCase));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز المراجعة الداخلية" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, lawCase.id, performer?.name || reqUser.id);
+      const updated = await storage.skipCaseInternalReview(lawCase.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+        toStage: reviewTarget,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز المراجعة الداخلية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[cases/skip-internal-review] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
@@ -11888,8 +12124,15 @@ export async function registerRoutes(
             id: i.userId, role: i.role, departmentId: i.departmentId,
           }))
         : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      // 🔴 BATCH 21 ADDED admin_support HERE. This endpoint shipped without it, and
+      // so did all four /skip-committee gates; the batch-21 owner ruling names it in
+      // the standard set for «تجاوز المراجعة الداخلية». Aligned rather than left
+      // behind, because the same button answering to two different gates depending
+      // on the entity is worse than either gate. The /skip-committee family is NOT
+      // touched. Nothing else here changed — this is purely additive.
       const allowed = identities.some((u) =>
         u.role === "branch_manager"
+        || u.role === "admin_support"
         || (u.role === "department_head" && !!u.departmentId && contract.departmentId === u.departmentId)
         || isAssignedLawyer({ id: u.id }, contract));
       if (!allowed) {
@@ -14404,6 +14647,113 @@ export async function registerRoutes(
       res.json(updated);
     } catch (error: any) {
       console.error("[memos/skip-committee] error:", error);
+      res.status(500).json({ error: error.message || "حدث خطأ" });
+    }
+  });
+
+  // POST /api/memos/:id/skip-internal-review
+  // Body: { reason }. REASONED OVERRIDE — "تجاوز المراجعة الداخلية". Batch 21.
+  //
+  // 🔴 THE MODEL IS POST /api/contracts/:id/skip-internal-review (4970876,
+  // owner-approved), restated for memos. /skip-committee above is untouched.
+  // admin_support is new to this family — see the note at the consultations twin.
+  //
+  // 🔴 THE TARGET IS RESOLVED THROUGH getMemoStagePath, batch 17's single memo path
+  // resolver, never hardcoded. Two independent things move it: the DEPARTMENT
+  // (memoStagesForDepartment hides لجنة_مراجعة for عمالي, so a labor memo goes
+  // straight to جاهزة_للرفع) and the memo TYPE. Resolving means this endpoint
+  // cannot strand a memo the way a fixed target would.
+  //
+  // ⚠ AN «أخرى» MEMO CAN NEVER REACH HERE, and needs no guard to say so: batch 17's
+  // short path is استلام · تحرير · جاهزة_للرفع · مرفوعة, which has no مراجعة_داخلية
+  // at all, so the stage check below excludes it by construction — exactly how
+  // /skip-committee ended up long-path-only.
+  //
+  // The department resolves through the PARENT CASE, the memo module's standard
+  // hop (memos carry no departmentId).
+  //
+  // TERMINAL STATE uses the batch-10 SHARED helpers, not hand-rolled tests:
+  // isMemoCancelled (a cancelled memo still sits on a real stage — /cancel writes
+  // status only) and isMemoFiled (two-termed, so a legacy pre-Phase-9 filed row is
+  // caught too). /skip-committee checks only `status === "ملغاة"`; using the
+  // helpers here is strictly stronger and is what batch 10 exists for.
+  //
+  // FOUR-EYES DOES NOT APPLY (owner, explicitly). The internal-review DECISION
+  // endpoint keeps its designated-reviewer lock.
+  app.post("/api/memos/:id/skip-internal-review", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const reqUser = req.user!;
+      if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
+
+      const bodyCheck = workflowReasonSchema.safeParse(req.body);
+      if (!bodyCheck.success) {
+        return res.status(400).json({ error: bodyCheck.error.errors });
+      }
+      const reason = String(req.body?.reason ?? "").trim();
+      if (!reason) return res.status(400).json({ error: "سبب تجاوز المراجعة الداخلية مطلوب" });
+
+      const memo = await storage.getMemoById(String(req.params.id));
+      if (!memo) return res.status(404).json({ error: "المذكرة غير موجودة" });
+
+      if (isMemoCancelled(memo)) {
+        return res.status(400).json({ error: "لا يمكن تجاوز المراجعة الداخلية في مذكرة ملغاة" });
+      }
+      if (isMemoFiled(memo)) {
+        return res.status(400).json({ error: "لا يمكن تجاوز المراجعة الداخلية في مذكرة مرفوعة" });
+      }
+      if (memo.awaitingCompletion || memo.pausedAt) {
+        return res.status(400).json({ error: "المذكرة في حالة لا تسمح بتجاوز المراجعة الداخلية" });
+      }
+      if (memo.currentStage !== MemoStage.INTERNAL_REVIEW) {
+        return res.status(400).json({ error: "المذكرة ليست في مرحلة المراجعة الداخلية" });
+      }
+
+      // Parent case: the department for the path resolution AND the lawyer fields
+      // the permission gate reads. Loaded once, used for both.
+      const memoReviewParent = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
+      const memoReviewDept = memoReviewParent?.departmentId
+        ? await storage.getDepartmentById(memoReviewParent.departmentId)
+        : null;
+      const memoReviewPath = getMemoStagePath(memo.memoType, {
+        departmentName: memoReviewDept?.name,
+      });
+      const memoReviewIdx = memoReviewPath.indexOf(MemoStage.INTERNAL_REVIEW);
+      const memoReviewTarget = memoReviewIdx >= 0 ? memoReviewPath[memoReviewIdx + 1] : undefined;
+      if (!memoReviewTarget) {
+        return res.status(400).json({
+          error: "لا يمكن تجاوز المراجعة الداخلية — مسار هذه المذكرة لا يتضمّن مرحلة تالية للمراجعة",
+        });
+      }
+
+      // Delegation-aware, copied from /skip-committee — including its wider
+      // assignee arm: the memo assignee OR a lawyer on the parent case.
+      const identities = req.actingContext
+        ? actingIdentitiesFor(req.actingContext, memo.caseId ?? null).map((i) => ({
+            id: i.userId, role: i.role, departmentId: i.departmentId,
+          }))
+        : [{ id: reqUser.id, role: reqUser.role, departmentId: reqUser.departmentId }];
+      const allowed = identities.some((u) =>
+        u.role === "branch_manager"
+        || u.role === "admin_support"
+        || (u.role === "department_head" && !!u.departmentId && !!memoReviewParent && memoReviewParent.departmentId === u.departmentId)
+        || isAssignedLawyer({ id: u.id }, memo)
+        || (!!memoReviewParent && isAssignedLawyer({ id: u.id }, memoReviewParent)));
+      if (!allowed) {
+        return res.status(403).json({ error: "ليس لديك صلاحية لتجاوز المراجعة الداخلية" });
+      }
+
+      const performer = await storage.getUser(reqUser.id);
+      const performerName = actorDisplayName(req.actingContext, memo.caseId ?? null, performer?.name || reqUser.id);
+      const updated = await storage.skipMemoInternalReview(memo.id, {
+        reason,
+        performedBy: reqUser.id,
+        performerName,
+        toStage: memoReviewTarget,
+      });
+      if (!updated) return res.status(500).json({ error: "فشل تجاوز المراجعة الداخلية" });
+      res.json(updated);
+    } catch (error: any) {
+      console.error("[memos/skip-internal-review] error:", error);
       res.status(500).json({ error: error.message || "حدث خطأ" });
     }
   });
