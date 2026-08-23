@@ -3685,6 +3685,84 @@ export const MemoStagesAll: MemoStageValue[] = [
   MemoStage.FILED,
 ];
 
+// ==================== BATCH 17 — THE «أخرى» SHORT PATH ====================
+// 🔴 OWNER RULING: a memo of type «أخرى» skips مراجعة_داخلية, لجنة_مراجعة and
+// الأخذ_بالملاحظات entirely. Every other type keeps the full path, unchanged.
+//
+// ⚠ THE RULING NAMED FIVE STAGES; THIS PATH HAS FOUR, AND THE MISSING ONE DOES
+// NOT EXIST. The ruling listed «استكمال_المرفقات_والبيانات» second, but memos have
+// NO data-completion STAGE — see the memos.dataCompletionLastAckAt comment on the
+// table declaration: "memos have no data-completion STAGE; the button is the
+// trigger". The memo equivalent is the `awaiting_completion` BOOLEAN LATCH, which
+// is orthogonal to current_stage, already applies to EVERY memo of every type, and
+// has its own button, task kind, 3-day escalation and cancel-for-no-response flow.
+// Adding it as a stage would be a change to the memo MODEL (and would give «أخرى»
+// a stage no other memo type has) rather than the path branch this batch is. It is
+// deliberately NOT invented here; the three skipped stages are the ruling's
+// substance and they are what this implements.
+export const MemoStagesOrderShort: MemoStageValue[] = [
+  MemoStage.RECEIVED,
+  MemoStage.DRAFTING,
+  MemoStage.READY,
+  MemoStage.FILED,
+];
+
+// The stages the short path drops. Exported because the retype guard needs to
+// answer "would this memo be stranded", and deriving that from a hardcoded list at
+// the call site is how the two would drift.
+export const MemoShortPathSkippedStages: MemoStageValue[] = [
+  MemoStage.INTERNAL_REVIEW,
+  MemoStage.COMMITTEE,
+  MemoStage.TAKING_NOTES,
+];
+
+/**
+ * Does this memo type take the short path?
+ *
+ * 🔴 KEYED ON THE TYPE ONLY. `memo_type_other` — the free-text qualifier that
+ * accompanies «أخرى» — is NEVER read: it is a human label with no enumerated
+ * values, so branching a workflow on it would make the path depend on typing.
+ * Two memos both typed «أخرى» take the same path whatever their qualifiers say.
+ *
+ * Trimmed + stringified so null / undefined / "" all resolve to the long path,
+ * which is the safe default: an unknown or missing type keeps every review stage.
+ */
+export function memoUsesShortPath(memoType: string | null | undefined): boolean {
+  return String(memoType || "").trim() === MemoType.OTHER;
+}
+
+/**
+ * 🔴 THE ONE MEMO PATH RESOLVER — every consumer goes through this.
+ *
+ * Memos previously had NO resolver: two flat arrays (MemoStagesOrder /
+ * MemoStagesAll) that each consumer picked between for itself, plus
+ * memoStagesForDepartment layered on by the bar alone. This is the memo analogue
+ * of the cases side's getStagesForClassification, and it composes the two
+ * pre-existing rules rather than replacing either:
+ *
+ *   1. TYPE      — «أخرى» → the short path. Applied FIRST, because it removes the
+ *                  committee outright, which makes rule 2 a no-op rather than a
+ *                  second opinion about the same stage.
+ *   2. DEPARTMENT — memoStagesForDepartment's committee hide (today: عمالي),
+ *                  unchanged and still applied to the long path exactly as before.
+ *
+ * `includeTakingNotes` selects MemoStagesAll over MemoStagesOrder for the long
+ * path — the pre-existing conditional-branch distinction, now a parameter instead
+ * of a choice each caller makes. It is a no-op on the short path, which has no
+ * committee and therefore no notes branch to return from.
+ *
+ * A non-«أخرى» memo resolves BYTE-IDENTICALLY to what its consumer computed
+ * before: same array contents, same order.
+ */
+export function getMemoStagePath(
+  memoType: string | null | undefined,
+  opts?: { departmentName?: string | null; includeTakingNotes?: boolean },
+): MemoStageValue[] {
+  if (memoUsesShortPath(memoType)) return [...MemoStagesOrderShort];
+  const base = opts?.includeTakingNotes ? MemoStagesAll : MemoStagesOrder;
+  return memoStagesForDepartment(opts?.departmentName, base);
+}
+
 // ==================== 🔴 MEMO STATE — READ current_stage, NOT status ====================
 // A memo carries TWO fields and the split is DELIBERATE, documented at the memos
 // table declaration, at the MemoStage declaration, and in

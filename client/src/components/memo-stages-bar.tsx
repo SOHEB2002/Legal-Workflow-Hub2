@@ -2,14 +2,22 @@ import { Check, Ban } from "lucide-react";
 import {
   MemoStage,
   MemoStageLabels,
-  MemoStagesAll,
-  MemoStagesOrder,
-  memoStagesForDepartment,
+  getMemoStagePath,
   type MemoStageValue,
 } from "@shared/schema";
 
 interface MemoStagesBarProps {
   currentStage: MemoStageValue;
+  // 🔴 BATCH 17 — the memo's type, which SELECTS THE PATH: «أخرى» renders the
+  // four-stage short path (استلام · تحرير · جاهزة_للرفع · مرفوعة), everything else
+  // the full one. Resolved through the SHARED getMemoStagePath, the same function
+  // the server validates transitions with, so the bar cannot show one path while
+  // the advance button targets another.
+  //
+  // Optional, and omitted → the LONG path — the safe default and byte-identical to
+  // this component's pre-batch behaviour, so a caller that has not been updated
+  // renders exactly what it rendered before rather than losing stages.
+  memoType?: string | null;
   // True when this memo has already gone through the الأخذ_بالملاحظات
   // branch (committee returned يوجد_ملاحظات previously). The page can't
   // infer this from currentStage once the memo has moved on to
@@ -38,16 +46,21 @@ interface MemoStagesBarProps {
 
 export function MemoStagesBar({
   currentStage,
+  memoType,
   hasTakingNotesHistory = false,
   departmentName,
   cancelled = false,
 }: MemoStagesBarProps) {
   const showTakingNotes =
     currentStage === MemoStage.TAKING_NOTES || hasTakingNotesHistory;
-  const baseStages: readonly MemoStageValue[] = showTakingNotes
-    ? MemoStagesAll
-    : MemoStagesOrder;
-  const stages: MemoStageValue[] = memoStagesForDepartment(departmentName, baseStages);
+  // ONE resolver, replacing the two-array pick + the department filter this
+  // component used to compose itself. getMemoStagePath applies the type branch
+  // first and the committee hide second; for every non-«أخرى» memo it returns the
+  // identical array this component built before.
+  const stages: MemoStageValue[] = getMemoStagePath(memoType, {
+    departmentName,
+    includeTakingNotes: showTakingNotes,
+  });
 
   const rawIndex = stages.indexOf(currentStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;

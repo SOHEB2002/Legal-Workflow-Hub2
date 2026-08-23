@@ -33,7 +33,6 @@ import {
   MemoType,
   MemoStage,
   MemoStageLabels,
-  MemoStagesAll,
   MemoActivityType,
   CaseClassification,
   CaseStage,
@@ -94,6 +93,10 @@ import {
   isMemoFiled,
   MemoEditableDetailFields,
   MemoEditableDetailFieldLabels,
+  MemoTypeLabels,
+  type MemoTypeValue,
+  memoUsesShortPath,
+  getMemoStagePath,
   adminTrackChoiceApplies,
   ConsultationActivityType,
   getStagesForClassification,
@@ -1835,6 +1838,38 @@ const ALLOWED_MEMO_TRANSITIONS: StageTransitionRule[] = [
   { from: MemoStage.READY,           to: MemoStage.FILED,           allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 ];
 
+// 🔴 BATCH 17 — THE «أخرى» TABLE. A SEPARATE TABLE, NOT AN EXTRA EDGE ON THE ONE
+// ABOVE, and that is the whole point.
+//
+// Adding a flat `DRAFTING → READY` edge to the shared table would have let ANY
+// memo skip internal review and the committee by direct API — the exact
+// department-blind hole the committee-bypass edge above is documented as
+// accepting for the fourth time. A per-type table has no such hole: an «أخرى»
+// memo HAS DRAFTING → READY and does NOT have DRAFTING → INTERNAL_REVIEW; every
+// other memo has the reverse. Neither can reach the other's edges at all.
+//
+// This is the shape consultations and contracts already use
+// (getConsultationTransitionsForType / getContractTransitionsForType), so memos
+// now match their siblings rather than inventing a fourth arrangement.
+//
+// The three surviving edges keep the actor lists of the long path's
+// corresponding edges verbatim: RECEIVED→DRAFTING and READY→FILED are unchanged,
+// and DRAFTING→READY takes DRAFTING→INTERNAL_REVIEW's list, because it replaces
+// it — it is the drafter declaring the work finished, the same authority.
+const ALLOWED_MEMO_TRANSITIONS_SHORT: StageTransitionRule[] = [
+  { from: MemoStage.RECEIVED, to: MemoStage.DRAFTING, allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+  { from: MemoStage.DRAFTING, to: MemoStage.READY,    allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
+  { from: MemoStage.READY,    to: MemoStage.FILED,    allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
+];
+
+// Mirrors getConsultationTransitionsForType exactly. memoUsesShortPath is the
+// SHARED predicate — the same one the stage-path resolver, the stages bar and the
+// advance panel ask — so the table a memo is validated against and the path it is
+// shown can never disagree.
+function getMemoTransitionsForType(memoType: string | null | undefined): StageTransitionRule[] {
+  return memoUsesShortPath(memoType) ? ALLOWED_MEMO_TRANSITIONS_SHORT : ALLOWED_MEMO_TRANSITIONS;
+}
+
 function isAssignedLawyer(user: { id: string }, entityData: any): boolean {
   if (entityData.primaryLawyerId === user.id || entityData.responsibleLawyerId === user.id) return true;
   if (entityData.assignedTo === user.id) return true;
@@ -2305,10 +2340,21 @@ function validateStageTransition(
     }
   }
 
-  // Memo rollback — same semantics as consultations. MemoStagesAll includes
-  // the conditional TAKING_NOTES stage in canonical order.
+  // Memo rollback — same semantics as consultations.
+  //
+  // 🔴 BATCH 17 — TYPE-AWARE, mirroring the contract rollback directly below
+  // (which is cycle-aware for the same reason). It was `MemoStagesAll`; an «أخرى»
+  // memo must roll back inside ITS OWN four-stage list, or a lawyer at جاهزة_للرفع
+  // would be offered "one step back" to الأخذ_بالملاحظات — a stage its path does
+  // not contain and its forward table cannot leave.
+  //
+  // includeTakingNotes: true reproduces MemoStagesAll for every non-«أخرى» memo,
+  // so the long path is byte-identical to before. departmentName is deliberately
+  // NOT passed: this block never had the parent department name (only its id,
+  // threaded on for the dept-head scope), and rolling back has always been
+  // permitted across the full canonical list regardless of the committee hide.
   if (entityType === "memo" && entityData) {
-    const stages = MemoStagesAll as readonly string[];
+    const stages = getMemoStagePath(entityData.memoType, { includeTakingNotes: true }) as readonly string[];
     const currentIdx = stages.indexOf(currentStage);
     const targetIdx = stages.indexOf(targetStage);
     if (currentIdx >= 0 && targetIdx >= 0 && targetIdx < currentIdx) {
@@ -2366,7 +2412,7 @@ function validateStageTransition(
     entityType === "case"
       ? ALLOWED_CASE_TRANSITIONS
       : entityType === "memo"
-        ? ALLOWED_MEMO_TRANSITIONS
+        ? getMemoTransitionsForType(entityData?.memoType)
         : entityType === "contract"
           ? (isContractInFollowUpCycle(entityData)
               ? getContractCycleTransitionsForType(entityData?.contractType)
@@ -14256,13 +14302,17 @@ export async function registerRoutes(
   // internal-review lock (the designated-peer-reviewer guard on
   // /internal-review) is untouched.
   //
-  // TARGET is unconditionally MemoStage.READY: memos — unlike cases — have ONE
-  // stage array (MemoStagesOrder/MemoStagesAll, schema.ts). memoType does NOT
-  // branch the path, and there is no memo analogue of caseClassification, so the
-  // in-court hazard that forced the cases-side قيد_الدراسة guard (commit 193649a)
-  // has no counterpart here. READY is the memo's only post-committee stage
-  // (committee APPROVED → READY above), and the currentStage === COMMITTEE guard
-  // below also excludes legacy null-stage memos. No extra guard is needed.
+  // TARGET is unconditionally MemoStage.READY, and it stays unconditional.
+  //
+  // ⚠ BATCH 17 CORRECTED THIS NOTE: memoType DOES branch the path now — «أخرى»
+  // takes the four-stage short path (getMemoStagePath). That changes NOTHING
+  // here, and the reason is worth stating so nobody adds a guard by analogy with
+  // the cases-side قيد_الدراسة one (commit 193649a): the short path has no
+  // committee stage AT ALL, so an «أخرى» memo can never satisfy the
+  // `currentStage === COMMITTEE` guard below and can never reach this code. The
+  // endpoint is therefore long-path-only by construction, and READY remains the
+  // only post-committee stage on that path. The same guard also still excludes
+  // legacy null-stage memos.
   //
   // AUTHORIZED ROLES (owner decision, 2026-07): branch_manager + department_head
   // (of the memo's PARENT CASE's department — memos carry no departmentId) + the
@@ -18344,6 +18394,53 @@ export async function registerRoutes(
         if (memo.isAutoGenerated && updateData.memoType !== undefined
             && updateData.memoType !== memo.memoType) {
           return res.status(400).json({ error: "لا يمكن تغيير نوع مذكرة تم إنشاؤها تلقائياً" });
+        }
+        // 🔴 BATCH 17 — RETYPING MUST NOT STRAND THE MEMO OFF ITS NEW PATH.
+        //
+        // memo_type became editable in batch 16 and now SELECTS THE PATH, so a
+        // retype reshapes the workflow under a live memo — the same hazard the
+        // in-court case path hit in batch 15. Concretely: retyping to «أخرى» while
+        // the memo sits on مراجعة_داخلية / لجنة_مراجعة / الأخذ_بالملاحظات would
+        // leave current_stage on a stage the new path does not contain, whose
+        // forward table has no edge out of it — a memo that cannot advance, cannot
+        // roll back, and renders on a bar that does not include its own stage.
+        //
+        // OWNER PREFERENCE, IMPLEMENTED: REFUSE, with a message naming the stage to
+        // move to. Refusing beats the two alternatives — silently stranding it
+        // (the bug above) and silently MOVING it (a workflow jump nobody asked
+        // for, skipping a review the memo was actually in, with no audit trail
+        // that would explain it).
+        //
+        // Written as a GENERAL containment test, not as "block أخرى": it asks
+        // whether the memo's CURRENT stage exists on the path its NEW type
+        // resolves to. Today only →«أخرى» can fail it (the short path's stages are
+        // all on the long one, so retyping AWAY from «أخرى» is always safe and is
+        // allowed with no prompt). A future third path is covered with no edit.
+        if (updateData.memoType !== undefined
+            && updateData.memoType !== memo.memoType
+            && memo.currentStage) {
+          const newPath = getMemoStagePath(updateData.memoType, { includeTakingNotes: true });
+          if (!newPath.includes(memo.currentStage)) {
+            const stageLabel = MemoStageLabels[memo.currentStage] || memo.currentStage;
+            const typeLabel = MemoTypeLabels[updateData.memoType as MemoTypeValue] || updateData.memoType;
+            // The nearest stage BEFORE the current one that the new path does
+            // contain — i.e. exactly where the user has to roll the memo back to.
+            // Derived, never hardcoded, so the advice cannot go stale if a path
+            // changes.
+            const oldPath = getMemoStagePath(memo.memoType, { includeTakingNotes: true });
+            const currentIdx = oldPath.indexOf(memo.currentStage);
+            const fallback = [...newPath].reverse().find((s) => {
+              const i = oldPath.indexOf(s);
+              return i >= 0 && i < currentIdx;
+            });
+            return res.status(400).json({
+              error:
+                `لا يمكن تغيير نوع المذكرة إلى «${typeLabel}» وهي في مرحلة «${stageLabel}» — مسار هذا النوع لا يمر بهذه المرحلة.`
+                + (fallback
+                  ? ` أرجِع المذكرة إلى مرحلة «${MemoStageLabels[fallback]}» أولاً ثم غيّر النوع.`
+                  : " أرجِع المذكرة إلى مرحلة سابقة أولاً ثم غيّر النوع."),
+            });
+          }
         }
         // "أخرى" is the only type that carries a free-text qualifier; every other
         // type clears it, mirroring the create dialog's onValueChange.

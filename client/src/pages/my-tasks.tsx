@@ -2307,6 +2307,10 @@ export default function MyTasksPage() {
               {advanceMemo.currentStage && (
                 <MemoStagesBar
                   currentStage={advanceMemo.currentStage as MemoStageValue}
+                  /* Batch 17 — «أخرى» renders the four-stage short path. Passed
+                     here too so the hub and the memos page cannot disagree about
+                     the same memo. */
+                  memoType={advanceMemo.memoType}
                   /* Memo → parent case → department, the two-hop this entity
                      needs because memos carry no departmentId. An unresolvable
                      parent yields null, which KEEPS the committee. */
