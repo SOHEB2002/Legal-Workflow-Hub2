@@ -4879,6 +4879,11 @@ export const MemoActivityType = {
   // non-responsive client is distinguishable from an ordinary "لا يحتاج مذكرة".
   // Type-only — activity_type is free text, so no migration.
   CANCELLED_NO_RESPONSE:  "cancelled_no_response",
+  // Batch 16 — the memo's OWN data was edited (title / description / type /
+  // deadline / priority). Distinct from ASSIGNED and from every stage event: this
+  // records a change to the record's content, not to who holds it or where it sits
+  // in the workflow. Type-only — activity_type is free text, so no migration.
+  DETAILS_EDITED:         "details_edited",
 } as const;
 
 export type MemoActivityTypeValue =
@@ -4900,6 +4905,41 @@ export const MemoActivityTypeLabels: Record<MemoActivityTypeValue, string> = {
   await_completion:       "بانتظار استكمال المرفقات والبيانات",
   resume_from_completion: "العودة من الاستكمال",
   cancelled:              "إلغاء المذكرة",
+  details_edited:         "تعديل بيانات المذكرة",
+};
+
+// ==================== BATCH 16 — THE EDITABLE MEMO FIELDS ====================
+// 🔴 THE EDIT SET, DECLARED ONCE. The server iterates this to build the change
+// diff and the client renders the same labels, so the activity-log row and the
+// dialog can never name a field differently — and adding a sixth field is one
+// edit here plus one control, never a search for every place the list was
+// restated.
+//
+// ⚠ WHAT IS DELIBERATELY ABSENT, and must stay absent (owner ruling):
+//   • assignedTo / internalReviewerId — reassigning work is a DIFFERENT action
+//     with different consequences (مهامي, notifications, the four-eyes rule). The
+//     reassign dialog and its own department-tier carve-out own that.
+//   • currentStage / status / every workflow field — each has its own endpoint
+//     and its own guards.
+// `memoTypeOther` is not listed because it is not a field of its own: it is the
+// dependent input of memoType (exactly as the create dialog treats it) and is
+// carried alongside it, never on its own.
+export const MemoEditableDetailFields = [
+  "title",
+  "description",
+  "memoType",
+  "deadline",
+  "priority",
+] as const;
+
+export type MemoEditableDetailField = typeof MemoEditableDetailFields[number];
+
+export const MemoEditableDetailFieldLabels: Record<MemoEditableDetailField, string> = {
+  title:       "العنوان",
+  description: "الوصف",
+  memoType:    "النوع",
+  deadline:    "المهلة",
+  priority:    "الأولوية",
 };
 
 export interface MemoActivity {
