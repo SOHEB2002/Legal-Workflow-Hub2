@@ -1,4 +1,4 @@
-import { hearingProducesNoMinutes } from "@shared/schema";
+import { hearingProducesNoMinutes, isFirmFuture } from "@shared/schema";
 import { anyIdentity, type ActingIdentity } from "@/lib/acting-identities";
 
 // DERIVED attachment indicators. Same house pattern as isAwaitingJudgmentDeed
@@ -58,26 +58,60 @@ export function isAwaitingJudgmentDeed(c: {
 }): boolean {
   if (!c.hasJudgmentRecord) return false;
   if (isFinishedFile(c.currentStage)) return false;
-  return !String(c.judgmentDeedReceivedDate || "").trim();
+  // 🔴 "NOT RECEIVED YET" — was `!String(date).trim()`, i.e. "no date TYPED", which
+  // meant a FUTURE receipt date silenced this badge while the صك was still with the
+  // court. A future date is a promise, not an arrival. Mirrors the server's
+  // deedNotArrived fragment (storage.ts, the 1c follow-up task) exactly, so badge
+  // and task cannot disagree — which is the property the task's own header claims.
+  //
+  // isFirmFuture is the EXISTING shared helper (shared/schema.ts): a lexicographic
+  // compare of "YYYY-MM-DD" against firmToday() (Intl, Asia/Riyadh). No new date
+  // rule, and nothing here parses the value — the documented 60a4d79 class.
+  return deedNotArrived(c.judgmentDeedReceivedDate);
+}
+
+// 🔴 THE ONE "HAS THE صك ARRIVED" RULE for both badges below and the deed line in
+// case-details-dialog. Two callers here plus that one, so it is declared rather
+// than repeated — three copies of a date test is how the three surfaces drift.
+//
+// ARRIVED = a date is recorded AND that day has come (today counts, per the owner).
+// Everything else — no date at all, or a date still ahead — is NOT arrived.
+export function deedHasArrived(deedReceivedDate: string | null | undefined): boolean {
+  const d = String(deedReceivedDate || "").trim();
+  return !!d && !isFirmFuture(d);
+}
+export function deedNotArrived(deedReceivedDate: string | null | undefined): boolean {
+  return !deedHasArrived(deedReceivedDate);
 }
 
 // "بانتظار إرفاق الصك" — the receipt DATE is recorded but the صك FILE is not on
 // file yet.
 //
 // The three deed states on a case that HAS a ruling:
-//   no receipt date              -> isAwaitingJudgmentDeed  (بانتظار استلام الصك)
-//   date recorded, no file       -> THIS                    (بانتظار إرفاق الصك)
+//   deed NOT ARRIVED (no date, OR a date still ahead)
+//                                -> isAwaitingJudgmentDeed  (بانتظار استلام الصك)
+//   arrived, no file             -> THIS                    (بانتظار إرفاق الصك)
 //   file attached                -> no badge
-// The two are mutually exclusive by construction — one requires the date empty,
-// the other requires it non-empty — so a case never shows both. Together they now
-// PARTITION every case that has a ruling, at any stage, which is what made the
-// third badge (isPostJudgmentCaseMissingDeed) redundant; see below.
+// The two are mutually exclusive by construction — one requires the deed NOT to
+// have arrived, the other requires that it HAS — so a case never shows both.
+// Together they PARTITION every case that has a ruling, at any stage, which is
+// what made the third badge (isPostJudgmentCaseMissingDeed) redundant; see below.
+// ⚠ The boundary used to be "date typed" and is now "date come"; the partition
+// property is unchanged, and a future-dated deed moved from the second bucket
+// (where it was wrong) to the first (where it belongs).
 //
-// ⚠ NO COMPARISON BETWEEN THE RECEIPT DATE AND TODAY, deliberately. A future
-// date is legitimate and the date entry is unchanged, so there is no
-// past/future split to make. This also keeps the predicate clear of the
-// date-boundary bug class: with no "is this date in the past" test there is no
-// timezone to get wrong.
+// 🔴 THIS NOTE USED TO SAY THE OPPOSITE, AND IT WAS WRONG — recorded rather than
+// quietly deleted, because the reasoning is the trap. It read:
+//   "NO COMPARISON BETWEEN THE RECEIPT DATE AND TODAY, deliberately. A future date
+//    is legitimate and the date entry is unchanged, so there is no past/future
+//    split to make."
+// A future date IS legitimate — that is exactly why the split is needed. Treating
+// "typed" as "arrived" made this badge claim the صك was in hand and waiting to be
+// uploaded when the court had not sent it yet, and simultaneously silenced its
+// sibling above, so such a case showed the WRONG state and no correct one.
+// Avoiding the date-boundary class by avoiding the comparison altogether bought
+// correctness on the timezone at the cost of correctness on the fact; isFirmFuture
+// gives both, since it is a string compare against firmToday() and parses nothing.
 export function isAwaitingJudgmentDeedFile(c: {
   currentStage: string;
   hasJudgmentRecord?: boolean;
@@ -86,9 +120,11 @@ export function isAwaitingJudgmentDeedFile(c: {
 }): boolean {
   if (!c.hasJudgmentRecord) return false;
   if (isFinishedFile(c.currentStage)) return false;
-  // Date must be RECORDED — otherwise the "بانتظار استلام الصك" badge owns this
-  // case and this one stays silent.
-  if (!String(c.judgmentDeedReceivedDate || "").trim()) return false;
+  // The صك must have ARRIVED — otherwise the "بانتظار استلام الصك" badge owns this
+  // case and this one stays silent. Still the exact complement of that badge, so
+  // the two continue to partition every case with a ruling; only the boundary
+  // moved, from "date typed" to "date come".
+  if (!deedHasArrived(c.judgmentDeedReceivedDate)) return false;
   // 🔴 BATCH 4 — the CURRENT ruling's OWN صك, not the case's. hasDeedAttachment
   // would report cycle 1's file as satisfying a cycle-2 ruling, so this badge
   // went quiet while the server's close gate still refused — an invisible hold.

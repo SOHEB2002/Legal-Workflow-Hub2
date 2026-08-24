@@ -44,7 +44,8 @@ import {
   caseJudgments, judgmentAttachments,
   memoActivityLog, generalTaskEvents,
   memoReviews, memoCommitteeDecisions, memoNoteOutcomes,
-  pickPinnedCaseNote
+  pickPinnedCaseNote,
+  firmToday
 } from "@shared/schema";
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
@@ -4910,7 +4911,41 @@ export class DatabaseStorage implements IStorage {
     // rather than restated, so the two halves of the صك lifecycle cannot drift
     // apart in what they consider a live case with a ruling on it.
     const hasJudgmentRecord = sql`EXISTS (SELECT 1 FROM case_judgments j WHERE j.case_id = ${lawCases.id})`;
-    const deedMissing = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL OR ${lawCases.judgmentDeedReceivedDate} = '')`;
+    // 🔴 THE FIRM'S CALENDAR DAY, resolved ONCE for both deed fragments below so the
+    // two halves of the صك lifecycle are judged against the SAME boundary and can
+    // never both fire (or both stay silent) for one case.
+    //
+    // ⚠ DELIBERATELY NOT the `today` declared at the top of this method — that one
+    // is `new Date().toISOString().split("T")[0]`, i.e. UTC, a pre-existing latent
+    // instance of the documented date-boundary class that the owner has scoped out
+    // and which is NOT fixed here. Inheriting it would put a 3-hour hole in exactly
+    // the comparison this batch exists to add: between 00:00 and 03:00 Riyadh a deed
+    // arriving today would still read as future.
+    //
+    // ⚠ AND NOT SQL's CURRENT_DATE either — that resolves in the DATABASE session's
+    // timezone (GMT here), not the firm's. The value is computed in JS through
+    // firmToday() (Intl, Asia/Riyadh) and BOUND as a parameter.
+    const deedToday = firmToday();
+    // 🔴 "NOT RECEIVED YET" — the fix. This used to be presence-only:
+    //     (date IS NULL OR date = '')
+    // which meant "no date TYPED". Typing a FUTURE receipt date therefore SILENCED
+    // the follow-up task — the صك had not arrived, but the system behaved as though
+    // it had. Production carried 6 judgments with a future deed date, and for those
+    // cases the correct task was suppressed while its opposite fired. Same class as
+    // batch 8's objection memo: act when the date COMES, not when it is TYPED.
+    //
+    // 🔴 THE COMPARISON IS A STRING COMPARE ON "YYYY-MM-DD", which IS the calendar
+    // comparison for that shape — never new Date(str) (UTC midnight, the 60a4d79
+    // outage) and never a toISOString slice. Exact precedent:
+    // getJudgmentsAwaitingObjectionMemo, which batch 8 built the same way.
+    const deedNotArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL
+      OR ${lawCases.judgmentDeedReceivedDate} = ''
+      OR ${lawCases.judgmentDeedReceivedDate} > ${deedToday})`;
+    // The exact complement: a date is recorded AND that day has come. `<=` because
+    // the owner's ruling is "today or past counts as arrived".
+    const deedArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL
+      AND ${lawCases.judgmentDeedReceivedDate} <> ''
+      AND ${lawCases.judgmentDeedReceivedDate} <= ${deedToday})`;
     const deedCaseLive = and(
       ne(lawCases.status, "مغلق"),
       sql`${lawCases.isArchived} IS NOT TRUE`,
@@ -4941,8 +4976,8 @@ export class DatabaseStorage implements IStorage {
       // fetched by ruling-presence (+ dept for a head) and filtered by resolved
       // owner below.
       const deedWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedMissing, deedCaseLive, caseNotPaused)
-        : and(hasJudgmentRecord, deedMissing, deedCaseLive, caseNotPaused);
+        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedNotArrived, deedCaseLive, caseNotPaused)
+        : and(hasJudgmentRecord, deedNotArrived, deedCaseLive, caseNotPaused);
       const deedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
@@ -5046,18 +5081,28 @@ export class DatabaseStorage implements IStorage {
     // it. Same scope arms, same alive and pause exclusions as 1c — deedCaseLive and
     // caseNotPaused are reused verbatim from that block rather than restated.
     {
-      const deedPresent = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL AND ${lawCases.judgmentDeedReceivedDate} <> '')`;
+      // 🔴 deedArrived, NOT the old presence-only `deedPresent` — the defect this
+      // batch fixes. Production held two cases at محكوم_حكم_نهائي whose deed date
+      // was 2026-09-02 and 2026-08-26 (not yet received) with no attachment, and
+      // both were being told TODAY to attach a document nobody has. Nothing to
+      // attach until the deed arrives, so the task must not exist until then.
+      // The fragment is the shared one hoisted beside deedNotArrived, so this and
+      // its 1c twin are the exact complement of each other by construction.
       const attachWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedPresent, deedCaseLive, caseNotPaused)
-        : and(hasJudgmentRecord, deedPresent, deedCaseLive, caseNotPaused);
+        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused)
+        : and(hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused);
       const attachRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
         // THE AGE ARM's input here, and the most defensible age in the whole feed:
         // it is not a proxy for the event, it IS the event. The deed arrived on
         // this date; attaching the file became someone's job at that moment.
-        // Already on the row (deedPresent tests it in the where-clause), so this
+        // Already on the row (deedArrived tests it in the where-clause), so this
         // costs one more column on a query that must run anyway.
+        // ⚠ AND IT IS NOW ALWAYS A PAST-OR-TODAY DATE, which this age arm quietly
+        // depended on: with the old presence-only filter a FUTURE receipt date
+        // produced a NEGATIVE age, so isAgedOverdue was being asked how overdue
+        // something is that has not happened. deedArrived removes that input.
         deedDate: lawCases.judgmentDeedReceivedDate,
       }).from(lawCases).where(attachWhere);
       if (attachRows.length > 0) {

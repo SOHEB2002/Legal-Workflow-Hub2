@@ -73,7 +73,7 @@ import { extractApiError, formatAmount } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId, casePinnedNote } from "@/lib/attachment-indicators";
+import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId, casePinnedNote, deedHasArrived } from "@/lib/attachment-indicators";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
   CaseStageLabels,
@@ -2187,8 +2187,15 @@ export function CaseDetailsDialog({
                         //   date but no file       → بانتظار إرفاق الصك
                         //   file on record         → الصك مرفق
                         // hasDeed asks judgment_attachments — THIS ruling's own صك.
-                        const hasDate = !!String(j.deedReceivedDate || "").trim();
-                        const deed = !hasDate
+                        // 🔴 ARRIVED, not merely TYPED — was
+                        // `!!String(j.deedReceivedDate).trim()`, which made a
+                        // future receipt date read as "بانتظار إرفاق الصك" (the
+                        // file is in hand, upload it) when the court had not sent
+                        // the صك yet. Same shared rule as the two list badges, so
+                        // this panel and the cases list name the same state for
+                        // the same ruling.
+                        const hasArrived = deedHasArrived(j.deedReceivedDate);
+                        const deed = !hasArrived
                           ? { text: "بانتظار استلام الصك", tone: "text-amber-700 dark:text-amber-400" }
                           : !j.hasDeed
                           ? { text: "بانتظار إرفاق الصك", tone: "text-amber-700 dark:text-amber-400" }
@@ -2224,11 +2231,19 @@ export function CaseDetailsDialog({
                               </div>
                               <div className="text-sm flex items-center gap-2 flex-wrap">
                                 <span className={deed.tone}>{deed.text}</span>
-                                {hasDate && (
+                                {/* ⚠ PRESENCE, not arrival, and deliberately so —
+                                    this line DISPLAYS the date, and a future one is
+                                    exactly what the reader wants to see ("the صك is
+                                    expected on the 2nd"). Only the LABEL changes:
+                                    calling a future date تاريخ الاستلام would assert
+                                    a receipt that has not happened, which is the
+                                    same false claim the badge above was making. */}
+                                {!!String(j.deedReceivedDate || "").trim() && (
                                   <>
                                     <span className="text-muted-foreground">•</span>
                                     <span className="text-muted-foreground">
-                                      تاريخ الاستلام: <DualDateDisplay date={j.deedReceivedDate} compact />
+                                      {hasArrived ? "تاريخ الاستلام: " : "الاستلام المتوقع: "}
+                                      <DualDateDisplay date={j.deedReceivedDate} compact />
                                     </span>
                                   </>
                                 )}
