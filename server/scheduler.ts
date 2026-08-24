@@ -1716,9 +1716,15 @@ async function checkStruckOffExpiry() {
         }
         const memos = await storage.getMemosByCase(caseItem.id);
         for (const m of memos) {
-          if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
-            await storage.updateMemo(m.id, { status: "ملغاة" } as any);
-          }
+          // 🔴 WAS an INLINE COPY of routes.ts's ACTIVE_MEMO_STATUSES —
+          // ["لم_تبدأ","قيد_التحرير","قيد_المراجعة","تحتاج_تعديل"] — so this job
+          // cancelled FILED memos exactly as the hearing-result path did. memos
+          // .status freezes at creation, so a memo at current_stage = مرفوعة still
+          // reads لم_تبدأ. isActiveMemo tests current_stage for filing and status
+          // only for ملغاة. Sibling of the settlement-link job below; both are
+          // fixed together because they were byte-identical copies.
+          if (!isActiveMemo(m)) continue;
+          await storage.updateMemo(m.id, { status: "ملغاة" });
         }
         const tasks = await storage.getFieldTasksByCase(caseItem.id);
         for (const t of tasks) {
@@ -1820,9 +1826,11 @@ async function checkSettlementLinkMissingTimeout() {
         }
         const memos = await storage.getMemosByCase(caseItem.id);
         for (const m of memos) {
-          if (["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"].includes(m.status)) {
-            await storage.updateMemo(m.id, { status: "ملغاة" } as any);
-          }
+          // 🔴 Same defect, same fix as checkStruckOffExpiry above — this loop's
+          // own comment said it was "copied from checkStruckOffExpiry", and the
+          // copy carried the frozen-status test with it. See that block for why.
+          if (!isActiveMemo(m)) continue;
+          await storage.updateMemo(m.id, { status: "ملغاة" });
         }
         const tasks = await storage.getFieldTasksByCase(caseItem.id);
         for (const t of tasks) {

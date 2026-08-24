@@ -2518,10 +2518,22 @@ async function getActiveMemoCount(caseId: string): Promise<number> {
   return memos.filter(isActiveMemo).length;
 }
 
-// The memo statuses that mean "still open work" — not yet approved, filed or
-// cancelled. Lifted out of the close-cleanup so the judgment path cancels by the
-// SAME definition instead of a second copy of the list.
-const ACTIVE_MEMO_STATUSES = ["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"];
+// 🔴 ACTIVE_MEMO_STATUSES IS DELETED. It was
+//   ["لم_تبدأ", "قيد_التحرير", "قيد_المراجعة", "تحتاج_تعديل"]
+// tested as `if (!ACTIVE_MEMO_STATUSES.includes(m.status)) continue`, and it was
+// the LAST bulk reader of the frozen legacy `status` field — named in batch 10's
+// census and scoped out at the time, which is what left this defect standing.
+//
+// memos.status FREEZES AT CREATION; the workflow lives on current_stage. So a memo
+// filed with the court sits at current_stage = مرفوعة while still carrying
+// status = لم_تبدأ — which is IN that list. Every bulk cancel therefore cancelled
+// FILED memos, minting exactly the contradictory row (status ملغاة on stage مرفوعة)
+// that the MANUAL cancel route already refuses to create (batch 11, isMemoFiled).
+// The owner's ruling: a filed memo has been lodged with the court, the act
+// happened, and nothing may assert otherwise.
+//
+// Replaced by the shared isActiveMemo — not cancelled AND not filed — so the bulk
+// path now applies the same rule as the manual one.
 
 // Cancel a case's still-open memos. ONE implementation, two callers:
 //   • cancelOpenCaseChildrenOnClose — no exclusions; a closed case keeps nothing.
@@ -2548,7 +2560,9 @@ async function cancelActiveCaseMemos(
   const memos = await storage.getMemosByCase(caseId);
   let cancelled = 0;
   for (const m of memos) {
-    if (!ACTIVE_MEMO_STATUSES.includes(m.status)) continue;
+    // 🔴 isActiveMemo, NOT the old status-list test — see the block above it.
+    // A FILED memo is never cancelled by any bulk path.
+    if (!isActiveMemo(m)) continue;
     if (exclude.has(String(m.memoType))) continue;
     if (opts.reason) {
       await storage.cancelMemo(m.id, {
