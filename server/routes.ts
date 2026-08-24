@@ -79,6 +79,7 @@ import {
   firmToday,
   firmDateTimeToInstant,
   nearestUpcomingHearingDate,
+  nearestUpcomingHearing,
   HearingRingTierLeadMinutes,
   resolveHearingRingTier,
   type HearingRingItem,
@@ -15578,6 +15579,18 @@ export async function registerRoutes(
       // Read the parent BEFORE deleting — afterwards there is no row to ask.
       const doomed = await storage.getHearingById(String(req.params.id));
       await storage.deleteHearing(String(req.params.id));
+      // 🔴 BATCH 24 — clear any case note bound to this hearing. case_notes.hearing_id
+      // carries NO FK (the repo's commented-FK convention), so nothing in the database
+      // would drop it: the note would keep pointing at a hearing that no longer exists.
+      // Invisible rather than broken — no hearing matches, so nothing renders — but it
+      // is stale state, and it would resurface if the id were ever reused. Cleared
+      // here, where the parent is known, rather than swept later.
+      // Best-effort: a stale binding must never fail the delete the user asked for.
+      try {
+        await storage.clearCaseNoteHearingBindings(String(req.params.id));
+      } catch (e) {
+        console.error("[DELETE /api/hearings/:id] clearing note bindings failed", e);
+      }
       // Deleting the only upcoming session CLEARS the column, which is the whole
       // point: previously it kept naming a hearing that no longer existed.
       await recomputeCaseNextHearingDate(doomed?.caseId);
@@ -20127,6 +20140,13 @@ export async function registerRoutes(
       const userName = user.name || user.id;
       const note = await storage.createCaseNote({
         ...req.body,
+        // 🔴 BATCH 24 — hearingId is FORCED NULL at creation. This handler spreads
+        // ...req.body and createCaseNoteSchema is .passthrough(), so without this a
+        // caller could set the binding here and skip the one-note-per-hearing
+        // transaction entirely — the same bypass batch 23 had to close for isPinned
+        // on the PATCH. Binding has exactly one door: POST /hearing-flag, which
+        // resolves the target itself.
+        hearingId: null,
         content: String(content).trim().substring(0, 5000),
         caseId: String(req.params.id),
         userId: user.id,
@@ -20176,7 +20196,12 @@ export async function registerRoutes(
       // field stays in updateCaseNoteSchema (the gate is deliberately tolerant and
       // .passthrough()); it is dropped at the handler, so an old client sending it
       // gets a successful content edit and no pin change rather than a 400.
-      const { isPinned: _ignoredPinFlag, ...editableFields } = req.body ?? {};
+      //
+      // 🔴 BATCH 24 strips hearingId here for exactly the same reason, and this is
+      // the ONLY line of batch 23's pin work that batch 24 touches. Binding goes
+      // through POST /hearing-flag, which resolves the target and enforces
+      // one-note-per-hearing in a transaction; a raw PATCH would bypass both.
+      const { isPinned: _ignoredPinFlag, hearingId: _ignoredHearingBinding, ...editableFields } = req.body ?? {};
       const note = await storage.updateCaseNote(String(req.params.id), { ...editableFields, editedAt: new Date() });
       if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
       res.json(note);
@@ -20289,6 +20314,84 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[POST /api/case-notes/:id/unpin] failed", error);
       res.status(500).json({ error: "حدث خطأ في إلغاء تثبيت الملاحظة" });
+    }
+  });
+
+  // ============ Batch 24 — bind a case note to a specific HEARING ============
+  //
+  // 🔴 COMPLETELY INDEPENDENT OF PINNING. Separate column (hearing_id vs is_pinned),
+  // separate endpoints, separate state — a note may be pinned only, hearing-bound
+  // only, both, or neither. Nothing here reads or writes the pin, and the two pin
+  // endpoints above are untouched.
+  //
+  // GATE: resolvePinnableNote, REUSED VERBATIM. Its name says "pinnable" because
+  // batch 23 introduced it, but its body is entirely generic — it resolves the note,
+  // resolves the parent case, and applies canActOnCaseWorkflowState. That is exactly
+  // the set the owner specified for this action too, so it is reused rather than
+  // renamed: renaming would have edited batch 23's lines for cosmetic gain.
+  //
+  // 🔴 THE TARGET IS RESOLVED SERVER-SIDE, NEVER SUPPLIED BY THE CLIENT. The request
+  // carries no hearing id at all. A client-supplied id would let a caller bind a note
+  // to a past session, another case's session, or a cancelled one — all of which the
+  // shared upcoming rule refuses.
+  app.post("/api/case-notes/:id/hearing-flag", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const resolved = await resolvePinnableNote(req, res);
+      if (!resolved) return;
+      const hearings = await storage.getHearingsByCase(resolved.note.caseId);
+      // 🔴 THE RULE IS NOT RESTATED HERE — nearestUpcomingHearing (shared/schema.ts)
+      // is the hearing-shaped projection of the SAME scan behind
+      // nearestUpcomingHearingDate, which is what law_cases.next_hearing_date and the
+      // cases-page sort already use. So "the next hearing" means one thing app-wide,
+      // and this can never bind to a session the rest of the app disagrees about.
+      // isUpcomingHearing inside it excludes cancelled sessions, sessions with a
+      // recorded result, and anything before the FIRM'S today (Asia/Riyadh, string
+      // compare — never new Date(day), the documented date-boundary class).
+      const target = nearestUpcomingHearing(hearings);
+      if (!target) {
+        // Refuses rather than guessing. Binding to a PAST hearing would assert the
+        // note was prepared for a session that already happened; storing NULL would
+        // be indistinguishable from "not flagged" and would silently do nothing.
+        return res.status(400).json({
+          error: "لا توجد جلسة قادمة لهذه القضية — لا يمكن إظهار الملاحظة في الجلسة",
+        });
+      }
+      const note = await storage.bindCaseNoteToHearing(String(req.params.id), target.id);
+      if (!note) return res.status(404).json({ error: "ملاحظة غير موجودة" });
+      await logCaseActivityActing(req, {
+        caseId: resolved.note.caseId,
+        userId: req.user!.id,
+        userName: req.user!.name || req.user!.id,
+        actionType: "note_bound_to_hearing",
+        title: `تم ربط ملاحظة بجلسة ${target.hearingDate}`,
+      });
+      res.json(note);
+    } catch (error) {
+      console.error("[POST /api/case-notes/:id/hearing-flag] failed", error);
+      res.status(500).json({ error: "حدث خطأ في ربط الملاحظة بالجلسة" });
+    }
+  });
+
+  app.post("/api/case-notes/:id/hearing-unflag", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const resolved = await resolvePinnableNote(req, res);
+      if (!resolved) return;
+      // Idempotent: unbinding an unbound note writes the NULL it already holds and
+      // returns 200. Nothing to refuse, and no upcoming hearing is needed — a note
+      // bound to a session that has since passed must always be releasable.
+      const note = await storage.unbindCaseNoteFromHearing(String(req.params.id));
+      if (!note) return res.status(404).json({ error: "ملاحظة غير موجودة" });
+      await logCaseActivityActing(req, {
+        caseId: resolved.note.caseId,
+        userId: req.user!.id,
+        userName: req.user!.name || req.user!.id,
+        actionType: "note_unbound_from_hearing",
+        title: "تم إلغاء ربط ملاحظة بالجلسة",
+      });
+      res.json(note);
+    } catch (error) {
+      console.error("[POST /api/case-notes/:id/hearing-unflag] failed", error);
+      res.status(500).json({ error: "حدث خطأ في إلغاء ربط الملاحظة بالجلسة" });
     }
   });
 

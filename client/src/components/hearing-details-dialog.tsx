@@ -18,7 +18,7 @@ import { useAuth } from "@/lib/auth-context";
 import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
 import { useToast } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { extractApiError } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +55,7 @@ import {
   ArrowLeftRight,
   Pencil,
   Paperclip,
+  MessageSquare,
 } from "lucide-react";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
 import { isHearingActor, canViewHearingMinutes, hearingHasMinutes } from "@/lib/attachment-indicators";
@@ -117,6 +118,35 @@ export function HearingDetailsDialog({
   // Case-scoped field tasks for the open hearing's case (case-access gated), so
   // the hearing detail shows every linked task on the case.
   const { data: detailHearingTasks = [] } = useCaseFieldTasks(detailHearing?.caseId);
+  // 🔴 BATCH 24 — the case note bound to THIS hearing.
+  //
+  // Keyed IDENTICALLY to CaseNotesTab's query ('/api/cases', caseId, 'notes'), so
+  // react-query serves both from ONE cache entry and one fetch: binding a note from
+  // the notes tab invalidates this dialog's copy too, with no second mechanism and
+  // no cross-component wiring. Only fires while the dialog is open on a real case.
+  //
+  // The FILTER, not a dedicated endpoint: notes per case are few, the read gate on
+  // GET /api/cases/:id/notes is requireAuth (so the hearings page may call it), and
+  // a /api/hearings/:id/note route would have been a second way to ask the same
+  // question. One-per-hearing is enforced on the WRITE side, so `.find` is exact —
+  // but it is still `.find`, which quietly tolerates a legacy double-binding by
+  // showing the first rather than rendering two banners.
+  const { data: caseNotesForHearing = [] } = useQuery<any[]>({
+    queryKey: ['/api/cases', detailHearing?.caseId, 'notes'],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/cases/${detailHearing!.caseId}/notes`);
+      return res.json();
+    },
+    // !!detailHearing?.caseId is the whole gate — this component has no `open`
+    // prop; the Dialog below is literally `open={!!detailHearing}`, so a resolved
+    // hearing IS the dialog being open. (An earlier draft wrote `!!open &&` here,
+    // which typechecked because it silently bound to window.open and was therefore
+    // always true — the query would have fired on every render of a closed dialog.)
+    enabled: !!detailHearing?.caseId,
+  });
+  const hearingBoundNote = detailHearing
+    ? caseNotesForHearing.find((n: any) => n.hearingId === detailHearing.id) || null
+    : null;
   const submitting = !!actions?.busy;
 
   // CLIENT MIRROR of canEditHearingRecord (server/routes.ts) — the owner's
@@ -407,6 +437,46 @@ export function HearingDetailsDialog({
                   {detailHearing.checkedInAt && (
                     <>في {new Date(detailHearing.checkedInAt).toLocaleString("ar")}</>
                   )}
+                </div>
+              </div>
+            )}
+            {/* 🔴 BATCH 24 — THE CASE NOTE BOUND TO THIS HEARING.
+                PLACED ABOVE THE TABS, in the banner stack beside the flag and
+                check-in banners, and NOT inside المعلومات. Two reasons:
+                  • it is preparation context for the session — the reason someone
+                    bound it is so it is READ before attending — so it must be
+                    visible on open whichever tab the user lands on, exactly like
+                    the flag banner;
+                  • the four tabs are all facts ABOUT the hearing (its details, its
+                    result, its report, its workflow). This is not one of those, and
+                    filing it under المعلومات would have implied it was.
+
+                🔴 MARKED AS A CASE NOTE, NOT AS HEARING DATA — the «ملاحظة من
+                القضية» caption says so in words, and the neutral/primary tone keeps
+                it clearly distinct from the destructive flag banner and the
+                green/amber check-in banner above it. Full text with
+                whitespace-pre-wrap: the cases-list line truncates, this does not.
+
+                THE BINDING IS STORED, NEVER RECOMPUTED — case_notes.hearing_id holds
+                THIS hearing's id, so once the session passes the note stays here
+                rather than migrating to the next one. A note bound to a hearing that
+                was later deleted shows nothing: the delete cascade nulls the column.
+                A DELETED note shows nothing either, with no clean-up needed — the
+                binding is a column on the note row and goes with it. */}
+            {hearingBoundNote && (
+              <div
+                className="mb-3 p-3 rounded-md border border-r-4 border-r-primary/60 bg-primary/5 dark:bg-primary/10"
+                data-testid={`hearing-bound-note-${detailHearing.id}`}
+              >
+                <div className="flex items-center gap-2 mb-1">
+                  <MessageSquare className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="text-xs font-semibold text-primary">ملاحظة من القضية</span>
+                </div>
+                <p className="text-sm text-foreground whitespace-pre-wrap break-words">
+                  {hearingBoundNote.content}
+                </p>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  <BidiText>{hearingBoundNote.userName}</BidiText>
                 </div>
               </div>
             )}

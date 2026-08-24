@@ -1376,6 +1376,26 @@ export const caseNotes = pgTable("case_notes", {
   content: text("content").notNull(),
   isPinned: boolean("is_pinned").default(false),
   isImportant: boolean("is_important").default(false),
+  // 🔴 BATCH 24 — the note is shown in THIS hearing's details. NULL = not flagged.
+  //
+  // A HEARING ID, NOT A BOOLEAN, because the owner ruled the binding is to a
+  // SPECIFIC session and STAYS there once that session passes. A boolean would
+  // force the reader to recompute "which hearing" on every render, and the answer
+  // would silently move to the next session the moment this one was held — the
+  // opposite of the ruling.
+  //
+  // ⚠ COMPLETELY INDEPENDENT OF is_pinned. Two columns, two actions, two
+  // endpoints: a note may be pinned only, hearing-bound only, both or neither.
+  //
+  // ⚠ AND NOT is_important, which was checked first and is NOT free: it is live
+  // (the add-note form's toggle writes it; the note card renders a yellow border
+  // and an AlertTriangle from it) and it is a boolean, so it could not hold a
+  // hearing id even if it were unused.
+  //
+  // varchar(255) matches hearings.id exactly, the same way case_id matches
+  // law_cases.id. NO FK — the repo's commented-FK convention (see the note below);
+  // a dangling id is handled by clearing it when the hearing is deleted.
+  hearingId: varchar("hearing_id", { length: 255 }),
   category: varchar("category", { length: 50 }).default("عام"),
   editedAt: timestamp("edited_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -6701,13 +6721,52 @@ export function nearestUpcomingHearingDate(
   hearings: UpcomingHearingCandidate[],
   today: string = firmToday(),
 ): string | null {
-  let nearest: string | null = null;
+  // 🔴 DELEGATES — this is NOT a second scan and NOT a second rule. Batch 24 needed
+  // the same answer as a HEARING rather than a date (to bind a note to it), and the
+  // one thing that must not happen is two "which is the next hearing" rules that can
+  // disagree. So the scan moved into nearestUpcomingHearing below and this became a
+  // projection of it.
+  //
+  // ⚠ THE RETURNED DATE IS UNCHANGED, provably: the minimum date is the minimum date
+  // whatever the tie-break picks among rows sharing it. The tie-break exists only to
+  // make the HEARING deterministic, and cannot move the day.
+  const next = nearestUpcomingHearing(hearings, today);
+  return next ? String(next.hearingDate).trim() : null;
+}
+
+/**
+ * 🔴 THE SAME RULE AS ABOVE, RETURNING THE HEARING ITSELF — one predicate
+ * (isUpcomingHearing), one scan, two projections. Batch 24's note-to-hearing
+ * binding resolves its target through this, so the note can never bind to a
+ * session the rest of the app does not consider "next".
+ *
+ * Generic over the row type so the server's plain hearings and the client's
+ * enriched ones both fit, and the CALLER keeps its own row type back (it needs
+ * `id`, which UpcomingHearingCandidate does not carry).
+ *
+ * ⚠ THE TIE-BREAK IS (date, time, id) AND IT IS LOAD-BEARING HERE in a way it never
+ * was for the date projection: two sessions on the same day are ordinary, and
+ * "bind to the next hearing" must resolve to ONE row, the same row, every time —
+ * including on a re-render or a second click. hearing_time is a zero-padded "HH:mm"
+ * wall clock written by an <input type="time">, so a string compare IS the time
+ * order; id breaks a full tie so the answer never depends on row arrival order.
+ */
+export function nearestUpcomingHearing<T extends UpcomingHearingCandidate & { id?: string; hearingTime?: string | null }>(
+  hearings: readonly T[],
+  today: string = firmToday(),
+): T | null {
+  let best: T | null = null;
+  let bestKey = "";
   for (const h of hearings) {
     if (!isUpcomingHearing(h, today)) continue;
-    const day = String(h.hearingDate).trim();
-    if (!nearest || day < nearest) nearest = day;
+    const key = [
+      String(h.hearingDate).trim(),
+      String(h.hearingTime ?? "").trim(),
+      String(h.id ?? ""),
+    ].join(" ");
+    if (best === null || key < bestKey) { best = h; bestKey = key; }
   }
-  return nearest;
+  return best;
 }
 
 // The offset Asia/Riyadh was running at a given instant, in milliseconds.
@@ -8185,6 +8244,9 @@ export const CaseActivityActionLabels: Record<string, string> = {
   // so these two labels are the whole change; no migration.
   note_pinned: "تثبيت ملاحظة",
   note_unpinned: "إلغاء تثبيت ملاحظة",
+  // Batch 24 — the hearing binding. Free-text action_type, so labels only.
+  note_bound_to_hearing: "ربط ملاحظة بجلسة",
+  note_unbound_from_hearing: "إلغاء ربط ملاحظة بجلسة",
   contact_log_added: "تسجيل تواصل",
   sent_to_review: "إحالة للمراجعة",
   returned_from_review: "إرجاع من المراجعة",

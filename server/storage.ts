@@ -245,6 +245,9 @@ export interface IStorage {
   deleteCaseNote(id: string): Promise<boolean>;
   pinCaseNote(id: string): Promise<CaseNote | undefined>;
   unpinCaseNote(id: string): Promise<CaseNote | undefined>;
+  bindCaseNoteToHearing(id: string, hearingId: string): Promise<CaseNote | undefined>;
+  unbindCaseNoteFromHearing(id: string): Promise<CaseNote | undefined>;
+  clearCaseNoteHearingBindings(hearingId: string): Promise<number>;
   getPinnedCaseNotesByCase(): Promise<Map<string, { id: string; content: string }>>;
 
   // Case Comments
@@ -8274,6 +8277,56 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return updated;
     });
+  }
+
+  // 🔴 BATCH 24 — "one note per HEARING", the exact shape of pinCaseNote above and
+  // for the same reason: the binding is a column on the note row, so uniqueness is
+  // a RULE and this transaction is the whole rule. Clear the hearing off every
+  // OTHER note, then set it here, atomically.
+  //
+  // ⚠ THE CLEAR IS SCOPED BY hearing_id, NOT case_id — and that difference is the
+  // feature. Two notes bound to two DIFFERENT hearings of the same case is a
+  // legitimate state the owner asked for, so scoping this by case (as the pin does)
+  // would wrongly unbind the note attached to a different session.
+  //
+  // ⚠ REBINDING IS ALLOWED AND SILENT. A note already bound to hearing A simply
+  // moves to the new hearing — one column, one binding. A wants nothing afterwards,
+  // which is correct: the user has said where this note belongs now.
+  async bindCaseNoteToHearing(id: string, hearingId: string): Promise<CaseNote | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(caseNotes).where(eq(caseNotes.id, id));
+      if (!existing) return undefined;
+      await tx.update(caseNotes)
+        .set({ hearingId: null })
+        .where(and(eq(caseNotes.hearingId, hearingId), ne(caseNotes.id, id)));
+      const [updated] = await tx.update(caseNotes)
+        .set({ hearingId })
+        .where(eq(caseNotes.id, id))
+        .returning();
+      return updated;
+    });
+  }
+
+  // Single-row, no transaction — same reasoning as unpinCaseNote: clearing a
+  // binding can never create the two-notes-on-one-hearing state this prevents.
+  async unbindCaseNoteFromHearing(id: string): Promise<CaseNote | undefined> {
+    const [updated] = await db.update(caseNotes)
+      .set({ hearingId: null })
+      .where(eq(caseNotes.id, id))
+      .returning();
+    return updated;
+  }
+
+  // Called from the hearing-delete cascade. Without it a deleted hearing would
+  // leave notes carrying its id forever — invisible (nothing matches that hearing
+  // any more) but real, and it would resurface if the id were ever reused.
+  // Returns the count so the caller can log it.
+  async clearCaseNoteHearingBindings(hearingId: string): Promise<number> {
+    const rows = await db.update(caseNotes)
+      .set({ hearingId: null })
+      .where(eq(caseNotes.hearingId, hearingId))
+      .returning({ id: caseNotes.id });
+    return rows.length;
   }
 
   // Deliberately NOT wrapped in a transaction and deliberately NOT case-scoped:

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useCaseFieldTasks } from "@/hooks/use-case-field-tasks";
@@ -10,11 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Clock, FileText, Pin, PinOff, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
+  Clock, FileText, Pin, PinOff, AlertTriangle, Calendar, CalendarClock, Plus, Trash2, Edit3, Save,
   MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useCases } from "@/lib/cases-context";
+import { useHearings } from "@/lib/hearings-context";
+import { LtrInline } from "@/components/ui/bidi-text";
 import { canActOnCaseWorkflowState } from "@/lib/acting-identities";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels,
   isActiveMemo, memoWorkflowLabel } from "@shared/schema";
@@ -125,6 +127,14 @@ export function CaseNotesTab({ caseId, caseItem }: {
   // decides what the whole firm reads first on the case, which is why the owner
   // put it on the standard case-actor set instead.
   const canPin = canActOnCaseWorkflowState(actingIdentities, caseItem);
+  // Batch 24 — id → date, so a bound note can name its session. Read from the
+  // hearings context the dialog already loads; no extra request.
+  const { getHearingsByCase } = useHearings();
+  const hearingDateById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const h of getHearingsByCase(caseId)) map.set(h.id, h.hearingDate);
+    return map;
+  }, [getHearingsByCase, caseId]);
   const [newNote, setNewNote] = useState("");
   const [noteCategory, setNoteCategory] = useState("عام");
   const [isImportant, setIsImportant] = useState(false);
@@ -250,6 +260,43 @@ export function CaseNotesTab({ caseId, caseItem }: {
     },
   });
 
+  // 🔴 BATCH 24 — the HEARING binding. A SEPARATE pair of endpoints from pin/unpin
+  // and a separate column; nothing here touches isPinned, and a note can carry both.
+  // The hearing is chosen by the SERVER (nearestUpcomingHearing), so no id is sent.
+  const flagNoteForHearingMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/case-notes/${id}/hearing-flag`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      pinInvalidate();
+      toast({ title: "سيتم إظهار الملاحظة في الجلسة القادمة" });
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[hearing-flag-note] failed", err);
+      // errMsg surfaces the server's own Arabic text, which for the commonest
+      // failure is "لا توجد جلسة قادمة لهذه القضية …" — the actionable message.
+      toast({ title: "تعذّر إظهار الملاحظة في الجلسة", description: errMsg(err), variant: "destructive" });
+    },
+  });
+
+  const unflagNoteForHearingMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/case-notes/${id}/hearing-unflag`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      pinInvalidate();
+      toast({ title: "تم إلغاء إظهار الملاحظة في الجلسة" });
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[hearing-unflag-note] failed", err);
+      toast({ title: "تعذّر إلغاء الإظهار", description: errMsg(err), variant: "destructive" });
+    },
+  });
+
   const deleteNoteMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/case-notes/${id}`);
@@ -324,6 +371,22 @@ export function CaseNotesTab({ caseId, caseItem }: {
                 <div className="flex items-center gap-2">
                   {note.isPinned && <Pin className="h-3 w-3 text-muted-foreground" />}
                   {note.isImportant && <AlertTriangle className="h-3 w-3 text-yellow-500" />}
+                  {/* 🔴 BATCH 24 — WHICH session, not just "bound". The binding
+                      STAYS on its hearing after that hearing passes (owner ruling),
+                      so a bare icon would leave the user unable to tell a note
+                      waiting for next week's session from one still attached to a
+                      session held in March. The date answers it at a glance and is
+                      what makes the unbind-then-rebind flow usable.
+                      Falls back to a bare badge if the hearing is not in the loaded
+                      list — the note is still bound, we just cannot name the day. */}
+                  {note.hearingId && (
+                    <Badge variant="secondary" className="text-xs gap-1">
+                      <CalendarClock className="h-3 w-3" />
+                      {hearingDateById.get(note.hearingId)
+                        ? <>الجلسة <LtrInline>{hearingDateById.get(note.hearingId)}</LtrInline></>
+                        : <>مرتبطة بجلسة</>}
+                    </Badge>
+                  )}
                   <Badge variant="outline" className="text-xs">{CaseNoteCategoryLabels[note.category] || note.category}</Badge>
                 </div>
                 <div className="flex items-center gap-1">
@@ -356,6 +419,41 @@ export function CaseNotesTab({ caseId, caseItem }: {
                       data-testid={`button-pin-note-${note.id}`}
                     >
                       <Pin className="h-3 w-3" />
+                    </Button>
+                  ))}
+                  {/* 🔴 BATCH 24 — the HEARING control, a SECOND and SEPARATE toggle
+                      beside the pin. Same authority (canPin), different action: a
+                      note can be pinned and hearing-bound at once, and neither
+                      button's state affects the other.
+
+                      ⚠ A TOGGLE, NOT A RE-FLAG BUTTON. While a note is bound only
+                      «إلغاء الإظهار» is offered, so moving a note to a later session
+                      is a deliberate unbind-then-bind rather than one click that
+                      silently drops the old binding. The endpoint still rebinds if
+                      called on a bound note, so nothing is lost — it just cannot
+                      happen by accident. The bound hearing's DATE is shown on the
+                      note card below, so "bound to which session" is never a guess. */}
+                  {canPin && (note.hearingId ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="إلغاء إظهار الملاحظة في الجلسة"
+                      disabled={unflagNoteForHearingMutation.isPending}
+                      onClick={() => unflagNoteForHearingMutation.mutate(note.id)}
+                      data-testid={`button-hearing-unflag-note-${note.id}`}
+                    >
+                      <CalendarClock className="h-3 w-3 text-primary" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="إظهار في الجلسة — تُربط بالجلسة القادمة"
+                      disabled={flagNoteForHearingMutation.isPending}
+                      onClick={() => flagNoteForHearingMutation.mutate(note.id)}
+                      data-testid={`button-hearing-flag-note-${note.id}`}
+                    >
+                      <CalendarClock className="h-3 w-3" />
                     </Button>
                   ))}
                   <Button
