@@ -4938,14 +4938,44 @@ export class DatabaseStorage implements IStorage {
     // comparison for that shape — never new Date(str) (UTC midnight, the 60a4d79
     // outage) and never a toISOString slice. Exact precedent:
     // getJudgmentsAwaitingObjectionMemo, which batch 8 built the same way.
+    // 🔴 THE SHAPE GUARD, AND WHY IT IS NOT OPTIONAL — this is the regression that
+    // took the first cut of this fix to production.
+    //
+    // A lexicographic compare is the calendar compare ONLY for a zero-padded
+    // "YYYY-MM-DD". It is not for anything else, and the failure is silent and
+    // BACKWARDS:
+    //     '2026-5-21'  > '2026-08-24'  →  TRUE   (at index 5, '5' > '0')
+    //     '21/05/2026' > '2026-08-24'  →  TRUE
+    // So a deed that arrived in MAY read as "not yet arrived", the follow-up task
+    // fired for judgments whose صك was received and attached months ago, and the
+    // attach task went silent for them. Every case the owner reported had a month
+    // in 1-9 — precisely the range that breaks when the padding is missing.
+    //
+    // 🔴 IT IS A REGRESSION *OF THIS BATCH*, not a latent bug it exposed. The old
+    // predicate was `IS NULL OR = ''`, which is false for ANY non-empty string
+    // whatever its shape, so the format had never mattered on this column before.
+    // Adding the first format-sensitive comparison is what made it matter.
+    //
+    // THE FALLBACK DIRECTION IS DELIBERATE: a value that is not ISO-shaped is
+    // treated as ARRIVED, which is byte-for-byte what this code did before the
+    // batch. So a malformed row can never be made worse than it already was — the
+    // fix cannot regress anything, it can only decline to improve rows it cannot
+    // read. The diagnostic that finds those rows is in the batch report.
+    //
+    // btrim() so a stray space is handled properly rather than silently dropping
+    // an otherwise-good date into the fallback.
+    const ISO_DAY = sql`'^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`;
+    const deedDay = sql`btrim(${lawCases.judgmentDeedReceivedDate})`;
     const deedNotArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL
-      OR ${lawCases.judgmentDeedReceivedDate} = ''
-      OR ${lawCases.judgmentDeedReceivedDate} > ${deedToday})`;
-    // The exact complement: a date is recorded AND that day has come. `<=` because
-    // the owner's ruling is "today or past counts as arrived".
+      OR ${deedDay} = ''
+      OR (${deedDay} ~ ${ISO_DAY} AND ${deedDay} > ${deedToday}))`;
+    // The EXACT complement of the above — not(A or (B and C)) = not A and (not B or
+    // not C) — so the two tasks still partition every case with a ruling and can
+    // never both fire. `<=` because the owner's ruling is "today or past counts as
+    // arrived"; the `!~` arm is the same not-ISO-shaped fallback.
     const deedArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL
-      AND ${lawCases.judgmentDeedReceivedDate} <> ''
-      AND ${lawCases.judgmentDeedReceivedDate} <= ${deedToday})`;
+      AND ${deedDay} <> ''
+      AND (${deedDay} !~ ${ISO_DAY} OR ${deedDay} <= ${deedToday}))`;
     const deedCaseLive = and(
       ne(lawCases.status, "مغلق"),
       sql`${lawCases.isArchived} IS NOT TRUE`,

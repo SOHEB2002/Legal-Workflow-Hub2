@@ -76,9 +76,24 @@ export function isAwaitingJudgmentDeed(c: {
 //
 // ARRIVED = a date is recorded AND that day has come (today counts, per the owner).
 // Everything else — no date at all, or a date still ahead — is NOT arrived.
+// 🔴 THE SHAPE GUARD — the client half of the server's, and needed for the same
+// reason. isFirmFuture is `d > firmToday()`, a lexicographic compare that IS the
+// calendar compare only for a zero-padded "YYYY-MM-DD":
+//     '2026-5-21'  > '2026-08-24'  →  TRUE   (at index 5, '5' > '0')
+// so a deed received in MAY read as "not yet arrived" and the badges swap places.
+// This shipped to production in the first cut of the fix and is corrected here.
+//
+// NOT ISO-shaped → treated as ARRIVED, which is exactly what these predicates did
+// before the batch (they tested presence only), so a malformed value can never be
+// rendered worse than it already was.
+const ISO_DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function deedHasArrived(deedReceivedDate: string | null | undefined): boolean {
   const d = String(deedReceivedDate || "").trim();
-  return !!d && !isFirmFuture(d);
+  if (!d) return false;
+  // Unreadable shape → fall back to the pre-batch answer rather than guess.
+  if (!ISO_DAY_SHAPE.test(d)) return true;
+  return !isFirmFuture(d);
 }
 export function deedNotArrived(deedReceivedDate: string | null | undefined): boolean {
   return !deedHasArrived(deedReceivedDate);
