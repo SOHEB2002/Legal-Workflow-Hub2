@@ -43,7 +43,8 @@ import {
   caseAttachments, hearingAttachments, hearingProducesNoMinutes,
   caseJudgments, judgmentAttachments,
   memoActivityLog, generalTaskEvents,
-  memoReviews, memoCommitteeDecisions, memoNoteOutcomes
+  memoReviews, memoCommitteeDecisions, memoNoteOutcomes,
+  pickPinnedCaseNote
 } from "@shared/schema";
 import { db } from "./db";
 import type { ActingContext } from "./acting-context";
@@ -242,6 +243,9 @@ export interface IStorage {
   createCaseNote(data: InsertCaseNote): Promise<CaseNote>;
   updateCaseNote(id: string, data: Partial<CaseNote>): Promise<CaseNote | undefined>;
   deleteCaseNote(id: string): Promise<boolean>;
+  pinCaseNote(id: string): Promise<CaseNote | undefined>;
+  unpinCaseNote(id: string): Promise<CaseNote | undefined>;
+  getPinnedCaseNotesByCase(): Promise<Map<string, { id: string; content: string }>>;
 
   // Case Comments
   getCommentsByCaseId(caseId: string): Promise<CaseCommentRow[]>;
@@ -8242,6 +8246,84 @@ export class DatabaseStorage implements IStorage {
   async deleteCaseNote(id: string): Promise<boolean> {
     const result = await db.delete(caseNotes).where(eq(caseNotes.id, id)).returning();
     return result.length > 0;
+  }
+
+  // 🔴 THE UNIQUENESS GUARANTEE for "one pinned note per case".
+  //
+  // The pin is a flag ON THE NOTE ROW (case_notes.is_pinned), so uniqueness is a
+  // RULE rather than a structure — and this transaction is the whole rule. Clear
+  // every other note on the case, then set this one, atomically: a reader can
+  // never observe two pinned notes, and two people pinning at once serialise
+  // instead of both landing.
+  //
+  // ⚠ THE SCOPE OF THE CLEAR IS `caseId AND id <> this`, never a blanket clear.
+  // Notes belong to exactly one case, so this cannot touch another case's pin.
+  //
+  // The caseId is read INSIDE the transaction rather than trusted from the caller,
+  // so the clear can only ever run against the note's real parent.
+  async pinCaseNote(id: string): Promise<CaseNote | undefined> {
+    return await db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(caseNotes).where(eq(caseNotes.id, id));
+      if (!existing) return undefined;
+      await tx.update(caseNotes)
+        .set({ isPinned: false })
+        .where(and(eq(caseNotes.caseId, existing.caseId), ne(caseNotes.id, id)));
+      const [updated] = await tx.update(caseNotes)
+        .set({ isPinned: true })
+        .where(eq(caseNotes.id, id))
+        .returning();
+      return updated;
+    });
+  }
+
+  // Deliberately NOT wrapped in a transaction and deliberately NOT case-scoped:
+  // unpinning is a single-row write with nothing to keep consistent, and clearing
+  // the flag can never create the two-pins state this feature exists to prevent.
+  async unpinCaseNote(id: string): Promise<CaseNote | undefined> {
+    const [updated] = await db.update(caseNotes)
+      .set({ isPinned: false })
+      .where(eq(caseNotes.id, id))
+      .returning();
+    return updated;
+  }
+
+  // The cases-list stamp. ONE query for the whole response — the same idiom as
+  // getCaseIdsWithDeedAttachment / getHearingIdsWithMinutesAttachment above, and
+  // deliberately unfiltered by case id for the same reason they are: /api/cases is
+  // not paginated server-side, so an IN(…) would carry thousands of bind params.
+  //
+  // Only the three columns the list line needs travel; the note's author, category
+  // and importance stay behind. `content` is NOT truncated here — the list row
+  // truncates visually with an ellipsis and exposes the rest through a title
+  // tooltip, so cutting the string server-side would break the tooltip.
+  //
+  // The winner among several flagged rows is picked by the SHARED
+  // pickPinnedCaseNote, never by an ad-hoc rule here — see its header for why
+  // legacy data can hold more than one.
+  async getPinnedCaseNotesByCase(): Promise<Map<string, { id: string; content: string }>> {
+    const rows = await db
+      .select({
+        id: caseNotes.id,
+        caseId: caseNotes.caseId,
+        content: caseNotes.content,
+        isPinned: caseNotes.isPinned,
+        createdAt: caseNotes.createdAt,
+      })
+      .from(caseNotes)
+      .where(eq(caseNotes.isPinned, true));
+    // A plain Record rather than a Map for the grouping pass, so the reduction
+    // below can use Object.entries — iterating a Map directly needs
+    // --downlevelIteration, which this tsconfig does not set.
+    const byCase: Record<string, typeof rows> = {};
+    for (const row of rows) {
+      (byCase[row.caseId] ||= []).push(row);
+    }
+    const out = new Map<string, { id: string; content: string }>();
+    for (const [caseId, bucket] of Object.entries(byCase)) {
+      const winner = pickPinnedCaseNote(bucket);
+      if (winner) out.set(caseId, { id: winner.id, content: winner.content });
+    }
+    return out;
   }
 
   // ==================== Case Comments ====================

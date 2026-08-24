@@ -6257,6 +6257,50 @@ export const insertCaseNoteSchema = z.object({
 export type InsertCaseNote = z.infer<typeof insertCaseNoteSchema>;
 export type CaseNote = typeof caseNotes.$inferSelect;
 
+// 🔴 THE ONE RULE FOR "WHICH NOTE IS THE PINNED ONE" — shared so the cases-list
+// stamp (server), the dialog banner (client) and the notes tab (client) can never
+// name different notes for the same case.
+//
+// The owner's rule is ONE pinned note per case, and it is enforced on the WRITE
+// side: pinCaseNote clears every other note on the case inside one transaction
+// (see server/storage.ts), so `is_pinned` is unique per case by construction from
+// the moment that endpoint is the only writer.
+//
+// ⚠ THIS READ RULE EXISTS FOR THE DATA THAT PREDATES THAT ENDPOINT. The notes tab
+// has carried a free `isPinned` toggle since 2026-02-14 with NO uniqueness rule at
+// all, so production may hold cases with several rows flagged. Rather than a
+// backfill, the read picks a DETERMINISTIC winner — the NEWEST flagged note — so
+// such a case renders exactly one pinned note today, and the first use of the new
+// pin action repairs the row set permanently. Self-healing, zero migration.
+//
+// Newest-wins is also the only choice that agrees with what is already on screen:
+// storage.getCaseNotes orders `desc(isPinned), desc(createdAt)`, so the newest
+// flagged note is already the first row of the notes tab.
+export function pickPinnedCaseNote<T extends {
+  id?: string;
+  isPinned?: boolean | null;
+  createdAt?: Date | string | null;
+}>(notes: readonly T[]): T | null {
+  let best: T | null = null;
+  let bestTime = -Infinity;
+  for (const note of notes) {
+    if (!note.isPinned) continue;
+    // A null createdAt cannot happen (the column is NOT NULL) but is handled
+    // rather than assumed: it sorts oldest, so it never displaces a real date.
+    const time = note.createdAt ? new Date(note.createdAt).getTime() : -Infinity;
+    if (best === null) { best = note; bestTime = time; continue; }
+    if (time > bestTime) { best = note; bestTime = time; continue; }
+    // Tie-break on id, NOT on arrival order. Two notes written in the same
+    // millisecond are vanishingly unlikely, but a pick that depended on row order
+    // would let the server stamp and the client banner disagree on the same data —
+    // and the whole point of this helper is that they cannot.
+    if (time === bestTime && String(note.id ?? "") > String(best.id ?? "")) {
+      best = note;
+    }
+  }
+  return best;
+}
+
 export const insertCaseCommentSchema = z.object({
   caseId: z.string().min(1),
   userId: z.string().min(1),
@@ -8137,6 +8181,10 @@ export const CaseActivityActionLabels: Record<string, string> = {
   attachment_deleted: "حذف مرفق",
   note_added: "إضافة ملاحظة",
   note_edited: "تعديل ملاحظة",
+  // Batch 23 — the pinned note. `action_type` is free text (no enum, no CHECK),
+  // so these two labels are the whole change; no migration.
+  note_pinned: "تثبيت ملاحظة",
+  note_unpinned: "إلغاء تثبيت ملاحظة",
   contact_log_added: "تسجيل تواصل",
   sent_to_review: "إحالة للمراجعة",
   returned_from_review: "إرجاع من المراجعة",

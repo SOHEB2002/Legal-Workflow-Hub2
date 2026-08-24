@@ -32,6 +32,7 @@ import {
   Paperclip,
   CalendarClock,
   X,
+  Pin,
 } from "lucide-react";
 import { useFavorites } from "@/lib/favorites-context";
 import { ClientAutocomplete } from "@/components/client-autocomplete";
@@ -87,7 +88,9 @@ import { useCases } from "@/lib/cases-context";
 import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
-import { anyIdentity, hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
+// anyIdentity dropped in batch 23: canPauseCase was its last consumer here, and
+// its body now lives in canActOnCaseWorkflowState (which uses anyIdentity itself).
+import { hasEffectiveRole, isDeptHeadFor, canActOnCaseWorkflowState } from "@/lib/acting-identities";
 import { 
   CaseStageLabels,
   CaseStagesOrder,
@@ -135,6 +138,7 @@ import {
   caseReachedJudgment,
   isJudgmentMissingDeedFile,
   isHearingActor,
+  casePinnedNote,
 } from "@/lib/attachment-indicators";
 import { caseHasReturnedFromReview, isCasePaused, pauseBadgeTooltip, STAGE_BADGE_WRAP_CLASS } from "@/lib/case-stage-utils";
 import { useCaseLifecycleActions, CaseLifecycleDialog } from "@/components/case-lifecycle-dialog";
@@ -633,14 +637,15 @@ export default function CasesPage() {
   // this mirror, which was held un-widened precisely until that happened, is
   // converted to match. Same set, same scope term, resolved against the
   // DELEGATOR's department on a delegated identity.
+  // Batch 23 — the body is HOISTED to canActOnCaseWorkflowState in
+  // lib/acting-identities.ts, unchanged, because the notes tab's pin/unpin
+  // controls mirror the same server helper and a second copy of this expression
+  // was the wrong answer. The `!user` guard stays here: with no user
+  // actingIdentities is empty and all three arms are already false, so this is
+  // belt-and-braces rather than behaviour.
   const canPauseCase = (c: LawCase): boolean => {
     if (!user) return false;
-    if (hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")) return true;
-    if (isDeptHeadFor(actingIdentities, c.departmentId)) return true;
-    return anyIdentity(actingIdentities, (_r, id) =>
-      c.primaryLawyerId === id
-      || c.responsibleLawyerId === id
-      || (Array.isArray(c.assignedLawyers) && c.assignedLawyers.includes(id)));
+    return canActOnCaseWorkflowState(actingIdentities, c);
   };
 
   // Early-close permission gate. Mirrors the cases-side equivalent of the
@@ -2782,6 +2787,78 @@ export default function CasesPage() {
                     })()}
                   </TableCell>
                 </TableRow>
+                {/* 🔴 BATCH 23 — THE PINNED NOTE, as a FULL-WIDTH ROW BENEATH its
+                    case, never a tenth column. The table's ten columns are fixed
+                    and full; this borrows the day-separator's STRUCTURE (a
+                    TableRow holding one colSpan-10 TableCell) and deliberately
+                    NOT its styling.
+                    ⚠ NOT GATED ON showDaySeparators. A separator only exists
+                    while a sort is active; this is content attached to the case
+                    and renders under every sort, filter and page.
+
+                    🔴 HOW IT READS NEXT TO A DAY SEPARATOR — the two CAN be
+                    adjacent (this row for case N, then a heading for case N+1),
+                    so they are made to differ on five axes at once, and every one
+                    of them says "content, not heading":
+                      • POSITION — a separator sits ABOVE the rows it names; this
+                        sits BELOW the row it belongs to.
+                      • SIZE + COLOUR — text-sm and full-contrast text-foreground
+                        against the separator's text-xs text-muted-foreground.
+                        This is the owner's "legible, not a whisper": the muted
+                        xs pairing is exactly what the date sub-line and the
+                        heading use, so reusing it would have read as metadata.
+                      • WEIGHT — normal (font-medium on the icon row only) vs the
+                        heading's font-semibold. Headings are the bolder-but-
+                        smaller thing; this is the larger-but-lighter thing.
+                      • THE ICON — a pin. No separator has an icon at all, and it
+                        is what stops the sentence reading as a stray line.
+                      • THE ACCENT BAR — border-r-4 on the start edge (RTL), which
+                        is the standard "quoted content" idiom and something a
+                        heading never carries. The tint is primary/5, not the
+                        separator's bg-muted/60 and not the amber the priority-1
+                        rows already own.
+
+                    ⚠ ONE LINE, ALWAYS — `truncate` plus `min-w-0` on the flex
+                    child (without min-w-0 a flex item refuses to shrink below its
+                    content and the ellipsis never appears). A five-line note must
+                    not be able to break the table's rhythm, which was the owner's
+                    explicit condition.
+
+                    ⚠ THE FULL TEXT IS REACHABLE TWO WAYS, neither of them a new
+                    tooltip system: the native `title` attribute carries the whole
+                    note on hover, and opening the case renders it unabridged
+                    above مراحل القضية. */}
+                {(() => {
+                  const pinned = casePinnedNote(c);
+                  if (!pinned) return null;
+                  // Collapse newlines for the single-line render — a note typed as
+                  // a bullet list would otherwise reach `truncate` full of \n and
+                  // measure as one very long unbroken string of runs. The title
+                  // attribute below keeps the ORIGINAL text, line breaks included.
+                  const oneLine = pinned.content.replace(/\s+/g, " ").trim();
+                  return (
+                    <TableRow
+                      className="hover:bg-transparent border-0"
+                      data-testid={`row-pinned-note-${c.id}`}
+                    >
+                      {/* colSpan 10 — same fixed column count the separator and
+                          the loading/empty rows use. No filter adds or removes a
+                          column, so there is no count to track. */}
+                      <TableCell
+                        colSpan={10}
+                        className="py-2 border-r-4 border-primary/60 bg-primary/5 dark:bg-primary/10"
+                      >
+                        <div className="flex items-center gap-2 text-right" title={pinned.content}>
+                          <Pin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                          <span className="sr-only">ملاحظة مثبّتة:</span>
+                          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                            {oneLine}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })()}
                 </Fragment>
                 );
               })}

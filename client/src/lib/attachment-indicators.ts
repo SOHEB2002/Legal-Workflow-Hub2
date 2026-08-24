@@ -181,6 +181,21 @@ export function caseCurrentJudgmentOutcome(
   return c.currentJudgmentOutcome ?? null;
 }
 
+// Batch 23 — the case's PINNED NOTE, from the derived `pinnedNote` stamped on
+// GET /api/cases. Structural accessor for the same reason as its five neighbours
+// above: the field is deliberately NOT on the LawCase interface (so it can never
+// reach an insert or update path), and reading it through a typed accessor is what
+// keeps the list free of `as any`. `id` is the same TS2559 anchor they use.
+//
+// NULL is the overwhelmingly common answer — most cases have no pinned note — and
+// also the answer for a case whose pinned note was DELETED, with no clearing code
+// anywhere: the server recomputes the stamp from the surviving rows on every read.
+export function casePinnedNote(
+  c: { id: string; pinnedNote?: { id: string; content: string } | null },
+): { id: string; content: string } | null {
+  return c.pinnedNote ?? null;
+}
+
 // 🔴 THIS WAS isPostJudgmentCaseMissingDeed, AND ITS BADGE JOB IS GONE — but its
 // GATE job is not, which is why it is re-keyed and renamed rather than deleted.
 //

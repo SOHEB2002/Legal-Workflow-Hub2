@@ -4208,6 +4208,10 @@ export async function registerRoutes(
       // Batch 4 — the CURRENT ruling's hearing, direction and deed state. Two more
       // queries for the whole response; the client cannot derive any of the three.
       const judgmentSummaries = await storage.getCurrentJudgmentSummaries();
+      // Batch 23 — one more query, same idiom. The case's pinned note, so the list
+      // can render it beneath the row. The client cannot derive this: notes are a
+      // separate table and the list has never carried them.
+      const pinnedNotes = await storage.getPinnedCaseNotesByCase();
       // Strip stageHistory from list responses — it can be 20-50 entries
       // per case and is only needed in the case detail view (GET
       // /api/cases/:id). Replace it with a derived boolean the cases-table
@@ -4277,6 +4281,17 @@ export async function registerRoutes(
         // Renamed with the helper — it now covers all three judgment stages, so
         // "primary" would have been wrong on the wire as well as in the code.
         reachedJudgmentStage: caseReachedJudgmentStage({ currentStage: c.currentStage, stageHistory }),
+        // Batch 23 — DERIVED, never stored, and NOT on the LawCase interface, so
+        // like its five neighbours above it can never reach an insert or update
+        // path. Null for the overwhelming majority of cases; the list row renders
+        // nothing at all when it is null.
+        //
+        // A DELETED pinned note needs no handling here: the row is gone from
+        // case_notes, so the query behind this map no longer returns it and the map
+        // has no entry — this stamps null on the very next read, with no stored
+        // pointer to clear. That is the whole argument for the flag-on-the-note
+        // shape over a pinned_note_id column on this table.
+        pinnedNote: pinnedNotes.get(c.id) ?? null,
       }));
       res.json(stripped);
     } catch (error) {
@@ -20133,7 +20148,22 @@ export async function registerRoutes(
       if (!bodyCheck.success) {
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
-      const note = await storage.updateCaseNote(String(req.params.id), { ...req.body, editedAt: new Date() });
+      // 🔴 isPinned IS STRIPPED HERE — the ONE change to this handler, and it is
+      // required rather than tidy. This route spreads ...req.body into the update,
+      // and until now that included isPinned: the notes tab's pin button PATCHed the
+      // flag directly, with NO uniqueness rule (any number of notes could be pinned)
+      // and under THIS route's gate, which is a different and wider set than the pin
+      // authority — a note's own author of any role, plus a firm-wide
+      // cases_review_head with no department scope.
+      //
+      // Leaving it writable would make the owner's "one pinned note per case" rule
+      // trivially bypassable by the very button that used to set it, so pinning now
+      // has exactly one door: POST /api/case-notes/:id/pin and /unpin below. The
+      // field stays in updateCaseNoteSchema (the gate is deliberately tolerant and
+      // .passthrough()); it is dropped at the handler, so an old client sending it
+      // gets a successful content edit and no pin change rather than a 400.
+      const { isPinned: _ignoredPinFlag, ...editableFields } = req.body ?? {};
+      const note = await storage.updateCaseNote(String(req.params.id), { ...editableFields, editedAt: new Date() });
       if (!note) return res.status(404).json({ message: "ملاحظة غير موجودة" });
       res.json(note);
     } catch (error) {
@@ -20154,6 +20184,97 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "حدث خطأ في حذف الملاحظة" });
+    }
+  });
+
+  // ==================== Pinned case note ====================
+  //
+  // ⚠ A DANGLING PIN IS STRUCTURALLY IMPOSSIBLE, and that is the main reason the
+  // pin is a flag on the NOTE ROW rather than a pinned_note_id on law_cases. The
+  // flag is a column of the row it describes, so DELETE /api/case-notes/:id
+  // (unchanged above) takes the pin with it in the same statement — there is no
+  // pointer left behind, no clearing code to remember, and no clean-up that could
+  // be skipped by a delete path added later. The cases-list stamp and the dialog
+  // banner both recompute from the surviving rows on every read, so the pinned
+  // line simply stops rendering. The law_cases.pinned_note_id shape would have
+  // needed a DELETE-time null-out (or an FK) to reach the same place.
+  //
+  // ROUTE ORDER: both are POST on a THREE-segment path, while the only
+  // /api/case-notes/:id routes are a two-segment PATCH and DELETE, so neither the
+  // literal nor the param route can shadow the other (the ring-state trap, in the
+  // form it cannot occur). Registered here beside their siblings regardless.
+  //
+  // 🔴 GATE = canActOnCaseWorkflowState, an EXISTING helper reused verbatim, not a
+  // new predicate: branch_manager | admin_support | department_head of the case's
+  // OWN department | assigned lawyer, delegation-aware.
+  //
+  // ⚠ IT IS NOT THE GATE THE NOTES FEATURE USES ON ITS OWN WRITES, and that is
+  // deliberate — the notes routes have no helper of this shape to reuse:
+  //   • POST /api/cases/:id/notes → canViewCase, i.e. ANY authenticated user who
+  //     can see the case, which is everyone. Correct for "leave an internal note";
+  //     far too wide for "decide what the whole firm reads first on this case".
+  //   • PATCH / DELETE /api/case-notes/:id → inline role arrays plus the note's
+  //     author. Author-keyed is wrong here in both directions: it would let the
+  //     employee who typed a note pin it over the department head's, while denying
+  //     the assigned lawyer the pin on a note somebody else wrote.
+  // The owner named the standard set explicitly, and this helper IS that set.
+  async function resolvePinnableNote(req: AuthRequest, res: ExpressResponse) {
+    const note = await storage.getCaseNoteById(String(req.params.id));
+    if (!note) { res.status(404).json({ error: "ملاحظة غير موجودة" }); return null; }
+    const caseItem = await storage.getCaseById(note.caseId);
+    // A note whose parent case is gone cannot be pinned to anything. 404 rather
+    // than 403: nothing about the actor would change the answer.
+    if (!caseItem) { res.status(404).json({ error: "القضية غير موجودة" }); return null; }
+    if (!canActOnCaseWorkflowState(req.user!, caseItem, req.actingContext)) {
+      res.status(403).json({ error: "لا تملك صلاحية تثبيت ملاحظات هذه القضية" });
+      return null;
+    }
+    return { note, caseItem };
+  }
+
+  app.post("/api/case-notes/:id/pin", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const resolved = await resolvePinnableNote(req, res);
+      if (!resolved) return;
+      // 🔴 REPLACES, NEVER REFUSES — the owner's rule. Pinning a note while another
+      // is pinned silently unpins the other, inside one transaction (storage
+      // .pinCaseNote), so there is no "already pinned" error for a user to work
+      // around and no window in which a reader sees two.
+      const note = await storage.pinCaseNote(String(req.params.id));
+      if (!note) return res.status(404).json({ error: "ملاحظة غير موجودة" });
+      await logCaseActivityActing(req, {
+        caseId: resolved.note.caseId,
+        userId: req.user!.id,
+        userName: req.user!.name || req.user!.id,
+        actionType: "note_pinned",
+        title: "تم تثبيت ملاحظة",
+      });
+      res.json(note);
+    } catch (error) {
+      console.error("[POST /api/case-notes/:id/pin] failed", error);
+      res.status(500).json({ error: "حدث خطأ في تثبيت الملاحظة" });
+    }
+  });
+
+  app.post("/api/case-notes/:id/unpin", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const resolved = await resolvePinnableNote(req, res);
+      if (!resolved) return;
+      // Idempotent by construction: unpinning a note that is not pinned writes the
+      // flag it already holds and returns 200. Nothing to refuse.
+      const note = await storage.unpinCaseNote(String(req.params.id));
+      if (!note) return res.status(404).json({ error: "ملاحظة غير موجودة" });
+      await logCaseActivityActing(req, {
+        caseId: resolved.note.caseId,
+        userId: req.user!.id,
+        userName: req.user!.name || req.user!.id,
+        actionType: "note_unpinned",
+        title: "تم إلغاء تثبيت ملاحظة",
+      });
+      res.json(note);
+    } catch (error) {
+      console.error("[POST /api/case-notes/:id/unpin] failed", error);
+      res.status(500).json({ error: "حدث خطأ في إلغاء تثبيت الملاحظة" });
     }
   });
 

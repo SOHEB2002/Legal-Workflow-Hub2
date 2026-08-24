@@ -10,9 +10,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Clock, FileText, Pin, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
+  Clock, FileText, Pin, PinOff, AlertTriangle, Calendar, Plus, Trash2, Edit3, Save,
   MessageSquare, Scale, Gavel, BookOpen, UserCheck, ChevronRight, ClipboardList,
 } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
+import { useCases } from "@/lib/cases-context";
+import { canActOnCaseWorkflowState } from "@/lib/acting-identities";
 import { CaseActivityActionLabels, CaseNoteCategoryLabels, DeadlineTypeLabels,
   isActiveMemo, memoWorkflowLabel } from "@shared/schema";
 import { formatRelativeArabic } from "@/lib/date-utils";
@@ -95,8 +98,33 @@ export function CaseActivityTab({ caseId }: { caseId: string }) {
   );
 }
 
-export function CaseNotesTab({ caseId }: { caseId: string }) {
+// Batch 23 — `caseItem` is what the pin gate needs and NOTHING else uses. It is
+// OPTIONAL so the component keeps working for any host that has only an id: with
+// no case in hand canActOnCaseWorkflowState cannot resolve the department or the
+// assigned lawyers, and the safe direction is to show no pin control rather than
+// one that 403s. The only current caller (case-details-dialog) passes it.
+export function CaseNotesTab({ caseId, caseItem }: {
+  caseId: string;
+  caseItem?: {
+    departmentId?: string | null;
+    primaryLawyerId?: string | null;
+    responsibleLawyerId?: string | null;
+    assignedLawyers?: string[] | null;
+  } | null;
+}) {
   const { toast } = useToast();
+  const { actingIdentities } = useAuth();
+  const { refreshCases } = useCases();
+  // ✅ THE CLIENT MIRROR of the server gate on POST /api/case-notes/:id/pin and
+  // /unpin — canActOnCaseWorkflowState, the SAME helper, hoisted to
+  // lib/acting-identities so page, tab and endpoint cannot drift.
+  //
+  // 🔴 THIS IS NOT THE GATE ON THE OTHER CONTROLS IN THIS TAB, deliberately.
+  // Adding a note is canViewCase (everyone), and edit/delete are author-keyed —
+  // so the ✏️ and 🗑 buttons beside this one answer to a different rule. Pinning
+  // decides what the whole firm reads first on the case, which is why the owner
+  // put it on the standard case-actor set instead.
+  const canPin = canActOnCaseWorkflowState(actingIdentities, caseItem);
   const [newNote, setNewNote] = useState("");
   const [noteCategory, setNoteCategory] = useState("عام");
   const [isImportant, setIsImportant] = useState(false);
@@ -166,12 +194,71 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
     },
   });
 
+  // 🔴 PIN AND UNPIN ARE TWO SEPARATE ENDPOINTS, not a boolean on the PATCH.
+  // The PATCH route now STRIPS isPinned (see its handler comment): pinning has
+  // exactly one door, so the "one pinned note per case" rule cannot be bypassed by
+  // the control that used to set the flag freely.
+  //
+  // ⚠ BOTH REFRESH THE CASES LIST AS WELL AS THE NOTES LIST. The pinned line in
+  // the cases table, and the banner above مراحل القضية, are both stamped onto the
+  // /api/cases LIST response — so without the second call they would keep showing
+  // the previous pinned note until some unrelated refetch happened, with the notes
+  // tab and the table disagreeing on screen.
+  //
+  // 🔴 refreshCases(), NOT queryClient.invalidateQueries(['/api/cases']). The cases
+  // context is NOT a react-query cache — it holds its own useState list filled by
+  // its own fetchCases (cases-context.tsx), so an invalidation of that key would
+  // match nothing and silently do nothing. The notes list IS react-query, hence
+  // the two different mechanisms for the two lists.
+  const pinInvalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['/api/cases', caseId, 'notes'] });
+    refreshCases().catch(() => {});
+  };
+
+  const pinNoteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/case-notes/${id}/pin`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      pinInvalidate();
+      // Past tense and unconditional: the endpoint REPLACES any previous pin
+      // rather than refusing, so by the time this fires the case has exactly one
+      // pinned note and it is this one.
+      toast({ title: "تم تثبيت الملاحظة" });
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[pin-note] failed", err);
+      toast({ title: "تعذّر تثبيت الملاحظة", description: errMsg(err), variant: "destructive" });
+    },
+  });
+
+  const unpinNoteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/case-notes/${id}/unpin`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      pinInvalidate();
+      toast({ title: "تم إلغاء تثبيت الملاحظة" });
+    },
+    onError: (err) => {
+      // eslint-disable-next-line no-console
+      console.error("[unpin-note] failed", err);
+      toast({ title: "تعذّر إلغاء تثبيت الملاحظة", description: errMsg(err), variant: "destructive" });
+    },
+  });
+
   const deleteNoteMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/case-notes/${id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['/api/cases', caseId, 'notes'] });
+      // Deleting the PINNED note needs no pin clean-up anywhere — the flag is a
+      // column of the row that just went away. The list stamp is recomputed from
+      // the surviving rows, so it only has to be re-read, which is what this does.
+      pinInvalidate();
       toast({ title: "تم حذف الملاحظة" });
     },
     onError: (err) => {
@@ -240,14 +327,37 @@ export function CaseNotesTab({ caseId }: { caseId: string }) {
                   <Badge variant="outline" className="text-xs">{CaseNoteCategoryLabels[note.category] || note.category}</Badge>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => updateNoteMutation.mutate({ id: note.id, data: { isPinned: !note.isPinned } })}
-                    data-testid={`button-pin-note-${note.id}`}
-                  >
-                    <Pin className={`h-3 w-3 ${note.isPinned ? "text-primary" : ""}`} />
-                  </Button>
+                  {/* TWO CONTROLS, one slot: whichever of pin / unpin actually
+                      applies to this note. Separate handlers, separate endpoints
+                      and separate test ids, so neither can be fired by accident.
+                      🔴 RENDERED ONLY FOR THE PIN AUTHORITY — visibility ==
+                      authorization. Before this batch the toggle rendered for
+                      everyone and PATCHed the flag directly. */}
+                  {canPin && (note.isPinned ? (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="إلغاء تثبيت الملاحظة"
+                      disabled={unpinNoteMutation.isPending}
+                      onClick={() => unpinNoteMutation.mutate(note.id)}
+                      data-testid={`button-unpin-note-${note.id}`}
+                    >
+                      <PinOff className="h-3 w-3 text-primary" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      // Says what actually happens, so replacing an existing pin is
+                      // never a surprise. The endpoint replaces silently by design.
+                      title="تثبيت الملاحظة — تحل محل الملاحظة المثبّتة حالياً"
+                      disabled={pinNoteMutation.isPending}
+                      onClick={() => pinNoteMutation.mutate(note.id)}
+                      data-testid={`button-pin-note-${note.id}`}
+                    >
+                      <Pin className="h-3 w-3" />
+                    </Button>
+                  ))}
                   <Button
                     variant="ghost"
                     size="icon"

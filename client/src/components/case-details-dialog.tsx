@@ -20,6 +20,7 @@ import {
   RotateCcw,
   FileText,
   Gavel,
+  Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,7 +73,7 @@ import { extractApiError, formatAmount } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SingleAttachmentControl } from "@/components/single-attachment-control";
-import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId } from "@/lib/attachment-indicators";
+import { isHearingActor, canViewHearingMinutes, hearingHasMinutes, caseReachedJudgment, caseCurrentJudgmentHearingId, casePinnedNote } from "@/lib/attachment-indicators";
 import { isCasePaused } from "@/lib/case-stage-utils";
 import {
   CaseStageLabels,
@@ -842,6 +843,42 @@ export function CaseDetailsDialog({
                   </div>
                 </div>
               )}
+              {/* 🔴 BATCH 23 — THE PINNED NOTE, directly ABOVE مراحل القضية and
+                  in FULL. This is the counterpart to the truncated one-liner in
+                  the cases table: the list shows a line, the dialog shows the
+                  whole note, so the truncated text is always reachable by opening
+                  the case (the list row's title tooltip is the other way).
+                  whitespace-pre-wrap keeps the author's own line breaks, which the
+                  list line deliberately collapses.
+
+                  READ FROM THE LIST STAMP, not from a fetch: `selectedCase` is the
+                  live context row spread verbatim, and migrateCase mutates in
+                  place rather than rebuilding, so the derived pinnedNote survives
+                  onto it. No extra request per dialog open. Pinning from the notes
+                  tab calls refreshCases(), so this re-renders with the new note.
+
+                  Marked as pinned three ways — the pin icon, the ملاحظة مثبّتة
+                  caption and the accent border — because unlike the list line this
+                  sits among several other panels and must not read as just more
+                  case data. */}
+              {(() => {
+                const pinned = casePinnedNote(selectedCase);
+                if (!pinned) return null;
+                return (
+                  <div
+                    className="border rounded-lg p-4 border-r-4 border-r-primary/60 bg-primary/5 dark:bg-primary/10"
+                    data-testid={`pinned-note-${selectedCase.id}`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Pin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                      <span className="text-xs font-semibold text-primary">ملاحظة مثبّتة</span>
+                    </div>
+                    <p className="text-sm text-foreground whitespace-pre-wrap break-words">
+                      {pinned.content}
+                    </p>
+                  </div>
+                );
+              })()}
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h4 className="font-semibold mb-4 text-center">مراحل القضية</h4>
                 <CaseStagePanel
@@ -2351,7 +2388,7 @@ export function CaseDetailsDialog({
                       </div>
                     );
                   })()}
-                  <CaseNotesTab caseId={selectedCase?.id || ""} />
+                  <CaseNotesTab caseId={selectedCase?.id || ""} caseItem={selectedCase} />
                 </TabsContent>
 
                 <TabsContent value="deadlines" className="mt-4">

@@ -179,3 +179,39 @@ export function isManagerOrDeptHeadFor(
 ): boolean {
   return hasEffectiveRole(identities, "branch_manager") || isDeptHeadFor(identities, recordDepartmentId);
 }
+
+// ✅ THE CLIENT MIRROR of the server's canActOnCaseWorkflowState (routes.ts):
+//   branch_manager | admin_support | department_head of the case's OWN department
+//   | assigned lawyer (primary | responsible | in assignedLawyers).
+//
+// HOISTED, NOT WRITTEN. This is cases.tsx's canPauseCase moved here verbatim —
+// same three arms, same order, same delegation shape — because a SECOND surface
+// now needs it (the pin/unpin controls in the notes tab) and the alternative was a
+// second copy of the app's most-repeated permission expression. cases.tsx now
+// calls this; its own body is gone rather than duplicated.
+//
+// 🔴 THE LAWYER ARM GOES THROUGH anyIdentity, NOT user.id. On a delegated identity
+// the assignee test must run against the DELEGATOR's id, exactly as the server's
+// isAssignedLawyer does over caseActorIdentities — testing only the signed-in id
+// would refuse a delegate a control the endpoint accepts. (The two older mirrors
+// in case-details-dialog.tsx still test user.id directly; they are untouched here.)
+//
+// 🔴 !!departmentId on BOTH sides is mandatory — isDeptHeadFor enforces it. Without
+// it a head with a null department matches every case with a null department.
+export function canActOnCaseWorkflowState(
+  identities: ActingIdentity[],
+  lawCase: {
+    departmentId?: string | null;
+    primaryLawyerId?: string | null;
+    responsibleLawyerId?: string | null;
+    assignedLawyers?: string[] | null;
+  } | null | undefined,
+): boolean {
+  if (!lawCase) return false;
+  if (hasEffectiveRole(identities, "branch_manager", "admin_support")) return true;
+  if (isDeptHeadFor(identities, lawCase.departmentId)) return true;
+  return anyIdentity(identities, (_r, id) =>
+    lawCase.primaryLawyerId === id
+    || lawCase.responsibleLawyerId === id
+    || (Array.isArray(lawCase.assignedLawyers) && lawCase.assignedLawyers.includes(id)));
+}
