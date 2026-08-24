@@ -55,37 +55,47 @@ export function isAwaitingJudgmentDeed(c: {
   currentStage: string;
   hasJudgmentRecord?: boolean;
   judgmentDeedReceivedDate?: string | null;
+  currentJudgmentHasDeed?: boolean;
 }): boolean {
   if (!c.hasJudgmentRecord) return false;
   if (isFinishedFile(c.currentStage)) return false;
-  // 🔴 "NOT RECEIVED YET" — was `!String(date).trim()`, i.e. "no date TYPED", which
-  // meant a FUTURE receipt date silenced this badge while the صك was still with the
-  // court. A future date is a promise, not an arrival. Mirrors the server's
-  // deedNotArrived fragment (storage.ts, the 1c follow-up task) exactly, so badge
-  // and task cannot disagree — which is the property the task's own header claims.
+  // 🔴 DEFECT 2, THE BADGE HALF — an attached صك silences BOTH badges. This test
+  // existed on the sibling below and was missing here, the same asymmetry the two
+  // مهامي tasks had: a deed already in the file kept being "awaited".
+  // currentJudgmentHasDeed is the derived list stamp, itself produced by the very
+  // getCurrentJudgmentSummaries the tasks now share — so badge and task answer
+  // "does the current ruling have its صك" from one place.
+  if (c.currentJudgmentHasDeed) return false;
+  // 🔴 NO DATE AT ALL — and this REVERSES what 83f7a01 put here. That batch made a
+  // FUTURE date show this badge; the owner has since ruled that a recorded date
+  // settles the matter until the day comes, so a future date is SILENCE. Matches
+  // the server's deedNoDate fragment exactly.
   //
-  // isFirmFuture is the EXISTING shared helper (shared/schema.ts): a lexicographic
-  // compare of "YYYY-MM-DD" against firmToday() (Intl, Asia/Riyadh). No new date
-  // rule, and nothing here parses the value — the documented 60a4d79 class.
-  return deedNotArrived(c.judgmentDeedReceivedDate);
+  // Format-independent by construction: a pure presence test has no comparison for
+  // an unpadded '2026-5-21' to invert.
+  return !String(c.judgmentDeedReceivedDate || "").trim();
 }
 
-// 🔴 THE ONE "HAS THE صك ARRIVED" RULE for both badges below and the deed line in
-// case-details-dialog. Two callers here plus that one, so it is declared rather
-// than repeated — three copies of a date test is how the three surfaces drift.
-//
+// 🔴 THE ONE "HAS THE صك ARRIVED" RULE — used by isAwaitingJudgmentDeedFile below
+// and by the per-ruling deed line in case-details-dialog, so the two cannot drift.
 // ARRIVED = a date is recorded AND that day has come (today counts, per the owner).
-// Everything else — no date at all, or a date still ahead — is NOT arrived.
-// 🔴 THE SHAPE GUARD — the client half of the server's, and needed for the same
-// reason. isFirmFuture is `d > firmToday()`, a lexicographic compare that IS the
-// calendar compare only for a zero-padded "YYYY-MM-DD":
-//     '2026-5-21'  > '2026-08-24'  →  TRUE   (at index 5, '5' > '0')
-// so a deed received in MAY read as "not yet arrived" and the badges swap places.
-// This shipped to production in the first cut of the fix and is corrected here.
 //
-// NOT ISO-shaped → treated as ARRIVED, which is exactly what these predicates did
-// before the batch (they tested presence only), so a malformed value can never be
-// rendered worse than it already was.
+// ⚠ IT IS NO LONGER THE NEGATION OF isAwaitingJudgmentDeed. That badge now asks
+// "no date at all"; this asks "the date has come". A future date answers NO to
+// both, which is the deliberate silent state.
+//
+// 🔴 THE SHAPE GUARD — the client half of the server's. isFirmFuture is
+// `d > firmToday()`, a lexicographic compare that IS the calendar compare only for
+// a zero-padded "YYYY-MM-DD":
+//     '2026-5-21'  > '2026-08-24'  →  TRUE   (at index 5, '5' > '0')
+// so a deed received in MAY read as "not yet arrived". That shipped to production
+// and is why the guard exists.
+//
+// NOT ISO-shaped → treated as ARRIVED, and under the CURRENT rules that direction
+// matters more than it did: the alternative, treating an unreadable date as future,
+// now means BOTH badges and BOTH tasks go silent, so the case would vanish from
+// every surface with its صك unattached. An early attach prompt is visible and
+// actionable; silence is not.
 const ISO_DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function deedHasArrived(deedReceivedDate: string | null | undefined): boolean {
@@ -95,25 +105,24 @@ export function deedHasArrived(deedReceivedDate: string | null | undefined): boo
   if (!ISO_DAY_SHAPE.test(d)) return true;
   return !isFirmFuture(d);
 }
-export function deedNotArrived(deedReceivedDate: string | null | undefined): boolean {
-  return !deedHasArrived(deedReceivedDate);
-}
 
 // "بانتظار إرفاق الصك" — the receipt DATE is recorded but the صك FILE is not on
 // file yet.
 //
-// The three deed states on a case that HAS a ruling:
-//   deed NOT ARRIVED (no date, OR a date still ahead)
-//                                -> isAwaitingJudgmentDeed  (بانتظار استلام الصك)
-//   arrived, no file             -> THIS                    (بانتظار إرفاق الصك)
-//   file attached                -> no badge
-// The two are mutually exclusive by construction — one requires the deed NOT to
-// have arrived, the other requires that it HAS — so a case never shows both.
-// Together they PARTITION every case that has a ruling, at any stage, which is
-// what made the third badge (isPostJudgmentCaseMissingDeed) redundant; see below.
-// ⚠ The boundary used to be "date typed" and is now "date come"; the partition
-// property is unchanged, and a future-dated deed moved from the second bucket
-// (where it was wrong) to the first (where it belongs).
+// 🔴 THE COMPLETE TRUTH TABLE on a case that HAS a ruling — owner ruling, and it
+// is FOUR states, not the three this comment used to claim:
+//   file attached                -> NEITHER badge, any date, always
+//   no file, no date             -> isAwaitingJudgmentDeed  (بانتظار استلام الصك)
+//   no file, date in the FUTURE  -> NEITHER badge — the date is recorded, the
+//                                   matter is settled until that day comes
+//   no file, date today or past  -> THIS                    (بانتظار إرفاق الصك)
+//
+// ⚠ THEY NO LONGER PARTITION the population, and any future claim that they do is
+// wrong. A future-dated deed with no file is DELIBERATELY silent on both. The old
+// note here said the two were "mutually exclusive … together they PARTITION every
+// case that has a ruling" — mutual exclusion still holds, the partition does not.
+// The badges mirror the two مهامي tasks exactly (storage.ts deedNoDate /
+// deedArrived, both now gated on the attachment).
 //
 // 🔴 THIS NOTE USED TO SAY THE OPPOSITE, AND IT WAS WRONG — recorded rather than
 // quietly deleted, because the reasoning is the trap. It read:

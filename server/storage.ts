@@ -4966,16 +4966,61 @@ export class DatabaseStorage implements IStorage {
     // an otherwise-good date into the fallback.
     const ISO_DAY = sql`'^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`;
     const deedDay = sql`btrim(${lawCases.judgmentDeedReceivedDate})`;
-    const deedNotArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL
-      OR ${deedDay} = ''
-      OR (${deedDay} ~ ${ISO_DAY} AND ${deedDay} > ${deedToday}))`;
-    // The EXACT complement of the above — not(A or (B and C)) = not A and (not B or
-    // not C) — so the two tasks still partition every case with a ruling and can
-    // never both fire. `<=` because the owner's ruling is "today or past counts as
-    // arrived"; the `!~` arm is the same not-ISO-shaped fallback.
+    // 🔴 THE OWNER'S RULE CHANGED, AND THIS IS THE OPPOSITE OF WHAT 83f7a01 BUILT.
+    // That batch made a FUTURE deed date show the follow-up. The owner has now
+    // ruled that a date he has already recorded means the matter is SETTLED until
+    // that day comes — a future date is silence, not a chase. So the follow-up is
+    // for judgments with NO DATE AT ALL, which is what this fragment now says.
+    //
+    // Back to a pure presence test, so it is format-INDEPENDENT: there is no
+    // comparison left on this side and therefore nothing an unpadded '2026-5-21'
+    // can invert. The ISO guard survives where it is still needed — deedArrived.
+    const deedNoDate = sql`(${lawCases.judgmentDeedReceivedDate} IS NULL
+      OR ${deedDay} = '')`;
+    // ⚠ NO LONGER THE COMPLEMENT OF deedNoDate, and that is the point of this
+    // batch. There are now THREE states, not two, because the owner added a
+    // SILENT one:
+    //     no date              → follow-up
+    //     date, still future   → NOTHING (wait for the day)
+    //     date, today or past  → attach
+    // A future date satisfies neither fragment, so it produces no row in either
+    // query. Any future claim that these two "partition" the population is wrong.
+    //
+    // 🔴 THE ISO GUARD STAYS, AND ITS FALLBACK DIRECTION IS NOW RIGHT FOR A NEW
+    // REASON. A value that is not ISO-shaped ('2026-5-21' — real, in production)
+    // cannot be judged against today, and a bare lexicographic compare INVERTS on
+    // it. Falling back to ARRIVED puts such a case in the attach task.
+    // Under the OLD rules that was merely "the pre-batch answer". Under the NEW
+    // rules it is the only safe direction: the alternative — treating an unreadable
+    // date as future — now means TOTAL SILENCE, so the case emits no task at all
+    // and its صك could go unattached forever with nothing on screen. A slightly
+    // early attach prompt is visible and actionable; silence is not.
     const deedArrived = sql`(${lawCases.judgmentDeedReceivedDate} IS NOT NULL
       AND ${deedDay} <> ''
       AND (${deedDay} !~ ${ISO_DAY} OR ${deedDay} <= ${deedToday}))`;
+    // 🔴 ONE SUMMARIES READ FOR BOTH BLOCKS — the fix for defect 2.
+    //
+    // The attach block already asked getCurrentJudgmentSummaries whether the
+    // CURRENT ruling has its صك on file and skipped the row if so. The follow-up
+    // block asked nothing, so an attached deed silenced one task and not the other.
+    // That asymmetry IS defect 2: «تابع استلام صك الحكم» kept chasing a صك that was
+    // already in the file.
+    //
+    // Reusing this method rather than adding a NOT EXISTS to each WHERE is
+    // deliberate: it is the same call routes.ts makes for the cases-list
+    // currentJudgmentHasDeed stamp, so task and badge resolve "the current ruling"
+    // and "does it have a deed" through ONE definition and cannot drift.
+    //
+    // COST: two queries for the whole feed read, not per row — all judgments and
+    // all judgment_attachments, folded into a Map, then O(1) per candidate. No N+1.
+    // MEMOISED and LAZY: it runs at most once per feed read, and not at all when
+    // neither block has a candidate, preserving the attach block's existing
+    // "a firm with no judgments pays nothing" property.
+    let judgmentSummariesCache: Map<string, CurrentJudgmentSummary> | null = null;
+    const currentJudgmentSummaries = async () => {
+      if (!judgmentSummariesCache) judgmentSummariesCache = await this.getCurrentJudgmentSummaries();
+      return judgmentSummariesCache;
+    };
     const deedCaseLive = and(
       ne(lawCases.status, "مغلق"),
       sql`${lawCases.isArchived} IS NOT TRUE`,
@@ -5006,14 +5051,24 @@ export class DatabaseStorage implements IStorage {
       // fetched by ruling-presence (+ dept for a head) and filtered by resolved
       // owner below.
       const deedWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedNotArrived, deedCaseLive, caseNotPaused)
-        : and(hasJudgmentRecord, deedNotArrived, deedCaseLive, caseNotPaused);
+        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedNoDate, deedCaseLive, caseNotPaused)
+        : and(hasJudgmentRecord, deedNoDate, deedCaseLive, caseNotPaused);
       const deedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
         primaryLawyerId: lawCases.primaryLawyerId, responsibleLawyerId: lawCases.responsibleLawyerId,
       }).from(lawCases).where(deedWhere);
       if (deedRows.length > 0) {
+        // 🔴 DEFECT 2 — the attachment test this block never had. An attached صك is
+        // proof the document is in hand whatever the recorded date says (and here
+        // there is no date at all), so it silences this task exactly as it already
+        // silenced the attach task. Same Map, same "current ruling" definition.
+        const summaries = await currentJudgmentSummaries();
         for (const r of deedRows) {
+          // Skip a ruling whose own صك is already on file. `!summary` cannot
+          // normally happen — hasJudgmentRecord guarantees a judgment row — so it
+          // is belt-and-braces, and it fails toward SHOWING the task rather than
+          // hiding it, which is the safe direction for a chase.
+          if (summaries.get(r.id)?.hasDeed) continue;
           // 🔴 THE OWNER IS THE CASE'S LAWYER, NOT THE ATTENDING LAWYER.
           //
           // It used to be `judgmentHearing?.attendingLawyerId || primary ||
@@ -5116,7 +5171,7 @@ export class DatabaseStorage implements IStorage {
       // was 2026-09-02 and 2026-08-26 (not yet received) with no attachment, and
       // both were being told TODAY to attach a document nobody has. Nothing to
       // attach until the deed arrives, so the task must not exist until then.
-      // The fragment is the shared one hoisted beside deedNotArrived, so this and
+      // The fragment is the shared one hoisted beside deedNoDate, so this and
       // its 1c twin are the exact complement of each other by construction.
       const attachWhere = deptHeadScoped
         ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused)
@@ -5139,7 +5194,10 @@ export class DatabaseStorage implements IStorage {
         // ONE query for every case's current ruling + whether it has a file, rather
         // than a per-case attachment lookup. Fetched only when there is at least one
         // candidate, so a firm with no judgments pays nothing.
-        const summaries = await this.getCurrentJudgmentSummaries();
+        // Now the SHARED memoised read (see currentJudgmentSummaries above) rather
+        // than its own call — same data, and the follow-up block above needs it too,
+        // so one feed read makes at most one summaries lookup instead of two.
+        const summaries = await currentJudgmentSummaries();
         for (const r of attachRows) {
           const summary = summaries.get(r.id);
           // No summary = no judgment row at all; hasJudgmentRecord should already
