@@ -2268,6 +2268,11 @@ export default function CasesPage() {
                       : priorityGroup === 4
                         ? "opacity-80"
                         : "";
+                // Resolved HERE rather than inside the note row below, because the
+                // CASE row needs to know too: when a case carries a pinned note the
+                // two rows are welded into one block, and three of the classes that
+                // do the welding sit on the case row, not the note row.
+                const pinnedNote = casePinnedNote(c);
                 // A heading is emitted above the FIRST row of each day group.
                 // The comparison is against the previous row ON THIS PAGE, which
                 // is deliberate: the pager is a plain slice, so page 2 opens with
@@ -2340,7 +2345,24 @@ export default function CasesPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                <TableRow data-testid={`row-case-${c.id}`} className={rowClass}>
+                {/* 🔴 THE WELD (batch 23a) lives on the CASE row, in three classes
+                    that are added ONLY when this case actually carries a pinned
+                    note — applying them unconditionally would, for instance, let
+                    hovering the NEXT case's day separator tint this row.
+                      • border-b-0 — TableRow's default is `border-b`, so a rule was
+                        being drawn between a case and its own note. Removing it
+                        moves the only horizontal line to the BOTTOM of the note,
+                        which is what makes the gap fall between CASES.
+                      • [&>td]:pb-1 — the cells' default p-4 left 16px under the case
+                        content, which was MORE space than the gap to the next case.
+                        The intra-pair gap has to be the smaller of the two or the
+                        note still reads as floating. One class on the row retargets
+                        all ten cells; specificity (0,1,1) beats the td's own p-4.
+                      • [&:has(+tr:hover)]:bg-muted/50 — hover, see the note row. */}
+                <TableRow
+                  data-testid={`row-case-${c.id}`}
+                  className={`${rowClass} ${pinnedNote ? "border-b-0 [&>td]:pb-1 [&:has(+tr:hover)]:bg-muted/50" : ""}`}
+                >
                   {/* Display-only sequential number. Derived from the index
                       inside the RENDERED page, so any filter/sort/search
                       renumbers from 1. Continues across pages (the page
@@ -2787,19 +2809,33 @@ export default function CasesPage() {
                     })()}
                   </TableCell>
                 </TableRow>
-                {/* 🔴 BATCH 23 — THE PINNED NOTE, as a FULL-WIDTH ROW BENEATH its
-                    case, never a tenth column. The table's ten columns are fixed
-                    and full; this borrows the day-separator's STRUCTURE (a
-                    TableRow holding one colSpan-10 TableCell) and deliberately
-                    NOT its styling.
+                {/* 🔴 THE PINNED NOTE — a full-width row BENEATH its case, never a
+                    tenth column. Batch 23 built it; batch 23a WELDED it to its case
+                    row, because as a self-contained bordered box with its own tint
+                    it read as a separate item floating between two cases and the
+                    owner could not tell which case it belonged to.
+
+                    THE WELD IS FIVE CHANGES, three of them on the CASE row above:
+                      • the case row loses its bottom border (border-b-0), so the
+                        only rule left is under the NOTE — the gap now falls between
+                        CASES, not between a case and its own note;
+                      • the case row's cells tighten to pb-1, so the space inside the
+                        pair is SMALLER than the space to the next case (with the
+                        default p-4 it was larger, which is what made the note float);
+                      • both rows light together on hover (see the row's own note);
+                      • the note drops its primary tint and accent bar and inherits
+                        `rowClass` — the same tint or dim its case row carries;
+                      • the note is INDENTED to the case-number column by an empty
+                        first cell.
                     ⚠ NOT GATED ON showDaySeparators. A separator only exists
                     while a sort is active; this is content attached to the case
                     and renders under every sort, filter and page.
 
                     🔴 HOW IT READS NEXT TO A DAY SEPARATOR — the two CAN be
-                    adjacent (this row for case N, then a heading for case N+1),
-                    so they are made to differ on five axes at once, and every one
-                    of them says "content, not heading":
+                    adjacent (this row for case N, then a heading for case N+1).
+                    Batch 23a spent the accent bar and the primary tint on the weld,
+                    so that axis is gone — but it BOUGHT the indent, and SIX remain,
+                    every one of them saying "content, not heading":
                       • POSITION — a separator sits ABOVE the rows it names; this
                         sits BELOW the row it belongs to.
                       • SIZE + COLOUR — text-sm and full-contrast text-foreground
@@ -2807,16 +2843,21 @@ export default function CasesPage() {
                         This is the owner's "legible, not a whisper": the muted
                         xs pairing is exactly what the date sub-line and the
                         heading use, so reusing it would have read as metadata.
-                      • WEIGHT — normal (font-medium on the icon row only) vs the
-                        heading's font-semibold. Headings are the bolder-but-
-                        smaller thing; this is the larger-but-lighter thing.
-                      • THE ICON — a pin. No separator has an icon at all, and it
-                        is what stops the sentence reading as a stray line.
-                      • THE ACCENT BAR — border-r-4 on the start edge (RTL), which
-                        is the standard "quoted content" idiom and something a
-                        heading never carries. The tint is primary/5, not the
-                        separator's bg-muted/60 and not the amber the priority-1
-                        rows already own.
+                      • WEIGHT — normal vs the heading's font-semibold. Headings are
+                        the bolder-but-smaller thing; this is the larger-but-lighter
+                        thing.
+                      • THE ICON — a pin, in primary. No separator has an icon at
+                        all, and it is what stops the sentence reading as a stray
+                        line. It is also the only colour left on the row, so it now
+                        carries the "pinned" signal alone.
+                      • BACKGROUND — the separator is a full-bleed bg-muted/60 grey
+                        BAND across all ten columns. The note has no background of
+                        its own at all. This axis got STRONGER, not weaker: before,
+                        both rows were tinted and differed only in hue.
+                      • THE INDENT (new) — a separator starts hard against the
+                        leading edge, spanning every column; the note starts one
+                        column in. A heading that is indented past the first column
+                        is not a shape this table has anywhere.
 
                     ⚠ ONE LINE, ALWAYS — `truncate` plus `min-w-0` on the flex
                     child (without min-w-0 a flex item refuses to shrink below its
@@ -2828,37 +2869,73 @@ export default function CasesPage() {
                     tooltip system: the native `title` attribute carries the whole
                     note on hover, and opening the case renders it unabridged
                     above مراحل القضية. */}
-                {(() => {
-                  const pinned = casePinnedNote(c);
-                  if (!pinned) return null;
-                  // Collapse newlines for the single-line render — a note typed as
-                  // a bullet list would otherwise reach `truncate` full of \n and
-                  // measure as one very long unbroken string of runs. The title
-                  // attribute below keeps the ORIGINAL text, line breaks included.
-                  const oneLine = pinned.content.replace(/\s+/g, " ").trim();
-                  return (
-                    <TableRow
-                      className="hover:bg-transparent border-0"
-                      data-testid={`row-pinned-note-${c.id}`}
-                    >
-                      {/* colSpan 10 — same fixed column count the separator and
-                          the loading/empty rows use. No filter adds or removes a
-                          column, so there is no count to track. */}
-                      <TableCell
-                        colSpan={10}
-                        className="py-2 border-r-4 border-primary/60 bg-primary/5 dark:bg-primary/10"
-                      >
-                        <div className="flex items-center gap-2 text-right" title={pinned.content}>
-                          <Pin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                          <span className="sr-only">ملاحظة مثبّتة:</span>
-                          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                            {oneLine}
-                          </span>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })()}
+                {pinnedNote && (
+                  <TableRow
+                    // 🔴 NO BACKGROUND OF ITS OWN — it inherits `rowClass`, the very
+                    // same tint/dim its case row carries, so an amber priority-1
+                    // case and its note are one amber block and a dimmed backlog
+                    // case and its note dim together. The batch-23 primary tint and
+                    // the border-r-4 accent bar are GONE: both were panel chrome,
+                    // and panel chrome is exactly what made the note read as a
+                    // separate floating item.
+                    //
+                    // ⚠ HOVER — TableRow's default is `hover:bg-muted/50` per ROW,
+                    // which would have split the pair at the precise moment the user
+                    // is pointing at it. The pair is now always both-lit or
+                    // both-dark, via two adjacency rules and no JS:
+                    //   • the tr:hover+& variant here → the case row above is
+                    //     hovered, so this lights with it. ADJACENT (+), never the
+                    //     general sibling ~ that Tailwind's own peer-hover compiles
+                    //     to — `~` would have lit every LATER pinned-note row too.
+                    //   • the &:has(+tr:hover) variant on the case row → this row is
+                    //     hovered, so the case above lights with it. :has() is the
+                    //     only way to reach a PRECEDING sibling; where it is
+                    //     unsupported this degrades to "the case row does not
+                    //     light", a cosmetic gap rather than a break.
+                    //
+                    //   • hover:bg-transparent kills this row's OWN default hover,
+                    //     so the two rules above are the only things that tint it.
+                    //
+                    // ⚠ THE TWO VARIANT NAMES ABOVE ARE DELIBERATELY WRITTEN WITHOUT
+                    // THEIR SQUARE BRACKETS, and this note must stay bracket-free
+                    // too. Tailwind scans raw source text — code AND comments — so a
+                    // square-bracketed variant written in prose, with no utility
+                    // suffix after it, is read as an arbitrary-PROPERTY utility and
+                    // emits a junk rule whose body is not a valid declaration. It is
+                    // inert (browsers drop it) but it was really in the bundle, and
+                    // writing this warning WITH the brackets put it straight back.
+                    // Verified by grepping dist/public/assets/*.css after a build.
+                    className={`${rowClass} hover:bg-transparent [tr:hover+&]:bg-muted/50`}
+                    data-testid={`row-pinned-note-${c.id}`}
+                  >
+                    {/* 🔴 THE INDENT IS A REAL EMPTY FIRST CELL, NOT PADDING — and
+                        that is why it needs no pixel value and cannot break on a
+                        narrow viewport. It occupies column 1 (the # column), so the
+                        note begins exactly where the case-number column begins,
+                        tracking whatever width the browser gives that column at any
+                        screen size. The colgroup's 4% is not even relied on: sharing
+                        the column IS the mechanism. RTL puts column 1 on the right,
+                        so this indents from the right, as asked.
+                        p-0 so an empty cell's default p-4 cannot inflate the row. */}
+                    <TableCell className="p-0" aria-hidden="true" />
+                    {/* colSpan 9 — columns 2..10 of a FIXED ten. 1 + 9 = the same
+                        total the separator's colSpan={10} and the loading/empty rows
+                        use; no filter adds or removes a column. */}
+                    <TableCell colSpan={9} className="pt-0 pb-3 px-4">
+                      <div className="flex items-center gap-2 text-right" title={pinnedNote.content}>
+                        <Pin className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        <span className="sr-only">ملاحظة مثبّتة:</span>
+                        {/* Collapse newlines for the single-line render — a note
+                            typed as a bullet list would otherwise reach `truncate`
+                            full of \n. The title attribute above keeps the ORIGINAL
+                            text, line breaks included. */}
+                        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                          {pinnedNote.content.replace(/\s+/g, " ").trim()}
+                        </span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
                 </Fragment>
                 );
               })}
