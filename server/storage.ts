@@ -2975,7 +2975,7 @@ export class DatabaseStorage implements IStorage {
       pausedLongEnough(lawCases.pausedAt),
       ne(lawCases.status, "مغلق"),
       sql`${lawCases.isArchived} IS NOT TRUE`,
-      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مشطوبة')`,
     ));
     for (const r of caseRows) {
       out.push({
@@ -4646,7 +4646,7 @@ export class DatabaseStorage implements IStorage {
     const caseAlive = and(
       ne(lawCases.status, "مغلق"),
       sql`${lawCases.isArchived} IS NOT TRUE`,
-      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+      sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مشطوبة')`,
     );
 
     // Admin_support per-type routing: resolve the owner of the assignable
@@ -5486,13 +5486,13 @@ export class DatabaseStorage implements IStorage {
       const unassignedWhere = firmWideScoped
         ? and(
             hasNoLawyer,
-            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مشطوبة')`,
             caseNotPaused,
           )
         : and(
             eq(lawCases.departmentId, userDept!),
             hasNoLawyer,
-            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مؤرشفة', 'مشطوبة')`,
+            sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مشطوبة')`,
             caseNotPaused,
           );
       const rows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber, departmentId: lawCases.departmentId })

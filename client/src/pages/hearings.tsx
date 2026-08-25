@@ -858,7 +858,6 @@ export default function HearingsPage() {
                                     "مداولة_الصلح",
                                     "أغلق_طلب_الصلح",
                                     "قيد_التدقيق_في_تراضي",
-                                    "رفع_بمنصة_تراضي",
                                   ]);
                                   // 🔴 THE STAGE DECIDES COURT-vs-SETTLEMENT; the
                                   // DEPARTMENT only picks WHICH settlement platform.

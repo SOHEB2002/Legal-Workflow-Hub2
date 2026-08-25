@@ -47,7 +47,6 @@ type TerminalTone = "success" | "danger" | "warning" | "neutral";
 const TERMINAL_BADGES: Partial<Record<CaseStageValue, { text: string; tone: TerminalTone }>> = {
   "مقفلة": { text: `القضية ${getStageLabel("مقفلة")}`, tone: "danger" },
   "مشطوبة": { text: `القضية ${getStageLabel("مشطوبة")}`, tone: "danger" },
-  "مؤرشفة": { text: `القضية ${getStageLabel("مؤرشفة")}`, tone: "neutral" },
   "محكوم_حكم_ابتدائي": { text: getStageLabel("محكوم_حكم_ابتدائي"), tone: "warning" },
   "محكوم_حكم_نهائي": { text: getStageLabel("محكوم_حكم_نهائي"), tone: "warning" },
   "منظورة_استئناف": { text: getStageLabel("منظورة_استئناف"), tone: "neutral" },
@@ -327,7 +326,7 @@ export function CaseProgressBar({
   const rawIndex = stagesOrder.indexOf(normalizedStage);
   const currentIndex = rawIndex >= 0 ? rawIndex : 0;
 
-  // TERMINAL / OFF-PATH stages (مقفلة، مشطوبة، مؤرشفة، محكوم_*، منظورة_استئناف and
+  // TERMINAL / OFF-PATH stages (مقفلة، مشطوبة، محكوم_*، منظورة_استئناف and
   // تحصيل — see TERMINAL_BAR_STAGES above). rawIndex is -1 for all of them, and
   // the `: 0` fallback above would light up استلام as the "current" stage on a
   // closed case. Instead render the path with everything the case actually

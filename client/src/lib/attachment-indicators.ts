@@ -41,8 +41,13 @@ import { anyIdentity, type ActingIdentity } from "@/lib/acting-identities";
 // (Before batch 3 the stage term excluded these implicitly — مقفلة is not
 // محكوم_حكم_ابتدائي — so dropping that term without this would have started
 // badging every closed case that predates the deed gate.)
+//
+// ONE TERM COVERS BOTH: the second arm used to be `|| currentStage === "مؤرشفة"`,
+// deleted with that stage in batch 25. Archiving never wrote a stage — it sets
+// is_archived, and autoArchiveClosedCases only ever runs on a case ALREADY at
+// مقفلة — so every archived case is caught by the مقفلة term and always was.
 function isFinishedFile(currentStage: string): boolean {
-  return currentStage === "مقفلة" || currentStage === "مؤرشفة";
+  return currentStage === "مقفلة";
 }
 
 // "بانتظار استلام الصك" — a ruling exists but its صك has not been logged as

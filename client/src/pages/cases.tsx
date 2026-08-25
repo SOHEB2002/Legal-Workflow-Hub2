@@ -167,8 +167,10 @@ import {
 //   • مقفلة           ← every ARCHIVED case as well as every closed one.
 // Both names described one member of the set and hid the rest. The labels below
 // name every member using vocabulary already on this page (the معلّقة pill on
-// each paused row, and مؤرشفة which is a stage label in its own right), so the
-// dropdown and the table now agree. Nothing is invented.
+// each paused row, and مؤرشفة — which is the ARCHIVING vocabulary, not a stage:
+// batch 25 deleted the مؤرشفة stage precisely because archiving is is_archived
+// and always folds to مقفلة, which is what makes this label the honest one), so
+// the dropdown and the table now agree. Nothing is invented.
 const STAGE_FILTER_LABEL: Record<string, string> = {
   "استكمال_البيانات": "استكمال البيانات أو معلّقة",
   "مقفلة": "مقفلة أو مؤرشفة",
@@ -202,11 +204,12 @@ function getStageColor(stage: CaseStageValue | string) {
       return "bg-destructive/20 text-destructive border-destructive/30";
     case CaseStage.READY_TO_SUBMIT:
       return "bg-green-500/20 text-green-600 border-green-500/30";
-    case CaseStage.TARADI_REGISTRATION:
+    // The three رفع_* REGISTRATION labels that used to head this group were
+    // deleted with their stages in batch 25. Each was a bare fall-through onto
+    // the قيد_التدقيق_في_* sibling directly below it, so the group's colour is
+    // unchanged for every stage that still exists.
     case CaseStage.TARADI_REVIEW:
-    case CaseStage.NAJIZ_REGISTRATION:
     case CaseStage.NAJIZ_REVIEW:
-    case CaseStage.MOEEN_REGISTRATION:
     case CaseStage.MOEEN_REVIEW:
       return "bg-violet-500/20 text-violet-600 border-violet-500/30";
     case CaseStage.CONCILIATION:
@@ -224,7 +227,9 @@ function getStageColor(stage: CaseStageValue | string) {
       return "bg-red-700/20 text-red-800 border-red-700/30";
     case CaseStage.COLLECTION:
       return "bg-emerald-500/20 text-emerald-600 border-emerald-500/30";
-    case CaseStage.ARCHIVED:
+    // CaseStage.ARCHIVED fell through to CLOSED here and was deleted in batch 25.
+    // No colour changes: getCaseDisplayStage folds every archived case to مقفلة,
+    // so they were already reaching this arm through the CLOSED label.
     case CaseStage.CLOSED:
       return "bg-muted text-muted-foreground border-muted";
     default:
@@ -429,7 +434,7 @@ type CaseUrgencySource = keyof typeof CASE_URGENCY_SOURCE_LABEL;
 // So excluding it would have left zero qualifying cases. The positive test
 // delivers the stated INTENT of term 3 — "a finished case has nothing left to
 // lose" — strictly more completely: every member of the shared TerminalCaseStages
-// set (مقفلة · مشطوبة · تحصيل · مؤرشفة · محكوم_حكم_نهائي · محكوم_حكم_ابتدائي) is
+// set (مقفلة · مشطوبة · تحصيل · محكوم_حكم_نهائي · محكوم_حكم_ابتدائي) is
 // excluded by it except the one that must not be.
 //
 // 🔴 IT IS ALSO THE FOURTH TERM — "the objection was already FILED" — for free,

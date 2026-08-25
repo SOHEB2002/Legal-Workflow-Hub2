@@ -145,7 +145,7 @@ const IN_COURT_STAGES_UNION: string[] = [
 //
 // 🔴 UniversalCaseStages IS ALWAYS UNIONED IN — the one change to the recovered
 // logic, and the thing whose absence made the original path-only list wrong.
-// مقفلة / مؤرشفة / the judgment stages sit in NO path array, yet
+// مقفلة and the judgment stages sit in NO path array, yet
 // getCaseDisplayStage returns مقفلة for every closed or archived case; without
 // this union, picking a department made closed cases unfilterable. It also
 // carries استكمال_البيانات (the PAUSED fold, which InCourtSettlementStages

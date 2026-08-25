@@ -1756,13 +1756,10 @@ export const CaseStage = {
   REVIEW_COMMITTEE: "إحالة_للجنة_المراجعة",
   TAKING_NOTES: "الأخذ_بالملاحظات",
   READY_TO_SUBMIT: "جاهزة_للرفع",
-  TARADI_REGISTRATION: "رفع_بمنصة_تراضي",
   TARADI_REVIEW: "قيد_التدقيق_في_تراضي",
   CONCILIATION: "مداولة_الصلح",
   CONCILIATION_CLOSED: "أغلق_طلب_الصلح",
-  NAJIZ_REGISTRATION: "الرفع_في_ناجز",
   NAJIZ_REVIEW: "قيد_التدقيق_في_ناجز",
-  MOEEN_REGISTRATION: "الرفع_في_معين",
   MOEEN_REVIEW: "قيد_التدقيق_في_معين",
   UNDER_REVIEW: "منظورة",
   PRIMARY_JUDGMENT: "محكوم_حكم_ابتدائي",
@@ -1770,9 +1767,31 @@ export const CaseStage = {
   FINAL_JUDGMENT: "محكوم_حكم_نهائي",
   STRUCK_OFF: "مشطوبة",
   COLLECTION: "تحصيل",
-  ARCHIVED: "مؤرشفة",
   CLOSED: "مقفلة",
 } as const;
+
+// 🔴 FOUR MEMBERS DELETED (batch 25) — رفع_بمنصة_تراضي (TARADI_REGISTRATION),
+// الرفع_في_ناجز (NAJIZ_REGISTRATION), الرفع_في_معين (MOEEN_REGISTRATION) and
+// مؤرشفة (ARCHIVED). A production census found them in NO path array, NO
+// transition edge, ZERO cases and — decisively — ZERO stage_history entries, so
+// unlike the four history-only stages (تحرير_مذكرة_جوابية · تحرير_صيغة_التظلم ·
+// توجيه_العميل_بالتسوية · تحرير_صحيفة_الدعوى, all still on LIVE paths and NOT
+// candidates) there is no history left to render and no label to preserve.
+//
+// The three رفع_* stages were "register on the platform" steps superseded by the
+// قيد_التدقيق_في_* review stages that every path actually uses.
+//
+// مؤرشفة was never a stage at all: archiving is `is_archived` + `archived_at`
+// (autoArchiveClosedCases requires currentStage === "مقفلة" and leaves the stage
+// untouched), and getCaseDisplayStage folds archived → مقفلة. It was never
+// stored and never displayed, yet CaseStageFilterDomain offered it as a filter
+// option that could not match a row. The WORD مؤرشفة stays everywhere it is
+// PROSE ("قضية مغلقة أو مؤرشفة", the مقفلة filter's own label) — archiving is a
+// live concept; it just is not a stage.
+//
+// current_stage is varchar(50) with no enum and no CHECK, and nothing validates
+// a stage on read (getStageLabel falls back to the raw value), so this is a
+// code-only deletion with no DDL and no data risk.
 
 export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
 
@@ -1795,13 +1814,10 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
   "الأخذ_بالملاحظات": "الأخذ بالملاحظات",
   "جاهزة_للرفع": "جاهزة للرفع",
-  "رفع_بمنصة_تراضي": "رفع بمنصة تراضي",
   "قيد_التدقيق_في_تراضي": "قيد التدقيق في تراضي",
   "مداولة_الصلح": "مداولة الصلح",
   "أغلق_طلب_الصلح": "أغلق طلب الصلح",
-  "الرفع_في_ناجز": "الرفع في ناجز",
   "قيد_التدقيق_في_ناجز": "قيد التدقيق في ناجز",
-  "الرفع_في_معين": "الرفع في معين",
   "قيد_التدقيق_في_معين": "قيد التدقيق في معين",
   "منظورة": "منظورة",
   "محكوم_حكم_ابتدائي": "محكوم حكم ابتدائي",
@@ -1809,7 +1825,6 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "محكوم_حكم_نهائي": "محكوم حكم نهائي",
   "مشطوبة": "مشطوبة",
   "تحصيل": "تحصيل",
-  "مؤرشفة": "مؤرشفة",
   "مقفلة": "مقفلة",
 };
 
@@ -1830,13 +1845,10 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "جاهزة_للرفع",
-  "رفع_بمنصة_تراضي",
   "قيد_التدقيق_في_تراضي",
   "مداولة_الصلح",
   "أغلق_طلب_الصلح",
-  "الرفع_في_ناجز",
   "قيد_التدقيق_في_ناجز",
-  "الرفع_في_معين",
   "قيد_التدقيق_في_معين",
   "منظورة",
   "محكوم_حكم_ابتدائي",
@@ -1844,7 +1856,6 @@ export const CaseStagesOrder: CaseStageValue[] = [
   "محكوم_حكم_نهائي",
   "مشطوبة",
   "تحصيل",
-  "مؤرشفة",
   "مقفلة",
 ];
 
@@ -1860,8 +1871,10 @@ export const CaseStagesOrder: CaseStageValue[] = [
 //     otherwise             → currentStage  (ANY CaseStage value)
 // so the domain the predicate can produce is exactly "every CaseStage value" —
 // the two folded values are themselves CaseStage members. Building options from
-// path arrays instead is what made مقفلة and مؤرشفة unfilterable: neither is in
-// ANY path array, yet every closed case displays as مقفلة.
+// path arrays instead is what made مقفلة unfilterable: it is in NO path array,
+// yet every closed OR ARCHIVED case displays as مقفلة. (This used to name مؤرشفة
+// alongside it; that stage was deleted in batch 25 — archiving folds to مقفلة,
+// so مقفلة carries both and there is no second value to keep filterable.)
 //
 // TOTAL BY CONSTRUCTION, not by review: it starts from CaseStagesOrder (which
 // today already IS the full enum, verified) and then APPENDS any enum member
@@ -2119,14 +2132,15 @@ export const InCourtSettlementStages: CaseStageValue[] = [
 // 🔴 THIS IS THE TRAP THE OLD DATA-DERIVED DROPDOWN EXISTED TO PAPER OVER.
 // مقفلة is in no path array, yet getCaseDisplayStage returns it for EVERY closed
 // or archived case — so a purely path-based option list makes closed cases
-// unfilterable the moment a department is picked. Same for مؤرشفة, مشطوبة and
-// the judgment stages. Scoping by path is right; scoping by path ALONE is not.
+// unfilterable the moment a department is picked. Same for مشطوبة and the
+// judgment stages. Scoping by path is right; scoping by path ALONE is not.
 //
 // MEMBERSHIP IS DERIVED, NOT HAND-LISTED, in three parts:
-//   1. Every stage in NO path array — the terminal/judgment/platform-submission
-//      stages that every path can fall out to (مقفلة، مؤرشفة، مشطوبة،
-//      محكوم_حكم_ابتدائي، محكوم_حكم_نهائي، منظورة_استئناف، and the three
-//      رفع_* stages, which are in CaseStagesOrder but no path).
+//   1. Every stage in NO path array — the terminal/judgment stages that every
+//      path can fall out to (مقفلة، مشطوبة، محكوم_حكم_ابتدائي،
+//      محكوم_حكم_نهائي، منظورة_استئناف). This used to include مؤرشفة and the
+//      three رفع_* platform-submission stages; batch 25 deleted all four, so the
+//      derivation now yields a domain with no unmatchable options in it.
 //   2. The two values getCaseDisplayStage FOLDS TO regardless of path —
 //      DATA_COMPLETION (paused) and CLOSED (closed/archived). CLOSED already
 //      falls out of (1); DATA_COMPLETION does NOT, because
@@ -2174,7 +2188,6 @@ export const TerminalCaseStages: ReadonlySet<CaseStageValue> = new Set<CaseStage
   "مشطوبة",
   "تحصيل",
   "مقفلة",
-  "مؤرشفة",
 ]);
 
 // ============ AT-OR-PAST-COURT — the case has been FILED (2026-08-11) ============
@@ -2212,7 +2225,6 @@ export const StagesAtOrPastCourt: ReadonlySet<CaseStageValue> = new Set<CaseStag
   "محكوم_حكم_نهائي",
   "تحصيل",
   "مشطوبة",
-  "مؤرشفة",
   "مقفلة",
 ]);
 
@@ -2265,7 +2277,6 @@ const UnconditionallyConcludedStages: string[] = [
   "محكوم_حكم_نهائي",
   "تحصيل",
   "مقفلة",
-  "مؤرشفة",
   "مشطوبة",
 ];
 
