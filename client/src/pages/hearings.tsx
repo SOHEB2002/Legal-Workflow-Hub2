@@ -1288,6 +1288,24 @@ export default function HearingsPage() {
                       // strips it anyway).
                       const nextDate = pagedHearings[idx + 1]?.hearingDate;
                       const isDayBoundary = !!nextDate && nextDate !== hearing.hearingDate;
+                      // HOVER TOOLTIP for the التاريخ column — the cell shows Hijri
+                      // only, and the Gregorian equivalent is one hover away.
+                      //
+                      // formatDualDate is the SHARED formatter every dual-date
+                      // surface uses; its .gregorian is date-fns "dd/MM/yyyy" over
+                      // the stored value. No conversion happens here and none is
+                      // needed: hearing_date is stored as Gregorian ISO
+                      // (HijriDatePicker writes local Gregorian parts — Hijri is
+                      // display-only), so this only FORMATS what is already there.
+                      //
+                      // ⚠ undefined, not "—", when the date is unusable:
+                      // formatDualDate returns "—" for a missing/invalid value, and
+                      // a tooltip reading "التاريخ الميلادي: —" over a cell already
+                      // showing "—" is noise. undefined renders no tooltip at all.
+                      const hearingDateGregorian = formatDualDate(hearing.hearingDate).gregorian;
+                      const hearingDateTitle = hearingDateGregorian === "—"
+                        ? undefined
+                        : `التاريخ الميلادي: ${hearingDateGregorian}`;
                       // Look up the attending lawyer's display name.
                       // 🔴 THROUGH getLawyerForHearing, the same resolution the
                       // filters use — not hearing.attendingLawyerId raw. The raw
@@ -1336,7 +1354,15 @@ export default function HearingsPage() {
                           >
                             {(hearingPage - 1) * HEARING_PAGE_SIZE + idx + 1}
                           </td>
-                          <td className="text-center px-1 py-2 text-xs align-middle overflow-hidden">
+                          {/* title on the CELL, not on the Hijri Badge: the whole
+                              التاريخ column is one date, the weekday and time below
+                              belong to it too, and a Badge-sized hover target is a
+                              hard thing to hit. Native title, the same primitive the
+                              pinned-note row uses (cases.tsx) — no tooltip library. */}
+                          <td
+                            className="text-center px-1 py-2 text-xs align-middle overflow-hidden"
+                            title={hearingDateTitle}
+                          >
                             <div className="flex flex-col items-center gap-1">
                               {/* Top: full Hijri date — e.g. "18 ذو القعدة 1447 هـ".
                                   Both lines use text-sm font-semibold for a
