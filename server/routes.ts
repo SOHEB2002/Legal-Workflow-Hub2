@@ -5812,14 +5812,25 @@ export async function registerRoutes(
           }
           const caseMemos = await storage.getMemosByCase(caseId);
           for (const m of caseMemos) {
-            if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-              // "" is the system's unassigned sentinel (memos.assigned_to is
-              // NOT NULL; auto-memos write `primaryLawyerId || responsibleLawyerId || ""`).
-              // The memo mirrors its case: unassigned at transfer, then the
-              // primaryLawyerId-change cascade below re-points it when the new
-              // department assigns a lawyer.
-              await storage.updateMemo(m.id, { assignedTo: "" });
-            }
+            // 🔴 WAS `["لم_تبدأ","قيد_التحرير","تحتاج_تعديل"].includes(m.status)` —
+            // one of the two ASSIGNMENT loops batch 11 named and scoped out while
+            // it fixed the five CANCELLATION paths. Same root defect: memos.status
+            // FREEZES AT CREATION (the workflow lives on current_stage), so a memo
+            // filed with the court sits at current_stage = مرفوعة while still
+            // carrying status = لم_تبدأ — which is IN that list. Every department
+            // transfer therefore UNASSIGNED filed memos.
+            //
+            // Milder than a wrongful cancellation, and still wrong: a filed memo has
+            // no remaining work to hand over, so blanking its assignee rewrites the
+            // record of who was responsible for a completed act. isActiveMemo reads
+            // current_stage for filing and status only for ملغاة.
+            if (!isActiveMemo(m)) continue;
+            // "" is the system's unassigned sentinel (memos.assigned_to is
+            // NOT NULL; auto-memos write `primaryLawyerId || responsibleLawyerId || ""`).
+            // The memo mirrors its case: unassigned at transfer, then the
+            // primaryLawyerId-change cascade below re-points it when the new
+            // department assigns a lawyer.
+            await storage.updateMemo(m.id, { assignedTo: "" });
           }
         } catch (e) {
           console.error("Error clearing assignments on department transfer:", e);
@@ -6329,9 +6340,15 @@ export async function registerRoutes(
           if (caseWorkChanged) {
             const caseMemos = await storage.getMemosByCase(caseId);
             for (const m of caseMemos) {
-              if (["لم_تبدأ", "قيد_التحرير", "تحتاج_تعديل"].includes(m.status)) {
-                await storage.updateMemo(m.id, { assignedTo: newCaseWorkLawyerId });
-              }
+              // 🔴 The SECOND assignment loop batch 11 named and scoped out, and a
+              // byte-identical copy of the transfer loop's frozen-status test above
+              // — see there for why status cannot answer a workflow question. This
+              // one RE-POINTS rather than unassigns, so a filed memo was having its
+              // assignee overwritten with the case's NEW lawyer: the record would
+              // then credit a memo filed months ago to someone who was not on the
+              // case when it was filed. isActiveMemo skips it.
+              if (!isActiveMemo(m)) continue;
+              await storage.updateMemo(m.id, { assignedTo: newCaseWorkLawyerId });
             }
           }
         } catch (e) {
