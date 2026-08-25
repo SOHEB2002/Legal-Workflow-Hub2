@@ -1741,15 +1741,11 @@ export const CaseStatusLabels: Record<CaseStatusValue, string> = {
 // ==================== مراحل القضية ====================
 export const CaseStage = {
   RECEPTION: "استلام",
-  PRESCRIPTION_DATE: "تحديد_تاريخ_التقادم",
   DATA_COMPLETION: "استكمال_البيانات",
   STUDY: "دراسة",
   SETTLEMENT_DIRECTION: "توجيه_العميل_بالتسوية",
   AWAITING_SETTLEMENT: "بانتظار_رفع_العميل_للتسوية",
   GRIEVANCE_DRAFTING: "تحرير_صيغة_التظلم",
-  GRIEVANCE_INTERNAL_REVIEW: "مراجعة_داخلية_للتظلم",
-  GRIEVANCE_SUBMITTED: "تقديم_التظلم",
-  GRIEVANCE_AWAITING: "انتظار_رد_التظلم",
   DRAFTING: "تحرير_صحيفة_الدعوى",
   MEMO_DRAFTING: "تحرير_مذكرة_جوابية",
   INTERNAL_REVIEW: "مراجعة_داخلية",
@@ -1770,13 +1766,36 @@ export const CaseStage = {
   CLOSED: "مقفلة",
 } as const;
 
-// 🔴 FOUR MEMBERS DELETED (batch 25) — رفع_بمنصة_تراضي (TARADI_REGISTRATION),
-// الرفع_في_ناجز (NAJIZ_REGISTRATION), الرفع_في_معين (MOEEN_REGISTRATION) and
-// مؤرشفة (ARCHIVED). A production census found them in NO path array, NO
-// transition edge, ZERO cases and — decisively — ZERO stage_history entries, so
-// unlike the four history-only stages (تحرير_مذكرة_جوابية · تحرير_صيغة_التظلم ·
-// توجيه_العميل_بالتسوية · تحرير_صحيفة_الدعوى, all still on LIVE paths and NOT
-// candidates) there is no history left to render and no label to preserve.
+// 🔴 EIGHT MEMBERS DELETED ACROSS BATCHES 25 AND 26. A production census found
+// all eight in NO path array, NO transition edge, ZERO cases and — decisively —
+// ZERO stage_history entries, so there is no history left to render and no label
+// to preserve. That last term is the whole test: a stage NAMED IN HISTORY keeps
+// its member and its label no matter how dead its workflow is (see
+// تحرير_مذكرة_جوابية below, which lost every path and edge and kept both).
+//
+// BATCH 25 — رفع_بمنصة_تراضي (TARADI_REGISTRATION), الرفع_في_ناجز
+// (NAJIZ_REGISTRATION), الرفع_في_معين (MOEEN_REGISTRATION), مؤرشفة (ARCHIVED).
+//
+// BATCH 26 — تحديد_تاريخ_التقادم (PRESCRIPTION_DATE), مراجعة_داخلية_للتظلم
+// (GRIEVANCE_INTERNAL_REVIEW), تقديم_التظلم (GRIEVANCE_SUBMITTED),
+// انتظار_رد_التظلم (GRIEVANCE_AWAITING). These four were a CLOSED CHAIN: batch
+// 25 cut the only two edges reaching them from a live stage, after which every
+// remaining edge into them started at another one of the four. Each is also
+// superseded in substance —
+//   • تحديد_تاريخ_التقادم: the prescription date is COMPUTED now
+//     (computePrescriptionDate), not typed by a lawyer at a dedicated stage.
+//   • مراجعة_داخلية_للتظلم: AdminGrievanceStages deliberately uses the PLAIN
+//     مراجعة_داخلية (see the note on that array), so the grievance-specific twin
+//     had no path even before the edge was cut. Every OR that paired the two is
+//     now a single term, and the surviving مراجعة_داخلية behaviour is untouched.
+//   • تقديم_التظلم / انتظار_رد_التظلم: the grievance outcome is recorded by
+//     POST /api/cases/:id/grievance-accepted, which runs مقفلة → تحصيل directly.
+//
+// ⚠ THE FOUR STAGES THAT LOOK SIMILAR AND ARE NOT CANDIDATES: تحرير_مذكرة_جوابية ·
+// تحرير_صيغة_التظلم · توجيه_العميل_بالتسوية · تحرير_صحيفة_الدعوى all appear ONLY
+// in stage_history, never as a current stage. Three are still on live paths;
+// تحرير_مذكرة_جوابية is not any more (batch 26 retired the in-court memo paths)
+// but keeps its member and label precisely because history names it.
 //
 // The three رفع_* stages were "register on the platform" steps superseded by the
 // قيد_التدقيق_في_* review stages that every path actually uses.
@@ -1797,7 +1816,6 @@ export type CaseStageValue = typeof CaseStage[keyof typeof CaseStage];
 
 export const CaseStageLabels: Record<CaseStageValue, string> = {
   "استلام": "استلام",
-  "تحديد_تاريخ_التقادم": "تحديد تاريخ التقادم",
   // Phase-8 — label-only rename (DB value unchanged); shared label with
   // the consultations-side equivalent stage.
   "استكمال_البيانات": "استكمال المرفقات والبيانات",
@@ -1805,10 +1823,15 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
   "توجيه_العميل_بالتسوية": "توجيه العميل بالتسوية",
   "بانتظار_رفع_العميل_للتسوية": "بانتظار رفع العميل للتسوية",
   "تحرير_صيغة_التظلم": "تحرير صيغة التظلم",
-  "مراجعة_داخلية_للتظلم": "مراجعة داخلية للتظلم",
-  "تقديم_التظلم": "تقديم التظلم",
-  "انتظار_رد_التظلم": "انتظار رد التظلم",
   "تحرير_صحيفة_الدعوى": "تحرير صحيفة الدعوى",
+  // 🔴 KEPT DELIBERATELY, AND THIS ENTRY IS THE WHOLE REASON THE STAGE SURVIVES.
+  // تحرير_مذكرة_جوابية is on no path array and has no transition edge (batch 26
+  // retired the in-court memo paths), but PRODUCTION stage_history NAMES IT on
+  // real cases. The history tab renders `CaseStageLabels[transition.stage] ||
+  // transition.stage` (case-details-dialog.tsx), so deleting this line would
+  // fall through to the raw stored value and print «تحرير_مذكرة_جوابية» with
+  // underscores at every one of those cases. Do not "tidy" it away because the
+  // stage looks unused — unused is exactly what it is, and it still must render.
   "تحرير_مذكرة_جوابية": "تحرير مذكرة جوابية",
   "مراجعة_داخلية": "مراجعة داخلية",
   "إحالة_للجنة_المراجعة": "إحالة للجنة المراجعة",
@@ -1830,17 +1853,28 @@ export const CaseStageLabels: Record<CaseStageValue, string> = {
 
 export const CaseStagesOrder: CaseStageValue[] = [
   "استلام",
-  "تحديد_تاريخ_التقادم",
   "استكمال_البيانات",
   "دراسة",
   "توجيه_العميل_بالتسوية",
   "بانتظار_رفع_العميل_للتسوية",
   "تحرير_صيغة_التظلم",
-  "مراجعة_داخلية_للتظلم",
-  "تقديم_التظلم",
-  "انتظار_رد_التظلم",
   "تحرير_صحيفة_الدعوى",
-  "تحرير_مذكرة_جوابية",
+  // 🔴 تحرير_مذكرة_جوابية IS DELIBERATELY ABSENT — the ONE enum member this array
+  // omits, and the omission is load-bearing rather than an oversight.
+  //
+  // This array is the master ORDERING, and its most consequential consumer is the
+  // consultation→case CONVERSION dialog (consultations.tsx), which maps it into a
+  // "اختر المرحلة" dropdown and POSTs the choice straight to
+  // `currentStage: targetCaseStage` with no path validation whatsoever. Leaving a
+  // stage here that has no path and no transition edge would let that dialog
+  // create a brand-new case parked somewhere it can never advance from — the
+  // 3fcd4e3 bar-collapse, manufactured from a dropdown.
+  //
+  // Nothing is lost. CaseStageFilterDomain below APPENDS every enum member this
+  // array omits, so the stage stays filterable; it simply sorts last, which is
+  // where a history-only stage belongs. The other consumers all read
+  // CaseStagesOrder.indexOf(currentStage) — and no case is AT this stage, so the
+  // -1 those would return is unreachable.
   "مراجعة_داخلية",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
@@ -1899,9 +1933,9 @@ export const CaseStageFilterDomain: CaseStageValue[] = (() => {
 // it here would rename it in Labor, Admin and InCourtNoMemo too.
 //
 // ⚠ تحرير_صحيفة_الدعوى IS NOT DELETED as a stage value — it survives in
-// UnderStudyLaborStages, UnderStudyAdminStages and InCourtPlaintiffMemoStages,
-// and every consumer keyed on it still works for those paths. This removes one
-// stage from two arrays; it is not a stage deletion.
+// UnderStudyLaborStages (its last remaining path since batch 26 retired the
+// in-court memo arrays), and every consumer keyed on it still works there. This
+// removes one stage from two arrays; it is not a stage deletion.
 export const UnderStudyGeneralStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
@@ -1976,8 +2010,9 @@ export const UnderStudyLaborStages: CaseStageValue[] = [
 // 🔴 UnderStudyAdminStages IS GONE, REPLACED BY THE TWO ARRAYS BELOW. The single
 // 15-stage admin path tried to be both tracks at once — it ran the grievance
 // stages and the lawsuit stages in series, so every admin case walked through
-// تحرير_صيغة_التظلم / تقديم_التظلم / انتظار_رد_التظلم on its way to a lawsuit it
-// may never have needed, and the two were never really one workflow.
+// the grievance chain (تحرير_صيغة_التظلم and the three stages batch 26 deleted)
+// on its way to a lawsuit it may never have needed, and the two were never
+// really one workflow.
 //
 // DELETED rather than left in place: it had exactly TWO consumers (the switch
 // arm in getStagesForClassification and the UniversalCaseStages union), both
@@ -1986,13 +2021,15 @@ export const UnderStudyLaborStages: CaseStageValue[] = [
 // kept alive next to its replacement. Every stage VALUE it named still exists in
 // CaseStagesOrder and CaseStageLabels; this removes an array, not a stage.
 //
-// 🔴 FOUR STAGES ARE DELIBERATELY IN NEITHER ARRAY — تحديد_تاريخ_التقادم,
-// مراجعة_داخلية_للتظلم, تقديم_التظلم, انتظار_رد_التظلم. Their values, labels and
-// existing transition edges ALL STAY, exactly as تحرير did in the consultations
-// merge: a case that historically passed through them still renders its history
-// and its activity log. Being in no path array now also makes them members of
-// UniversalCaseStages below, so they stay filterable — which is what a
-// historical stage needs.
+// 🔴 THE FOUR STAGES THAT WERE IN NEITHER ARRAY ARE NOW DELETED OUTRIGHT —
+// تحديد_تاريخ_التقادم, مراجعة_داخلية_للتظلم, تقديم_التظلم, انتظار_رد_التظلم.
+// This note used to say their values, labels and edges would all stay "so a case
+// that historically passed through them still renders its history". The census
+// then established the fact that assumption was missing: NO case ever passed
+// through them — zero occupancy AND zero stage_history entries — so there was no
+// history to protect and nothing to render. Batch 25 cut the two edges reaching
+// them from a live stage; batch 26 deleted the members, labels and every
+// remaining edge. See the tombstone above CaseStageLabels.
 
 // مسار التظلم — the grievance is the whole matter. Ends at مقفلة: nothing is
 // filed in court, so there is no معين and no منظورة.
@@ -2000,13 +2037,14 @@ export const AdminGrievanceStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
   "تحرير_صيغة_التظلم",
-  // Plain مراجعة_داخلية, NOT مراجعة_داخلية_للتظلم. The generic stage is treated
-  // as an internal review in nine places (reviewer assignment, the four-eyes
-  // lock, the panel's send-back), and the grievance-specific twin had to be
-  // named in every one of them. Using the generic value inherits all of it.
+  // Plain مراجعة_داخلية. The grievance-specific twin مراجعة_داخلية_للتظلم had to
+  // be named alongside it in nine places (reviewer assignment, the four-eyes
+  // lock, the panel's send-back); using the generic value here inherits all of
+  // it. Batch 26 DELETED that twin — this array being the reason it had no path
+  // — so those nine are now single-term and this line is the only rule.
   // The send-back target resolves correctly by position: case-stage-panel's
   // resolveSendBackStage takes stages[indexOf("مراجعة_داخلية") - 1], which is
-  // تحرير_صيغة_التظلم here — the same answer the hard-coded branch gave.
+  // تحرير_صيغة_التظلم here — the same answer the deleted hard-coded branch gave.
   "مراجعة_داخلية",
   "جاهزة_للرفع",
   // 🔴 مقفلة IS THE LINEAR SUCCESSOR OF جاهزة_للرفع, and this is the ONLY array
@@ -2064,30 +2102,32 @@ export const AdminLawsuitStages: CaseStageValue[] = [
 //     the only correct one.
 export const AdminUnroutedStages: CaseStageValue[] = ["استلام"];
 
-// In-court case paths. The firm is handling a case that's already filed in
-// court. The path branches on whether the firm is drafting a response
-// (defendant + memo), filing a pleading (plaintiff + memo), or just studying
-// the case before the next hearing (no memo).
-export const InCourtDefendantMemoStages: CaseStageValue[] = [
-  "استلام",
-  "استكمال_البيانات",
-  "تحرير_مذكرة_جوابية",
-  "مراجعة_داخلية",
-  "إحالة_للجنة_المراجعة",
-  "الأخذ_بالملاحظات",
-  "منظورة",
-];
-
-export const InCourtPlaintiffMemoStages: CaseStageValue[] = [
-  "استلام",
-  "استكمال_البيانات",
-  "تحرير_صحيفة_الدعوى",
-  "مراجعة_داخلية",
-  "إحالة_للجنة_المراجعة",
-  "الأخذ_بالملاحظات",
-  "منظورة",
-];
-
+// In-court case path. The firm is handling a case that is already filed in
+// court: it studies the file and waits for the next hearing.
+//
+// 🔴 InCourtDefendantMemoStages AND InCourtPlaintiffMemoStages ARE DELETED
+// (owner ruling, batch 26 — the question batch 15b stopped at). AN IN-COURT CASE
+// ALWAYS TAKES THE SHORT PATH. A MEMO IS AN INDEPENDENT ENTITY WITH ITS OWN FULL
+// LIFECYCLE, and the case path must never mirror it; unfinished memo work is
+// surfaced by the «مذكرة جارية» badge, derived from the memos themselves.
+//
+// Batch 15 had already made getStagesForClassification return this array
+// unconditionally for every non-settlement in-court case, so both memo arrays
+// had been unreachable ever since — resolved by nothing, exported to nothing.
+// They are DELETED rather than left beside their replacement for the reason the
+// PostTrialStages tombstone records: an abandoned array kept alive next to the
+// live one is how a future edit picks the wrong list.
+//
+// ⚠ WHAT THIS COSTS, AND WHY IT IS ACCEPTED: تحرير_مذكرة_جوابية was on
+// InCourtDefendantMemoStages ONLY, so it is now on NO path array. That is the
+// intent, and it is why batch 15b stopped here. Its enum member and its
+// CaseStageLabels entry SURVIVE — production stage_history names it on real
+// cases and the history tab must keep rendering the Arabic label. It is removed
+// from CaseStagesOrder (see the note there — the conversion dropdown) and from
+// every transition edge, filter set and predicate that could no longer match.
+//
+// ⚠ تحرير_صحيفة_الدعوى IS UNAFFECTED — it lives on UnderStudyLaborStages and
+// keeps every one of its edges. Only its in-court home is gone.
 export const InCourtNoMemoStages: CaseStageValue[] = [
   "استلام",
   "استكمال_البيانات",
@@ -2104,8 +2144,9 @@ export const InCourtSettlementStages: CaseStageValue[] = [
 // TERMINAL case stages — final outcomes with no further workflow of their own.
 // NONE of these belongs to any array returned by getStagesForClassification:
 // they are reachable from MANY stages (early close from anywhere, struck-off
-// from منظورة/منظورة_استئناف, تحصيل from مداولة_الصلح or انتظار_رد_التظلم), so
-// they have no fixed position in a linear path.
+// from منظورة/منظورة_استئناف, تحصيل from مداولة_الصلح or — on the grievance
+// track — from POST /api/cases/:id/grievance-accepted), so they have no fixed
+// position in a linear path.
 // (This comment used to say "تحصيل from مداولة_الصلح or a final judgment" — that
 // described the PRE-b41553a model, where a final judgment auto-moved to تحصيل.
 // A final judgment now RESTS at محكوم_حكم_نهائي and closes from there; the
@@ -2148,23 +2189,26 @@ export const InCourtSettlementStages: CaseStageValue[] = [
 //      would have been unfilterable. Caught by the coverage proof, not by eye.
 //   3. تحصيل. It IS in a path array (InCourtSettlementStages) so (1) misses it,
 //      but ALLOWED_CASE_TRANSITIONS reaches it from مداولة_الصلح (General,
-//      Commercial, Labor) AND from انتظار_رد_التظلم (Admin) — i.e. from all four
-//      under-study departments. Being in ONE path does not make it that path's.
+//      Commercial, Labor) and the grievance-accepted endpoint reaches it from
+//      مقفلة (Admin) — i.e. from all four under-study departments. Being in ONE
+//      path does not make it that path's.
 export const UniversalCaseStages: CaseStageValue[] = (() => {
   const inSomePath = new Set<CaseStageValue>([
     ...UnderStudyGeneralStages,
     ...UnderStudyCommercialStages,
     ...UnderStudyLaborStages,
-    // Both admin tracks. Their union is NARROWER than the old 15-stage array, so
-    // the four stages that left the arrays (تحديد_تاريخ_التقادم,
-    // مراجعة_داخلية_للتظلم, تقديم_التظلم, انتظار_رد_التظلم) now fall OUT of
-    // inSomePath and INTO UniversalCaseStages below — i.e. they become
-    // filterable from every department rather than from إداري alone. That is the
-    // correct home for a stage that is in no path but still appears in history.
+    // Both admin tracks. The four stages that left these arrays were DELETED in
+    // batch 26 (تحديد_تاريخ_التقادم, مراجعة_داخلية_للتظلم, تقديم_التظلم,
+    // انتظار_رد_التظلم) — they held zero cases and zero history, so there was
+    // nothing left for UniversalCaseStages to keep filterable.
     ...AdminGrievanceStages,
     ...AdminLawsuitStages,
-    ...InCourtDefendantMemoStages,
-    ...InCourtPlaintiffMemoStages,
+    // The two in-court MEMO arrays were spread here and are DELETED (batch 26 —
+    // an in-court case always takes the short path). Their stages all survive
+    // through the arrays that remain, with ONE exception: تحرير_مذكرة_جوابية was
+    // theirs alone, so it now falls OUT of inSomePath — which is exactly right,
+    // and puts it in UniversalCaseStages, the documented home for a stage that
+    // is on no path but still appears in history.
     ...InCourtNoMemoStages,
     ...InCourtSettlementStages,
   ]);
@@ -2437,9 +2481,10 @@ export function getStagesForClassification(
     if (isSettlementCase) {
       return InCourtSettlementStages;
     }
-    // 🔴 AN IN-COURT CASE ALWAYS TAKES THE SHORT PATH (owner ruling, batch 15).
-    // This used to branch on memoRequired and clientRole, returning
-    // InCourtDefendantMemoStages / InCourtPlaintiffMemoStages. Both are MUTABLE
+    // 🔴 AN IN-COURT CASE ALWAYS TAKES THE SHORT PATH (owner ruling, batch 15;
+    // the two arrays themselves DELETED in batch 26). This used to branch on
+    // memoRequired and clientRole, returning the in-court defendant/plaintiff
+    // memo arrays. Both are MUTABLE
     // fields, so adding a memo to a case RESHAPED ITS PATH RETROACTIVELY: a case
     // correctly walking [استلام · استكمال_البيانات · دراسة · منظورة] would, the
     // moment a memo was attached, be re-rendered against a 7-stage array whose
@@ -7765,8 +7810,8 @@ const CLOSURE_BADGE_MAX_CHARS = 40;
 // unreachable by construction, not by a filter: a case closed on تم_التحصيل got
 // there through a judgment or a settlement, so branch 1 or 2 returns a label first
 // and the closure-reason fallback below is never consulted. The one path that could
-// close on تم_التحصيل with NEITHER — the grievance track انتظار_رد_التظلم → تحصيل —
-// is caught by the explicit guard below.
+// close on تم_التحصيل with NEITHER — the grievance track's مقفلة → تحصيل, via
+// POST /api/cases/:id/grievance-accepted — is caught by the explicit guard below.
 export function caseClosureBadgeSuffix(
   lawCase: OutcomeCaseInput,
   hearings: OutcomeHearingInput[],

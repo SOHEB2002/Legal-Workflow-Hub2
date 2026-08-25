@@ -1669,9 +1669,10 @@ async function checkUnpreparedHearings() {
 }
 
 // ⚠ checkGrievanceAwaitingExpiry (batch 4b) WAS DELETED HERE, with the array
-// change it served. It auto-closed a grievance case 7 days after it entered
-// انتظار_رد_التظلم; the owner reverted that stage off AdminGrievanceStages, so no
-// case can reach it and the job had nothing left to close. Deleted rather than
+// change it served. It auto-closed a grievance case 7 days after it entered the
+// grievance-awaiting stage; the owner reverted that stage off AdminGrievanceStages
+// (and batch 26 deleted the stage outright), so no case can reach it and the job
+// had nothing left to close. Deleted rather than
 // left dormant — an unreachable scheduler job is the PostTrialStages trap in
 // another form, and it would have run a full getAllCases scan every morning to
 // find nothing. The closure it performed now happens at the transition itself

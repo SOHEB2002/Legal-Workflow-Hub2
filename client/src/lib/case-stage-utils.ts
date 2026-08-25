@@ -2,13 +2,16 @@
 // the shared <CaseStagePanel> compute "has this case looped back from review?"
 // identically (drives the progress bar's hasReturnedFromReview hint). Pure;
 // no behavior change from the original cases.tsx definition.
+// Batch 26 removed مراجعة_داخلية_للتظلم (stage deleted) and تحرير_مذكرة_جوابية
+// (stage retired to history-only — no path, no edge). REVIEW_LOOP_STAGES is
+// matched against stage HISTORY below, so its member could only be dropped
+// because the census proved zero history entries name it; DRAFTING_LOOP_STAGES is
+// matched against currentStage, which no case can hold for a stage with no path.
 const REVIEW_LOOP_STAGES = new Set([
   "مراجعة_داخلية",
-  "مراجعة_داخلية_للتظلم",
 ]);
 const DRAFTING_LOOP_STAGES = new Set([
   "تحرير_صحيفة_الدعوى",
-  "تحرير_مذكرة_جوابية",
   "تحرير_صيغة_التظلم",
 ]);
 

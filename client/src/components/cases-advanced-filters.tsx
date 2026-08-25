@@ -127,8 +127,11 @@ const UNDER_STUDY_STAGES_BY_DEPT_NAME: Record<string, string[]> = {
 // is a WORKFLOW change (in-court settlement cases would gain a visible step) and
 // belongs in its own batch — not folded into a filter refactor. Until then this
 // list stays hand-maintained and is the more correct of the two.
+// (تحرير_مذكرة_جوابية was listed here and went with the in-court memo paths in
+// batch 26 — no case can hold it, so the option could only ever return nothing.
+// تحرير_صحيفة_الدعوى STAYS: it is still live on UnderStudyLaborStages.)
 const IN_COURT_STAGES_UNION: string[] = [
-  "استلام", "استكمال_البيانات", "تحرير_مذكرة_جوابية", "تحرير_صحيفة_الدعوى",
+  "استلام", "استكمال_البيانات", "تحرير_صحيفة_الدعوى",
   "دراسة", "مراجعة_داخلية", "إحالة_للجنة_المراجعة", "الأخذ_بالملاحظات",
   "مداولة_الصلح", "أغلق_طلب_الصلح", "منظورة",
   "محكوم_حكم_ابتدائي", "منظورة_استئناف", "محكوم_حكم_نهائي",

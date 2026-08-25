@@ -302,19 +302,24 @@ export function CaseProgressBar({
       }
     }
   }
-  // Dynamic bridge for IN_COURT cases: if a memo was added after the case
-  // already reached دراسة on the no-memo path, the memo variant returned
-  // above doesn't include دراسة. Splice دراسة in just before the drafting
-  // stage so the progress bar shows a coherent path and the next-stage
-  // button points at drafting (not back at استلام).
+  // Dynamic bridge for IN_COURT cases: if the resolved path lacks دراسة but the
+  // case is sitting on it, splice دراسة in just before the drafting stage so the
+  // bar shows a coherent path and the next-stage button points at drafting (not
+  // back at استلام).
+  //
+  // ⚠ INERT FOR EVERY IN-COURT CASE SINCE BATCH 26, and kept only as the guard it
+  // has become. It existed for the memo-variant paths, which did not contain
+  // دراسة; those two arrays are deleted, so a non-settlement in-court case now
+  // resolves to InCourtNoMemoStages — which DOES contain دراسة, failing the third
+  // condition. A settlement in-court case reaches the body but has no drafting
+  // stage either, so draftingIdx is -1 and nothing is spliced. The
+  // تحرير_مذكرة_جوابية lookup that used to lead this was dropped with its stage.
   if (
     effectiveClassification === "منظورة_بالمحكمة" &&
     normalizedStage === "دراسة" &&
     stagesOrder.indexOf("دراسة") < 0
   ) {
-    const memoDraftIdx = stagesOrder.indexOf("تحرير_مذكرة_جوابية");
-    const pleadingDraftIdx = stagesOrder.indexOf("تحرير_صحيفة_الدعوى");
-    const draftingIdx = memoDraftIdx >= 0 ? memoDraftIdx : pleadingDraftIdx;
+    const draftingIdx = stagesOrder.indexOf("تحرير_صحيفة_الدعوى");
     if (draftingIdx > 0) {
       stagesOrder = [
         ...stagesOrder.slice(0, draftingIdx),
@@ -502,10 +507,13 @@ export function CaseProgressBar({
     return "upcoming";
   };
 
+  // The `|| … === "مراجعة_داخلية_للتظلم"` arms went with that stage in batch 26.
+  // Both operands are read out of stagesOrder — a resolved PATH — and the twin was
+  // on no path even before it was deleted, so neither test could ever have matched.
   const nextStage = stagesOrder[currentIndex + 1];
-  const nextIsInternalReview = nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم";
+  const nextIsInternalReview = nextStage === "مراجعة_داخلية";
   const prevStage = stagesOrder[currentIndex - 1];
-  const prevIsInternalReview = prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم";
+  const prevIsInternalReview = prevStage === "مراجعة_داخلية";
 
   // Any forward transition INTO a قيد_التدقيق_* stage requires the matching
   // platform number, regardless of which source stage we're moving from
@@ -553,8 +561,7 @@ export function CaseProgressBar({
     (!isReceptionToDataCompletion || !!notes.trim());
   const canConfirmPrev = !prevIsInternalReview || !!(selectedReviewerId || caseInternalReviewerId);
 
-  const isAtInternalReview =
-    normalizedStage === "مراجعة_داخلية" || normalizedStage === "مراجعة_داخلية_للتظلم";
+  const isAtInternalReview = normalizedStage === "مراجعة_داخلية";
   const isAtCommitteeNotes = normalizedStage === "الأخذ_بالملاحظات";
   // Delegation-aware — feeds committee-notes, platform-review and settlement,
   // all three of which act through PATCH /api/cases/:id (ctx-aware).
@@ -575,10 +582,10 @@ export function CaseProgressBar({
   // a chair's seat. Revisit only as a deliberate committee-delegation decision.
   const isAtReviewCommittee = normalizedStage === "إحالة_للجنة_المراجعة";
   // ⚠ Batch 21 needed exactly this test and found isAtInternalReview ALREADY
-  // DEFINED above (:557) with the identical two-stage rule — مراجعة_داخلية plus
-  // the admin تظلم track's مراجعة_داخلية_للتظلم. Reused rather than restated; a
-  // second copy is how the grievance arm would eventually get dropped from one of
-  // them. Cases are the only entity with two internal-review stages.
+  // DEFINED above — reused rather than restated, which is still the rule here.
+  // (It was a two-stage test then: مراجعة_داخلية plus the admin تظلم track's
+  // مراجعة_داخلية_للتظلم. Batch 26 deleted that twin, so both are one term now,
+  // and the admin track runs on the plain stage.)
   const showReviewCommitteeActions =
     isAtReviewCommittee && canReviewCases(userRole) && !!onReviewCommitteeApprove &&
     (userRole === "branch_manager" ||

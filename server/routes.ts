@@ -1427,65 +1427,47 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   //     so any case under internal review could be returned to grievance
   //     drafting — a stage most of them have no business on.
 
-  // ==================== ADMIN PATH (prescription date + grievance) ====================
-  // ⚠ THE FOUR STAGES BELOW LEFT THE PATH ARRAYS. Nothing routes through
-  // تحديد_تاريخ_التقادم / مراجعة_داخلية_للتظلم / تقديم_التظلم / انتظار_رد_التظلم
-  // any more. Their OUTBOUND edges stay — a case that historically walked them
-  // must still be able to move, and removing a rule is how a live workflow
-  // breaks silently. Same rule as the stage VALUES and labels: history works.
-  //
-  // 🔴 BUT THE TWO INBOUND EDGES FROM LIVE STAGES ARE GONE (batch 25), and the
-  // distinction is the whole point. "Unreachable from the UI" was never
-  // "unreachable": the FE offers only the case's own resolved path, but PATCH
-  // /api/cases/:id with an explicit targetStage reaches this table directly, and
-  // it is consulted INDEPENDENTLY of the path arrays. So these two were live
-  // doors from an occupied stage into a stage on no path:
-  //     استلام → تحديد_تاريخ_التقادم              (استلام holds 139 cases)
-  //     تحرير_صيغة_التظلم → مراجعة_داخلية_للتظلم    (live on AdminGrievanceStages)
-  // A case driven through either landed off-path, collapsed the progress bar to
-  // index 0 (the 3fcd4e3 class) and could not be advanced — the bar-collapse bug
-  // reproduced from DATA instead of from code. Deleting them seals
-  // تحديد_تاريخ_التقادم and the whole grievance chain behind it: every remaining
-  // edge into those four now starts at another one of the four.
-  //
-  // ⚠ NEITHER DELETION STRANDS A LIVE STAGE. استلام keeps four other outbound
-  // edges (→ استكمال_البيانات / دراسة / تحرير_مذكرة_جوابية / تحرير_صحيفة_الدعوى);
-  // تحرير_صيغة_التظلم keeps → مراجعة_داخلية, which is the edge
-  // AdminGrievanceStages actually walks (schema.ts documents that this path uses
-  // PLAIN مراجعة_داخلية, never the للتظلم twin).
-  { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
+  // ==================== ADMIN PATH (grievance) ====================
+  // 🔴 THE FOUR-STAGE GRIEVANCE CHAIN IS GONE (batch 26). تحديد_تاريخ_التقادم,
+  // مراجعة_داخلية_للتظلم, تقديم_التظلم and انتظار_رد_التظلم are DELETED from
+  // CaseStage — zero cases, zero stage_history, and after batch 25 cut the two
+  // edges reaching them from a live stage, a closed chain nothing could enter.
+  // Their seven edges went with them. What replaced each of them:
+  //   • the prescription date is COMPUTED (computePrescriptionDate), not typed
+  //     at a dedicated stage;
+  //   • AdminGrievanceStages runs on the PLAIN مراجعة_داخلية, so the tail
+  //     دراسة → تحرير_صيغة_التظلم → مراجعة_داخلية → جاهزة_للرفع → مقفلة below is
+  //     the whole live grievance workflow;
+  //   • the grievance OUTCOME is recorded by POST /api/cases/:id/grievance-accepted,
+  //     which runs مقفلة → تحصيل directly and raises the collection task itself.
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
-  { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
-  { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "انتظار_رد_التظلم", to: "تحصيل", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "انتظار_رد_التظلم", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "جاهزة_للرفع", to: "قيد_التدقيق_في_معين", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "قيد_التدقيق_في_معين", to: "منظورة", allowedRoles: ["assigned_lawyer", "admin_support", "department_head", "branch_manager"] },
 
-  // ==================== IN-COURT PATH: defendant + memo ====================
-  // استلام → استكمال_البيانات is shared with the common section.
-  { from: "استلام", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-  { from: "استكمال_البيانات", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_مذكرة_جوابية", to: "مراجعة_داخلية", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "مراجعة_داخلية", to: "تحرير_مذكرة_جوابية", allowedRoles: ["internal_reviewer", "branch_manager"] },
-
-  // ==================== IN-COURT PATH: plaintiff + memo ====================
-  // Drafting the lawsuit pleading after the case is already filed. The
-  // common drafting transitions (تحرير_صحيفة_الدعوى → مراجعة_داخلية, etc.)
-  // are reused from the general section above.
+  // ==================== IN-COURT PATH ====================
+  // 🔴 THE MEMO EDGES ARE GONE (owner ruling, batch 26). An in-court case ALWAYS
+  // takes the short path [استلام · استكمال_البيانات · دراسة · منظورة]; a memo is
+  // an INDEPENDENT entity with its own lifecycle and the case path never mirrors
+  // it (the «مذكرة جارية» badge is what surfaces unfinished memo work).
+  // getStagesForClassification has returned the short path unconditionally since
+  // batch 15, so InCourtDefendantMemoStages / InCourtPlaintiffMemoStages were
+  // already unreachable; batch 26 deleted both arrays, and these five edges with
+  // them:
+  //     استلام → تحرير_مذكرة_جوابية · استكمال_البيانات → تحرير_مذكرة_جوابية
+  //     تحرير_مذكرة_جوابية → مراجعة_داخلية · مراجعة_داخلية → تحرير_مذكرة_جوابية
+  //     دراسة → تحرير_مذكرة_جوابية   (the "memo added late" bridge)
+  // ⚠ NOTHING IS STRANDED. Every `from` above keeps its other edges, and
+  // تحرير_مذكرة_جوابية — the only `to` that loses all of them — holds zero cases.
+  // Its enum member and label SURVIVE because production stage_history names it.
+  //
+  // ⚠ THE تحرير_صحيفة_الدعوى EDGES BELOW STAY, deliberately. That stage is still
+  // live on UnderStudyLaborStages; only its in-court home went away.
   { from: "استلام", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
   { from: "استكمال_البيانات", to: "تحرير_صحيفة_الدعوى", allowedRoles: ["assigned_lawyer", "department_head"] },
 
-  // ==================== IN-COURT PATH: no memo (study only) ====================
+  // ==================== IN-COURT PATH: study only ====================
   { from: "استكمال_البيانات", to: "دراسة", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "دراسة", to: "منظورة", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
-
-  // Dynamic bridge: if a memo is added after the case has already reached
-  // دراسة on the no-memo path, the progress bar needs to route دراسة → the
-  // appropriate drafting stage. (دراسة → تحرير_صحيفة_الدعوى is already in
-  // the common section for UNDER_STUDY cases and is reused here.)
-  { from: "دراسة", to: "تحرير_مذكرة_جوابية", allowedRoles: ["assigned_lawyer", "department_head", "branch_manager"] },
 
   // ==================== IN-COURT TERMINAL ====================
   // After review (with or without notes) an in-court case goes straight to
@@ -1520,9 +1502,9 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   // RESTS at محكوم_حكم_نهائي (b41553a): the collection / execution field tasks are
   // created there, and completing them closes the case DIRECTLY to مقفلة with
   // تم_التحصيل via maybeCloseCaseAfterPostJudgmentTasks. It must not detour through
-  // تحصيل, which belongs exclusively to the SETTLEMENT (مداولة_الصلح → تحصيل) and
-  // GRIEVANCE (انتظار_رد_التظلم → تحصيل) routes — the only two edges that create the
-  // collection task on entry.
+  // تحصيل, which belongs exclusively to the SETTLEMENT edge (مداولة_الصلح → تحصيل)
+  // and the GRIEVANCE endpoint (POST /api/cases/:id/grievance-accepted, مقفلة →
+  // تحصيل) — the only two entries that create the collection task.
   //
   // The edge was API-ONLY: no UI path ever offered it (محكوم_حكم_نهائي is in
   // TerminalCaseStages, so the stage bar suppresses the advance button, and both
@@ -2190,13 +2172,13 @@ function validateStageTransition(
     && entityData.departmentId === user.departmentId
     && !isAssignedLawyer({ id: user.id }, entityData);
 
-  // Internal review stages are locked: only the designated internal reviewer
-  // or the branch manager can transition out of them. HUMAN-ONLY (four-eyes) —
+  // The internal review stage is locked: only the designated internal reviewer
+  // or the branch manager can transition out of it. HUMAN-ONLY (four-eyes) —
   // intentionally NOT delegation-expanded.
-  if (
-    entityType === "case" &&
-    (currentStage === "مراجعة_داخلية" || currentStage === "مراجعة_داخلية_للتظلم")
-  ) {
+  // (This used to OR in مراجعة_داخلية_للتظلم. Batch 26 deleted that stage — the
+  // admin تظلم track runs on the plain مراجعة_داخلية below, so the lock covers it
+  // exactly as before.)
+  if (entityType === "case" && currentStage === "مراجعة_داخلية") {
     if (!isInternalReviewerHuman && !isOwnDeptHeadNonAuthorHuman && userRole !== "branch_manager") {
       return {
         allowed: false,
@@ -3556,7 +3538,7 @@ function isPostJudgmentTask(title: string | null | undefined): boolean {
 // is the mirror image: manual close is SEALED there (the تحصيل → مقفلة transition
 // rule is removed and the early-close shortcut excludes it), and this is the way out.
 // Both stages carry the same task shape — the settlement edge مداولة_الصلح → تحصيل and
-// the grievance edge انتظار_رد_التظلم → تحصيل each create a collection task, and the
+// the grievance endpoint's مقفلة → تحصيل each create a collection task, and the
 // judgment path creates collection (+ execution) tasks — so one rule serves all.
 //
 // Gate rules:
@@ -4254,9 +4236,11 @@ export async function registerRoutes(
         ...c,
         hasReturnedFromReview:
           Array.isArray(stageHistory) &&
-          stageHistory.some((t: any) =>
-            t?.stage === "مراجعة_داخلية" || t?.stage === "مراجعة_داخلية_للتظلم"
-          ),
+          // Batch 26 dropped the `|| t?.stage === "مراجعة_داخلية_للتظلم"` arm with
+          // that stage. Safe on a HISTORY scan specifically because the census
+          // proved zero stage_history entries name it — the test that let the
+          // stage go while تحرير_مذكرة_جوابية had to stay.
+          stageHistory.some((t: any) => t?.stage === "مراجعة_داخلية"),
         // DERIVED, never stored. There is no has_deed_attachment column and no
         // clearing code: the badge that reads this goes away the instant a file
         // row exists, and comes back the instant it is deleted, because the
@@ -4881,10 +4865,12 @@ export async function registerRoutes(
       // its target can only ever come from that path.
       //
       // BEHAVIOUR IS UNCHANGED FOR EVERY PATH THAT WORKED, verified array by
-      // array: in-court defendant+memo → تحرير_مذكرة_جوابية, plaintiff+memo →
-      // تحرير_صحيفة_الدعوى, in-court no-memo → دراسة, and General / Commercial /
-      // Labor / Admin-lawsuit → دراسة. The derivation reproduces the old ternary
-      // exactly; it just also gets the two cases the ternary got wrong.
+      // array: in-court → دراسة, and General / Commercial / Labor /
+      // Admin-lawsuit → دراسة. The derivation reproduces the old ternary exactly;
+      // it just also gets the two cases the ternary got wrong. (The two in-court
+      // MEMO arrays used to appear in this list, resolving to تحرير_مذكرة_جوابية
+      // and تحرير_صحيفة_الدعوى; batch 26 deleted them, so every in-court case now
+      // takes the single in-court answer above.)
       //
       // 🔴 THE indexOf GUARD IS LOAD-BEARING, and it is the trap the
       // committee-decision endpoint documents: `path[indexOf(x) + 1]` on a MISS
@@ -5327,8 +5313,8 @@ export async function registerRoutes(
         // nothing left to collect, so the automatic mechanism has nothing to fire
         // on. Two populations reach that state —
         //   • legacy cases already sitting at تحصيل from before this change, and
-        //     grievance-path cases that entered before the collection task was
-        //     added to انتظار_رد_التظلم → تحصيل (they carry no task at all);
+        //     grievance-path cases that entered over the old (now deleted)
+        //     انتظار_رد_التظلم edge before it created a collection task at all;
         //   • cases whose tasks are ALL resolved but whose auto-close did not land
         //     (the helper swallows its own errors) — here a manual close is simply
         //     a retry of what should already have happened.
@@ -5414,8 +5400,9 @@ export async function registerRoutes(
         }
         // ⚠ THE EXCLUSION LIST IS BACK TO ITS ORIGINAL FOUR STAGES. Batch 4b added
         // انتظار_رد_التظلم while that stage was on the array; the owner reverted
-        // the array, so the entry would now exempt a stage no admin path can reach
-        // — a dangling carve-out that could only ever weaken the guard.
+        // the array, so the entry would have exempted a stage no admin path can
+        // reach — a dangling carve-out that could only ever weaken the guard. That
+        // stage was deleted outright in batch 26, which settles it permanently.
         const isEarlyCloseStage =
           req.body.currentStage === "مقفلة" &&
           existing.currentStage !== "تحصيل" &&
@@ -5609,21 +5596,18 @@ export async function registerRoutes(
         // / labor settlement blocks. ناجز/معين acceptance still flows through
         // storage.updateCase:595 which syncs caseNumber := courtCaseNumber.)
 
-        // Before تقديم_التظلم: require grievanceDate
-        if (targetStage === "تقديم_التظلم") {
-          const gDate = req.body.grievanceDate || existing.grievanceDate;
-          if (!gDate) return res.status(400).json({ error: "يجب تحديد تاريخ التظلم" });
-        }
-
-        // ⚠ THE "require prescriptionDate when leaving تحديد_تاريخ_التقادم" GATE
-        // WAS DELETED HERE (batch 3). It became unreachable in batch 1, which
-        // removed تحديد_تاريخ_التقادم from both admin path arrays — no case can
-        // sit on that stage any more, so `existing.currentStage === …` can never
-        // be true. It is also superseded in substance: the prescription date is
-        // no longer typed by a lawyer at a dedicated stage, it is COMPUTED from
-        // the violation/grievance dates (computePrescriptionDate) and recomputed
-        // on every route that can change an input. The stage VALUE, its label and
-        // its two transition edges all survive for historical cases.
+        // ⚠ TWO GRIEVANCE-CHAIN GATES WERE DELETED HERE, both keyed on stages that
+        // no longer exist (batch 26):
+        //   • "require grievanceDate before تقديم_التظلم" — that stage is gone, and
+        //     the grievance date is captured by the violation-details editor and
+        //     validated by validateViolationDateOrder wherever it is written.
+        //   • "require prescriptionDate when leaving تحديد_تاريخ_التقادم" — already
+        //     removed in batch 3 as unreachable, and superseded in substance: the
+        //     prescription date is COMPUTED from the violation/grievance dates
+        //     (computePrescriptionDate) and recomputed on every route that can
+        //     change an input, never typed by a lawyer at a dedicated stage.
+        // Neither gate could fire once its stage became unreachable, so removing
+        // them with the stages changes nothing a live case can hit.
 
         // When الأخذ_بالملاحظات to جاهزة_للرفع: require reviewDecision describing
         // how the lawyer addressed the committee notes (one of three values).
@@ -5850,7 +5834,7 @@ export async function registerRoutes(
       // bootstrap the field.
       let activeReviewerForNotification: string | null = null;
       if (
-        (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
+        req.body.currentStage === "مراجعة_داخلية" &&
         existing.currentStage !== req.body.currentStage
       ) {
         const persistedReviewer: string | undefined =
@@ -5930,19 +5914,26 @@ export async function registerRoutes(
         // task itself is created AFTER storage.updateCase succeeds so we don't leave
         // orphan tasks on a failed transition.
         //
-        // ⚠ NOW COVERS BOTH ENTRY EDGES, not just settlement. تحصيل can no longer be
-        // closed by hand — it closes when its collection task resolves — so an entry
-        // edge that created NO task would strand the case. انتظار_رد_التظلم → تحصيل
-        // (the grievance path) created none and was exactly that dead end; it is
-        // included here now. The third entry edge, محكوم_حكم_نهائي → تحصيل, is NOT
-        // listed: those cases already carry the collection/execution tasks the
-        // judgment recording created, and adding a second collection task would make
-        // the auto-close wait on duplicated work.
+        // ⚠ SETTLEMENT IS THE ONLY ENTRY EDGE THIS HANDLER OWNS. تحصيل can no longer
+        // be closed by hand — it closes when its collection task resolves — so an
+        // entry edge that created NO task would strand the case. All three entry
+        // edges are accounted for, and only one of them is here:
+        //   • مداولة_الصلح → تحصيل — this branch.
+        //   • مقفلة → تحصيل (grievance accepted) — NOT here. It is not a PATCH at
+        //     all: POST /api/cases/:id/grievance-accepted writes the stage itself
+        //     and calls createCollectionTaskForCase(…, "grievance-accepted")
+        //     directly. This branch used to carry an `|| existing.currentStage ===
+        //     "انتظار_رد_التظلم"` arm for the OLD grievance edge; batch 26 deleted
+        //     that stage, and the arm with it. Nothing is lost — the dedicated
+        //     endpoint had already taken the work over, and it is the reason the
+        //     grievance wording still exists in the creator.
+        //   • محكوم_حكم_نهائي → تحصيل — deliberately NOT listed: those cases
+        //     already carry the collection/execution tasks the judgment recording
+        //     created, and a second collection task would make the auto-close wait
+        //     on duplicated work.
         shouldCreateCollectionTask =
-          req.body.currentStage === "تحصيل" && (
-            existing.currentStage === "مداولة_الصلح"
-            || existing.currentStage === "انتظار_رد_التظلم"
-          );
+          req.body.currentStage === "تحصيل"
+          && existing.currentStage === "مداولة_الصلح";
 
         // Settlement FAILED → litigation resumes (مداولة_الصلح → أغلق_طلب_الصلح):
         // create the defendant جوابية memo that POST /api/cases deliberately did
@@ -6001,14 +5992,14 @@ export async function registerRoutes(
 
       // Side effect for مداولة_الصلح → تحصيل: create the admin collection task.
       if (shouldCreateCollectionTask) {
-        await createCollectionTaskForCase(
-          updated,
-          user,
-          // The grievance wording for the OLD grievance edge. The batch-4 entry
-          // point (مقفلة → تحصيل on مسار التظلم) passes the same reason from its
-          // own endpoint — see createCollectionTaskForCase.
-          existing.currentStage === "انتظار_رد_التظلم" ? "grievance-accepted" : "settlement",
-        );
+        // ALWAYS "settlement" — the guard above admits exactly one origin stage.
+        // This argument used to be a ternary picking "grievance-accepted" when the
+        // origin was انتظار_رد_التظلم; batch 26 deleted that stage, so the ternary
+        // had one reachable arm left and became the constant it always resolved to.
+        // ⚠ THE "grievance-accepted" WORDING IS NOT DEAD and must stay in
+        // createCollectionTaskForCase: POST /api/cases/:id/grievance-accepted is
+        // its live caller and passes it explicitly.
+        await createCollectionTaskForCase(updated, user, "settlement");
       }
 
       // === سجل الأحكام — WRITE THE RULING ===
@@ -6175,14 +6166,16 @@ export async function registerRoutes(
         } catch (e) {}
       }
 
-      // Notify the active internal reviewer when transitioning into either
-      // مراجعة_داخلية or مراجعة_داخلية_للتظلم (covers both the initial assignment
-      // and re-entries after the lawyer revises following reviewer notes).
-      // Use activeReviewerForNotification — that's the one set above (override
-      // for this round if provided, otherwise the persisted intake reviewer).
+      // Notify the active internal reviewer when transitioning into مراجعة_داخلية
+      // (covers both the initial assignment and re-entries after the lawyer
+      // revises following reviewer notes). Use activeReviewerForNotification —
+      // that's the one set above (override for this round if provided, otherwise
+      // the persisted intake reviewer). The grievance twin مراجعة_داخلية_للتظلم
+      // was OR-ed in here until batch 26 deleted it; the admin تظلم track uses
+      // this same plain stage, so its reviewer is still notified.
       if (
         updated &&
-        (req.body.currentStage === "مراجعة_داخلية" || req.body.currentStage === "مراجعة_داخلية_للتظلم") &&
+        req.body.currentStage === "مراجعة_داخلية" &&
         existing.currentStage !== req.body.currentStage &&
         activeReviewerForNotification
       ) {
@@ -8920,10 +8913,16 @@ export async function registerRoutes(
       // ⚠ AN IN-COURT CASE CAN NONETHELESS REACH THIS STAGE, and this comment used to
       // deny it — it said the only known occurrence was corrupt seed data
       // (T-1010/T-1011, raw INSERTs that bypassed the state machine). That was wrong.
-      // InCourtDefendantMemoStages and InCourtPlaintiffMemoStages BOTH contain
-      // مراجعة_داخلية and إحالة_للجنة_المراجعة, so moveToNextStage walks an in-court
-      // case in through the ordinary UI. Production case 4870079661 (in-court,
-      // مدعى_عليه) did exactly that on 2026-08-05.
+      // The two in-court MEMO arrays BOTH contained مراجعة_داخلية and
+      // إحالة_للجنة_المراجعة, so moveToNextStage walked an in-court case in through
+      // the ordinary UI. Production case 4870079661 (in-court, مدعى_عليه) did
+      // exactly that on 2026-08-05.
+      //
+      // ⚠ THAT ROUTE IN IS NOW CLOSED — batch 26 deleted both arrays, and the short
+      // in-court path has neither committee stage — but the refusal below is NOT
+      // therefore dead: PATCH remains a flat from→to table with no classification
+      // awareness, and an in-court case can still be walked here by hand-rolled
+      // PATCH over the surviving edges. Keep it.
       //
       // THE REFUSAL BELOW STAYS ANYWAY, for a different reason than the old one: the
       // SKIP has a fixed جاهزة_للرفع target, which is the under-study post-committee
@@ -8981,14 +8980,15 @@ export async function registerRoutes(
   //
   // 🔴 THE MODEL IS POST /api/contracts/:id/skip-internal-review, which shipped
   // first (4970876) and is owner-approved. This is that endpoint restated for
-  // cases, with the two differences cases force: TWO origin stages, and a RESOLVED
-  // target. Nothing about /skip-committee is touched.
+  // cases, with the one difference cases force: a RESOLVED target. Nothing about
+  // /skip-committee is touched.
   //
-  // TWO ORIGIN STAGES, and both are required. Cases are the ONLY entity with two
-  // internal-review stages — CaseStage.INTERNAL_REVIEW (مراجعة_داخلية) on the
-  // ordinary paths and CaseStage.GRIEVANCE_INTERNAL_REVIEW (مراجعة_داخلية_للتظلم)
-  // on the admin تظلم track. Accepting only the first would leave every grievance
-  // case unable to use this action, with nothing on screen to explain why.
+  // ⚠ IT USED TO ACCEPT TWO ORIGIN STAGES, and the second is gone (batch 26).
+  // Cases were the only entity with two internal-review stages — the ordinary
+  // مراجعة_داخلية and the admin تظلم track's مراجعة_داخلية_للتظلم — and this
+  // endpoint named both so no grievance case would be locked out. That stage is
+  // now DELETED, and no grievance case is locked out: AdminGrievanceStages runs
+  // on the PLAIN مراجعة_داخلية, so the single guard below still admits them.
   //
   // 🔴 THE TARGET IS RESOLVED, NEVER HARDCODED (owner ruling). /skip-committee can
   // fix جاهزة_للرفع because it guards caseClassification === قيد_الدراسة, leaving
@@ -9031,8 +9031,7 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      if (lawCase.currentStage !== CaseStage.INTERNAL_REVIEW
-          && lawCase.currentStage !== CaseStage.GRIEVANCE_INTERNAL_REVIEW) {
+      if (lawCase.currentStage !== CaseStage.INTERNAL_REVIEW) {
         return res.status(400).json({ error: "القضية ليست في مرحلة المراجعة الداخلية" });
       }
       if (lawCase.pausedAt || lawCase.awaitingCompletion) {
@@ -16010,13 +16009,15 @@ export async function registerRoutes(
       // 🔴 WHICH PATHS ARE NEWLY REFUSED — measured, not assumed:
       //     HAVE مداولة_الصلح (unchanged): USGeneral, USCommercial, USLabor,
       //                                    InCourtSettlement
-      //     LACK it (newly refused):       USAdmin, InCourtDefendant,
-      //                                    InCourtPlaintiff, InCourtNoMemo
-      // ⚠ USAdmin IS IN THE SECOND GROUP. The admin path runs
-      // تحرير_صيغة_التظلم → … → انتظار_رد_التظلم → تحصيل and has NO مداولة_الصلح, so
-      // an admin case has no settlement-hearing flow to protect. Its collection
-      // route is the GRIEVANCE edge انتظار_رد_التظلم → تحصيل, which is a PATCH
-      // transition and never reaches this handler — so that flow is untouched.
+      //     LACK it (newly refused):       USAdmin (both tracks), InCourtNoMemo
+      //     (the two in-court MEMO arrays were also in this group; batch 26
+      //      deleted them — an in-court case now always resolves to InCourtNoMemo)
+      // ⚠ USAdmin IS IN THE SECOND GROUP. The grievance track runs
+      // تحرير_صيغة_التظلم → مراجعة_داخلية → جاهزة_للرفع → مقفلة and has NO
+      // مداولة_الصلح, so an admin case has no settlement-hearing flow to protect.
+      // Its collection route is POST /api/cases/:id/grievance-accepted (مقفلة →
+      // تحصيل), a dedicated endpoint that never reaches this handler — so that
+      // flow is untouched.
       //
       // Resolved with getStagesForClassification on the same five arguments used
       // everywhere else. departmentName is load-bearing here and not decorative:
@@ -19007,10 +19008,12 @@ export async function registerRoutes(
           relatedCase &&
           relatedCase.caseClassification === "منظورة_بالمحكمة"
         ) {
+          // تحرير_مذكرة_جوابية dropped with the stage (batch 26) — no case can be
+          // on it, so it could never match. The others stay: they remain reachable
+          // stage values for a case this branch can see.
           const FAST_FORWARD_STAGES = new Set([
             "استلام",
             "استكمال_البيانات",
-            "تحرير_مذكرة_جوابية",
             "تحرير_صحيفة_الدعوى",
             "مراجعة_داخلية",
           ]);
@@ -19094,9 +19097,9 @@ export async function registerRoutes(
             "استكمال_البيانات",
             "دراسة",
             // Also allow flipping off while the lawyer is actively in a
-            // memo/drafting stage — they may have created the memo by
-            // mistake and want to delete it and revert to study-only.
-            "تحرير_مذكرة_جوابية",
+            // drafting stage — they may have created the memo by mistake and
+            // want to delete it and revert to study-only. (تحرير_مذكرة_جوابية
+            // was listed here too and went with the stage in batch 26.)
             "تحرير_صحيفة_الدعوى",
           ]);
           const allMemos = await storage.getMemosByCase(memo.caseId);

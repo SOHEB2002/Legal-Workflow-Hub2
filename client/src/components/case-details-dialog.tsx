@@ -109,9 +109,11 @@ import type { LawCase, CaseStageValue, PriorityType, ClosureReasonValue, CaseJud
 // the dialog — the actions tab's "إرجاع من المراجعة الداخلية" block is its only
 // consumer (a drafting-stage history entry with notes alone is NOT sufficient:
 // data migration writes an initial drafting entry with notes "تهجير البيانات").
+// مراجعة_داخلية_للتظلم dropped with the stage in batch 26. This set is matched
+// against stage HISTORY (the actions tab's "إرجاع من المراجعة الداخلية" block), so
+// the member could only go because the census proved zero history entries name it.
 const REVIEW_LOOP_STAGES = new Set([
   "مراجعة_داخلية",
-  "مراجعة_داخلية_للتظلم",
 ]);
 
 // Moved here verbatim with the dialog — the info tab's priority badge is its

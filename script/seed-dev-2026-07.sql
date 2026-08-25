@@ -417,13 +417,19 @@ INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_st
                        pg_temp.sh('تحرير_صيغة_التظلم',5,'T_u_sara','سارة الدوسري')),
      '4','["T_u_sara"]','T_u_sara','T_u_sara','عالي','قيد_الدراسة',NULL,true,pg_temp.d(-14),0,'1'),
 
-  ('T_case_16','T-2016','T_cl_3','إداري','مرفوع','انتظار_رد_التظلم',
+  -- Admin مسار التظلم, parked at internal review. REWRITTEN IN BATCH 26: this row
+  -- used to sit at انتظار_رد_التظلم and walk مراجعة_داخلية_للتظلم / تقديم_التظلم /
+  -- انتظار_رد_التظلم in its history. All three stages were deleted (zero cases and
+  -- zero stage_history in PRODUCTION — this dev fixture was the only thing left
+  -- naming them), so the row now walks the LIVE AdminGrievanceStages path
+  -- [استلام · استكمال_البيانات · تحرير_صيغة_التظلم · مراجعة_داخلية · جاهزة_للرفع · مقفلة].
+  -- Left as-is it would have seeded a dev case parked off-path with unlabelled
+  -- history — exactly the failure this batch exists to prevent.
+  ('T_case_16','T-2016','T_cl_3','إداري','مرفوع','مراجعة_داخلية',
      jsonb_build_array(pg_temp.sh('استلام',45,'1','مدير الفرع'),
-                       pg_temp.sh('دراسة',40,'T_u_khaled','خالد الشهري'),
+                       pg_temp.sh('استكمال_البيانات',40,'T_u_khaled','خالد الشهري'),
                        pg_temp.sh('تحرير_صيغة_التظلم',30,'T_u_khaled','خالد الشهري'),
-                       pg_temp.sh('مراجعة_داخلية_للتظلم',22,'T_u_khaled','خالد الشهري'),
-                       pg_temp.sh('تقديم_التظلم',15,'T_u_khaled','خالد الشهري'),
-                       pg_temp.sh('انتظار_رد_التظلم',15,'T_u_khaled','خالد الشهري')),
+                       pg_temp.sh('مراجعة_داخلية',22,'T_u_khaled','خالد الشهري')),
      '4','["T_u_khaled"]','T_u_khaled','T_u_khaled','متوسط','قيد_الدراسة',NULL,true,pg_temp.d(-40),0,'1');
 
 -- ---- 4e. IN COURT + THE JUDGMENT LIFECYCLE --------------------------------

@@ -498,7 +498,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       stageHistory: [...lawCase.stageHistory, newTransition],
     };
 
-    if ((nextStage === "مراجعة_داخلية" || nextStage === "مراجعة_داخلية_للتظلم") && internalReviewerId) {
+    // The `|| … === "مراجعة_داخلية_للتظلم"` arm went with that stage in batch 26;
+    // the admin تظلم track uses this same plain stage, so its reviewer is still set.
+    if (nextStage === "مراجعة_داخلية" && internalReviewerId) {
       updateData.internalReviewerId = internalReviewerId;
     }
 
@@ -553,7 +555,8 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       currentStage: prevStage,
       stageHistory: [...lawCase.stageHistory, newTransition],
     };
-    if ((prevStage === "مراجعة_داخلية" || prevStage === "مراجعة_داخلية_للتظلم") && internalReviewerId) {
+    // Same single-stage rule as moveToNextStage above (batch 26).
+    if (prevStage === "مراجعة_داخلية" && internalReviewerId) {
       prevUpdateData.internalReviewerId = internalReviewerId;
     }
     await updateCase(id, prevUpdateData);

@@ -735,8 +735,9 @@ export default function MemosPage() {
       const relatedCase = cases.find(c => c.id === cancelMemoTarget.caseId);
       if (relatedCase) {
         const update: any = { memoRequired: false };
+        // تحرير_مذكرة_جوابية dropped with the stage in batch 26 (matched against
+        // currentStage, which no case can hold once the stage has no path).
         const earlyDraftingStages = new Set([
-          "تحرير_مذكرة_جوابية",
           "تحرير_صحيفة_الدعوى",
           "مراجعة_داخلية",
         ]);

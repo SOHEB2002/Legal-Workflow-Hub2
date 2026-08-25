@@ -1841,13 +1841,19 @@ export class DatabaseStorage implements IStorage {
       // never reached the column. law_cases.memo_required was therefore ALWAYS
       // false on a new case, no matter what the "مطلوب مذكرة" checkbox said.
       //
-      // WHY IT MATTERS MORE THAN THE THREE ABOVE: getStagesForClassification
-      // reads memoRequired on the منظورة_بالمحكمة branch, so a court case that
-      // needs a pleading resolved to InCourtNoMemoStages (استلام → استكمال_البيانات
-      // → دراسة → منظورة) instead of InCourtDefendantMemoStages /
-      // InCourtPlaintiffMemoStages. The memo was still created; the case's own
-      // path just forgot it needed one, and the drafting + internal-review +
-      // committee stages never appeared on it.
+      // WHY IT MATTERED MORE THAN THE THREE ABOVE: getStagesForClassification
+      // USED TO read memoRequired on the منظورة_بالمحكمة branch, so a court case
+      // that needed a pleading resolved to InCourtNoMemoStages (استلام →
+      // استكمال_البيانات → دراسة → منظورة) instead of one of the two in-court MEMO
+      // arrays. The memo was still created; the case's own path just forgot it
+      // needed one, and the drafting + internal-review + committee stages never
+      // appeared on it.
+      //
+      // ⚠ THAT CONSEQUENCE IS GONE, AND IT IS NOW THE INTENDED BEHAVIOUR. Batch 15
+      // made the short path unconditional and batch 26 deleted both memo arrays
+      // (owner ruling): an in-court case ALWAYS resolves to InCourtNoMemoStages,
+      // and a memo is an independent entity surfaced by the «مذكرة جارية» badge.
+      // The write below still matters for the OTHER readers of memoRequired.
       //
       // ⚠ THIS IS THE WRITE ONLY. Path resolution, the arrays and the two
       // create-time readers are untouched — they already behaved correctly from
@@ -4742,9 +4748,8 @@ export class DatabaseStorage implements IStorage {
     // The only way to hold استلام while closed is the raw-PATCH `status` write
     // documented on block 7, and these six stages share that exposure equally.
     //
-    // 🔴 أغلق_طلب_الصلح AND تحديد_تاريخ_التقادم ADDED (owner ruling). Both are
-    // unambiguously the lawyer's turn, established from the transition table
-    // rather than from the stage names:
+    // 🔴 أغلق_طلب_الصلح ADDED (owner ruling), unambiguously the lawyer's turn,
+    // established from the transition table rather than from the stage name:
     //   • أغلق_طلب_الصلح — settlement is over and the case must now be taken to
     //     court. ALL FOUR outbound edges admit assigned_lawyer (→ منظورة,
     //     → قيد_التدقيق_في_ناجز, → قيد_التدقيق_في_معين, → تحرير_صحيفة_الدعوى).
@@ -4757,16 +4762,17 @@ export class DatabaseStorage implements IStorage {
     //     here. (Belt and braces: for an under-study case getClientRoleLabel
     //     hard-returns "مدعي" before it ever reads the stored column, which is
     //     force-nulled at creation for that classification.)
-    //   • تحديد_تاريخ_التقادم — a single-purpose intake step (record the
-    //     limitation date). Its one outbound edge, → استكمال_البيانات, admits
-    //     assigned_lawyer. It is in CaseStagesOrder but in NO path array, so the
-    //     progress bar cannot render it — a separate, known finding that this
-    //     does not touch and does not depend on.
+    // (تحديد_تاريخ_التقادم was listed here for the same reason and is GONE — batch
+    // 26 deleted the stage. The limitation date is COMPUTED now, so there is no
+    // intake step to owe the lawyer. تحرير_مذكرة_جوابية is gone from this list too:
+    // batch 26 retired the in-court memo paths, leaving it on no path and no edge,
+    // so it can no longer be a case's current stage. Both were dropped because
+    // this list matches on currentStage — neither had a case to match.)
     //
     // ⚠ مداولة_الصلح IS DELIBERATELY ABSENT. Owner ruling: the only thing owed at
     // that stage is ATTENDING the settlement session, which hearing_attend already
     // covers, so its 19 cases are correctly silent. Do not add it here.
-    const LAWYER_WORK_STAGES = ["استلام", "تحديد_تاريخ_التقادم", "دراسة", "تحرير_صيغة_التظلم", "تحرير_صحيفة_الدعوى", "تحرير_مذكرة_جوابية", "الأخذ_بالملاحظات", "أغلق_طلب_الصلح"];
+    const LAWYER_WORK_STAGES = ["استلام", "دراسة", "تحرير_صيغة_التظلم", "تحرير_صحيفة_الدعوى", "الأخذ_بالملاحظات", "أغلق_طلب_الصلح"];
     {
       // Wrapped rather than repeated per arm: the pause guard applies to all
       // three scopes identically, so applying it ONCE here makes it impossible
@@ -5967,11 +5973,12 @@ export class DatabaseStorage implements IStorage {
     //         contract.departmentId, with !isAssignedLawyer inline.
     //         All three now 403 with "…المراجع الداخلي المعيَّن أو رئيس القسم أو مدير الفرع".
     //       • cases — NOT widened, and deliberately left out. A case review is a
-    //         STAGE TRANSITION, and every outbound edge from مراجعة_داخلية /
-    //         مراجعة_داخلية_للتظلم is allowedRoles ["internal_reviewer",
-    //         "branch_manager"] (routes.ts — eight edges, all identical). A head has
-    //         no authority there, so the case block below keeps the two-arm shape:
-    //         giving him visibility would hand him a button that always 403s.
+    //         STAGE TRANSITION, and every outbound edge from مراجعة_داخلية is
+    //         allowedRoles ["internal_reviewer", "branch_manager"] (routes.ts, all
+    //         identical). A head has no authority there, so the case block below
+    //         keeps the two-arm shape: giving him visibility would hand him a
+    //         button that always 403s. (The grievance twin مراجعة_داخلية_للتظلم
+    //         carried the same edges and was deleted in batch 26.)
     //
     //     So: THREE blocks get a deptHeadScoped middle arm, CASES does not. Each
     //     dept-head arm also carries notOwnWork(...) — see that helper for why
@@ -5997,16 +6004,20 @@ export class DatabaseStorage implements IStorage {
       // every UNASSIGNED record from the head's view.
       const notOwnWork = (col: AnyPgColumn) => sql`(${col} IS NULL OR ${col} <> ${uid})`;
 
+      // ONE stage since batch 26 deleted the grievance twin مراجعة_داخلية_للتظلم
+      // (this pair of inArray(…) calls listed both). The admin تظلم track sits on
+      // this same plain stage, so its reviews are still picked up.
       const caseReviewWhere = firmWideScoped
-        ? and(hasReviewer(lawCases.internalReviewerId), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
+        ? and(hasReviewer(lawCases.internalReviewerId), eq(lawCases.currentStage, "مراجعة_داخلية"),
             ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`, caseNotPaused)
-        : and(eq(lawCases.internalReviewerId, uid), inArray(lawCases.currentStage, ["مراجعة_داخلية", "مراجعة_داخلية_للتظلم"]),
+        : and(eq(lawCases.internalReviewerId, uid), eq(lawCases.currentStage, "مراجعة_داخلية"),
             ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`, caseNotPaused);
       const caseRows = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber,
           reviewerId: lawCases.internalReviewerId,
-          // currentStage is selected FOR THE AGE ARM: this block matches two
-          // stages (مراجعة_داخلية and مراجعة_داخلية_للتظلم), so the row must say
-          // which one it is sitting on before its entry time can be looked up.
+          // currentStage is selected FOR THE AGE ARM — stageEnteredAtIso needs the
+          // stage to look its entry time up in stageHistory. It is a constant now
+          // that this block matches a single stage, but reading it off the row
+          // keeps the lookup keyed on what the case actually holds.
           stage: lawCases.currentStage,
           stageHistory: sql<Array<{ stage?: string | null; timestamp?: string | null } | null> | null>`${lawCases.stageHistory}`,
         })

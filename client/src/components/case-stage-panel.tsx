@@ -305,26 +305,23 @@ export function CaseStagePanel({
         if (!user) return;
         // 🔴 THE DRAFTING STAGE IS NOT THE SAME ON EVERY PATH. This used to
         // hard-code تحرير_صحيفة_الدعوى for everything except the tazallum branch —
-        // but that is the PLAINTIFF pleading. An in-court مدعى_عليه case drafts
-        // تحرير_مذكرة_جوابية, so an internal reviewer sending a defendant case back
+        // but that is the PLAINTIFF pleading, and an in-court مدعى_عليه case drafted
+        // a جوابية memo, so an internal reviewer sending a defendant case back
         // landed it on the plaintiff drafting stage: the same class of defect as
         // the committee approve button, one stage earlier. The server accepts
-        // either, because ALLOWED_CASE_TRANSITIONS is a flat from→to table and
-        // BOTH edges out of مراجعة_داخلية exist in it.
+        // either, because ALLOWED_CASE_TRANSITIONS is a flat from→to table.
         //
         // Resolved from the case's OWN path instead: the send-back target is
-        // whatever sits immediately BEFORE مراجعة_داخلية in it. Measured across all
-        // six paths that have an internal-review stage, that predecessor is
-        // تحرير_مذكرة_جوابية on the in-court defendant path and تحرير_صحيفة_الدعوى
-        // on the other five — exactly the distinction the old ternary missed.
+        // whatever sits immediately BEFORE مراجعة_داخلية in it. (The in-court
+        // defendant path that motivated this was deleted in batch 26 — an in-court
+        // case has no internal-review stage at all now — so every surviving path
+        // answers تحرير_صحيفة_الدعوى or تحرير_صيغة_التظلم. The derivation is kept
+        // rather than re-hard-coded: it is what makes the admin تظلم track right.)
         //
         // The -1 case is SAFE here, unlike the committee target: a missing
         // مراجعة_داخلية makes indexOf return -1 and stages[-2] is undefined, so the
         // fallback genuinely fires rather than silently yielding stages[0].
         //
-        // The مراجعة_داخلية_للتظلم branch is untouched — the grievance review has
-        // exactly one origin (تحرير_صيغة_التظلم, admin path only) and no
-        // path-dependent variant to resolve.
         const resolveSendBackStage = (): string => {
           const stages = getStagesForClassification(
             (caseItem.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
@@ -334,19 +331,20 @@ export function CaseStagePanel({
             !!caseItem.isSettlementCase,
             caseItem.adminCaseSubType,
           );
-          // With the admin track passed in, this now yields the RIGHT send-back
-          // for both admin paths by position alone: تحرير_صيغة_التظلم on the
-          // grievance track, دراسة on the lawsuit track. The hard-coded
-          // مراجعة_داخلية_للتظلم branch below is unreachable for a new case (no
-          // path routes through that stage any more) and is kept only for a case
-          // that historically sits on it.
+          // With the admin track passed in, this yields the RIGHT send-back for
+          // both admin paths by position alone: تحرير_صيغة_التظلم on the grievance
+          // track, دراسة on the lawsuit track.
           const reviewIdx = stages.indexOf("مراجعة_داخلية");
           return reviewIdx > 0 ? stages[reviewIdx - 1] : "تحرير_صحيفة_الدعوى";
         };
-        const targetStage =
-          caseItem.currentStage === "مراجعة_داخلية_للتظلم"
-            ? "تحرير_صيغة_التظلم"
-            : resolveSendBackStage();
+        // 🔴 THE TERNARY THAT WRAPPED THIS IS GONE (batch 26). It special-cased
+        // `currentStage === "مراجعة_داخلية_للتظلم"` to hard-code تحرير_صيغة_التظلم,
+        // and its own comment already recorded that the branch was unreachable for
+        // a new case. That stage is now deleted, and the resolver returns the SAME
+        // answer for the grievance track by position — AdminGrievanceStages is
+        // [استلام · استكمال_البيانات · تحرير_صيغة_التظلم · مراجعة_داخلية · …], so
+        // stages[indexOf("مراجعة_داخلية") - 1] IS تحرير_صيغة_التظلم. Nothing changes.
+        const targetStage = resolveSendBackStage();
         setStageTransitioning(true);
         try {
           await updateCase(caseItem.id, {
@@ -459,9 +457,10 @@ export function CaseStagePanel({
       // its server target is fixed at جاهزة_للرفع, which is the under-study
       // post-committee stage and wrong for an in-court case. Here the server
       // DERIVES the target from the case's own resolved path, so an in-court case
-      // at مراجعة_داخلية (reachable through the ordinary UI —
-      // InCourtDefendantMemoStages contains that stage) is moved correctly along
-      // its own path instead of being refused.
+      // at مراجعة_داخلية (no longer reachable through the ordinary UI — batch 26
+      // deleted the two in-court memo arrays that carried that stage — but still
+      // reachable by hand-rolled PATCH) is moved correctly along its own path
+      // instead of being refused.
       //
       // FOUR-EYES DELIBERATELY DOES NOT APPLY (owner, explicitly): the assignee may
       // skip the review of their own draft; the mandatory reason and the activity

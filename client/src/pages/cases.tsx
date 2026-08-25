@@ -180,7 +180,9 @@ function getStageColor(stage: CaseStageValue | string) {
   switch (stage) {
     case CaseStage.RECEPTION:
       return "bg-primary/20 text-primary border-primary/30";
-    case CaseStage.PRESCRIPTION_DATE:
+    // CaseStage.PRESCRIPTION_DATE headed this arm and fell through to
+    // DATA_COMPLETION; batch 26 deleted it, so the colour is unchanged for the
+    // stage that remains.
     case CaseStage.DATA_COMPLETION:
       return "bg-amber-500/20 text-amber-600 border-amber-500/30";
     case CaseStage.STUDY:
@@ -188,11 +190,14 @@ function getStageColor(stage: CaseStageValue | string) {
     case CaseStage.SETTLEMENT_DIRECTION:
     case CaseStage.AWAITING_SETTLEMENT:
       return "bg-yellow-500/20 text-yellow-600 border-yellow-500/30";
+    // The other three grievance-chain labels (GRIEVANCE_INTERNAL_REVIEW,
+    // GRIEVANCE_SUBMITTED, GRIEVANCE_AWAITING) fell through to this same return
+    // and were deleted with their stages in batch 26.
     case CaseStage.GRIEVANCE_DRAFTING:
-    case CaseStage.GRIEVANCE_INTERNAL_REVIEW:
-    case CaseStage.GRIEVANCE_SUBMITTED:
-    case CaseStage.GRIEVANCE_AWAITING:
       return "bg-purple-500/20 text-purple-600 border-purple-500/30";
+    // MEMO_DRAFTING is KEPT even though no case can be on it — the stage survives
+    // as a history-only value, so a surface that colours a stage name must still
+    // have an answer for it.
     case CaseStage.DRAFTING:
     case CaseStage.MEMO_DRAFTING:
       return "bg-blue-500/20 text-blue-600 border-blue-500/30";
@@ -251,19 +256,20 @@ function getStageColor(stage: CaseStageValue | string) {
 // Within each group rows order by updatedAt DESC.
 //
 // "Action required from us" stages — internal workflow steps where
-// the firm owes work. Includes the parallel admin/grievance and
-// memo-jawabiyya drafting stages so a defendant case at
-// تحرير_مذكرة_جوابية surfaces alongside a plaintiff case at
-// تحرير_صحيفة_الدعوى.
+// the firm owes work. Includes the admin/grievance drafting stage so a
+// grievance case surfaces alongside a lawsuit case at تحرير_صحيفة_الدعوى.
+//
+// Both sets below are matched against a case's CURRENT stage, so batch 26
+// dropped every member no case can hold any more: تحرير_مذكرة_جوابية (retired to
+// history-only — no path, no edge) and مراجعة_داخلية_للتظلم / تقديم_التظلم /
+// انتظار_رد_التظلم (stages deleted outright).
 const ACTION_REQUIRED_FROM_US_STAGES = new Set([
   "استلام",
   "استكمال_البيانات",
   "دراسة",
   "تحرير_صحيفة_الدعوى",
-  "تحرير_مذكرة_جوابية",
   "تحرير_صيغة_التظلم",
   "مراجعة_داخلية",
-  "مراجعة_داخلية_للتظلم",
   "إحالة_للجنة_المراجعة",
   "الأخذ_بالملاحظات",
   "جاهزة_للرفع",
@@ -278,8 +284,6 @@ const WAITING_EXTERNAL_STAGES = new Set([
   "مداولة_الصلح",
   "أغلق_طلب_الصلح",
   "بانتظار_رفع_العميل_للتسوية",
-  "تقديم_التظلم",
-  "انتظار_رد_التظلم",
 ]);
 // Terminal stages — final outcomes. The set itself now lives in
 // shared/schema.ts (TerminalCaseStages) because the stage progress bar needs
