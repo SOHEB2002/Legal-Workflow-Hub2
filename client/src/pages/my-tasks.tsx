@@ -14,7 +14,7 @@ import {
   Scale, Gavel, FileText, ClipboardList, ClipboardCheck, AlertTriangle,
   UserPlus, CheckSquare, Phone, FileSignature, Stamp, CalendarClock, FileDown, Users, Plus,
   ChevronDown, ChevronLeft, ListChecks, Clock, Archive, Send, Eye, Briefcase, Paperclip, PauseCircle,
-  MessageSquare,
+  MessageSquare, Pencil, Ban,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { hasEffectiveRole, isDeptHeadFor, type ActingIdentity } from "@/lib/acting-identities";
@@ -41,6 +41,7 @@ import {
   MyTaskKind, TaskSpecialty, TaskSpecialtyLabels, FieldTaskStatus, FieldTaskType, InternalReviewDecision,
   AssignableAdminSupportTaskKind, FollowUpStatus,
   GeneralTaskEventType, GeneralTaskEventTypeLabels, DelegationReasonLabels,
+  isGuardedFieldTaskTitle,
   type MyTaskItem, type MyTaskKindValue, type MyTaskActionHint, type MyTaskEntityType, type TaskSpecialtyValue, type Hearing, type LawCase, type Memo, type MemoStageValue,
   type GeneralTaskEventTypeValue, type FieldTask, type DelegationRecord,
 } from "@shared/schema";
@@ -243,6 +244,63 @@ function canActingUserAct(
   if (task.ownerScope === "self") return true;
   if (hasEffectiveRole(identities, "branch_manager")) return true;
   return isDeptHeadFor(identities, task.departmentId);
+}
+
+// ==================== BATCH 27 — edit / cancel a STORED field task ====================
+// 🔴 STORED ONLY. مهامي renders two kinds of row: DERIVED items computed at read
+// time from entity state (تابع استلام صك الحكم, مراجعة داخلية بانتظارك, the صك and
+// ضبط rows) and rows backed by an actual field_tasks record. A derived row has no
+// row to edit and no id to edit it by, so the discriminator is the feed item's own
+// entityType — "field_task" is emitted by exactly the five stored blocks.
+//
+// 🔴 AGENCY-ISSUANCE IS EXCLUDED BY KIND, and this is the ruling-5 exclusion. That
+// block emits ONE row per (owner, client) GROUP: its id is
+// `agency_issuance:<sorted member ids>` and its entityId is g[0].id — the FIRST
+// member only, with the rest in groupMemberIds. A control keyed on entityId would
+// therefore edit or cancel one of N tasks and silently leave the others, which is
+// worse than offering nothing. Excluded on the KIND rather than on
+// `groupMemberIds?.length` because hearings group the same way for a different
+// reason: naming the kind says WHICH feature is excluded and why.
+//
+// The stored row must also be IN HAND (getTaskById) — the six fields the form
+// edits live on the record, not on the feed item. That is a fail-closed gate and
+// it aligns with the server: GET /api/field-tasks scopes to managers → all,
+// dept_head → own-department cases + own + created, everyone else → assigned or
+// created. So anyone entitled to edit a task already has it loaded.
+function fieldTaskRowIsEditable(
+  task: MyTaskItem,
+  storedTask: FieldTask | undefined,
+): storedTask is FieldTask {
+  if (task.entityType !== "field_task") return false;
+  if (task.kind === MyTaskKind.AGENCY_ISSUANCE) return false;
+  if (!storedTask) return false;
+  // The terminal gate, mirroring the server's — tested on the STATUS, which is
+  // what every terminal test in this codebase reads, and treating ملغي as just as
+  // terminal as مكتمل.
+  if (storedTask.status === FieldTaskStatus.COMPLETED) return false;
+  if (storedTask.status === FieldTaskStatus.CANCELLED) return false;
+  return true;
+}
+
+// The AUTHORITY mirror for those two controls. The server gate is
+//   assignee OR canModifyCase/canModifyConsultation(parent) OR manager-assigning
+//   OR the creator (assigned_by) — the last one narrowed to these two actions.
+// canActingUserAct already models "the row's own actor / branch_manager /
+// dept-head of the record's department", which covers the assignee and the
+// overseer arms; admin_support and the creator are added here to complete it.
+//
+// ⚠ assigned_by is "system" on scheduler-created rows, which matches no user id,
+// so the creator arm grants nothing there — the same fail-closed answer the
+// server gives, for the same reason: nobody created an automatic task.
+function canEditFieldTaskRow(
+  task: MyTaskItem,
+  storedTask: FieldTask,
+  identities: ActingIdentity[],
+  userId: string | undefined,
+): boolean {
+  if (canActingUserAct(task, identities)) return true;
+  if (hasEffectiveRole(identities, "admin_support")) return true;
+  return !!userId && !!storedTask.assignedBy && storedTask.assignedBy === userId;
 }
 
 // The kinds whose server gate has EXACTLY the shape canActingUserAct models, so
@@ -766,19 +824,22 @@ function GeneralTaskThread({ taskId }: { taskId: string }) {
   );
 }
 
-function TaskRow({ task, onAction, onDetails, onOpenCase }: {
+function TaskRow({ task, onAction, onDetails, onOpenCase, onEditTask, onCancelTask }: {
   task: MyTaskItem;
   onAction: (t: MyTaskItem) => void;
   onDetails: (t: MyTaskItem) => void;
   onOpenCase: (t: MyTaskItem) => void;
+  onEditTask: (t: FieldTask) => void;
+  onCancelTask: (t: FieldTask) => void;
 }) {
   const meta = KIND_META[task.kind];
   const Icon = meta?.icon ?? ClipboardList;
   const { getTaskById } = useFieldTasks();
   const { departments } = useDepartments();
-  // `user` is no longer destructured here: canActingUserAct was the only reader
-  // and it now takes the acting identity set instead of the signed-in user.
-  const { users, actingIdentities } = useAuth();
+  // `user` IS destructured again (batch 27): the edit/cancel authority mirror
+  // needs the signed-in id for its creator arm. canActingUserAct still takes the
+  // acting identity set, unchanged.
+  const { user, users, actingIdentities } = useAuth();
   // General (عام) task context lives on the full field task, not the feed item:
   // WHO requested it (originalRequesterId, written once at creation; assignedBy as
   // a fallback) and its free-text details (description). Surface both so the actor
@@ -787,6 +848,14 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
   const requesterId = generalFt?.originalRequesterId || generalFt?.assignedBy || "";
   const requesterName = requesterId ? (users.find((u) => u.id === requesterId)?.name || requesterId) : "";
   const generalDetails = generalFt?.description?.trim() || "";
+  // Batch 27 — the STORED record behind this row, for the edit/cancel controls.
+  // Looked up for every field_task row (the general lookup above is narrower: it
+  // only runs for GENERAL_KINDS). Both read the same context cache, so the second
+  // call costs nothing.
+  const storedFt = task.entityType === "field_task" ? getTaskById(task.entityId) : undefined;
+  const showTaskControls =
+    fieldTaskRowIsEditable(task, storedFt)
+    && canEditFieldTaskRow(task, storedFt, actingIdentities, user?.id);
   // Dept-routed (path-2) context: show which department the task is flowing
   // through so the head and the requester have it at a glance. Only path-2
   // general tasks carry routedDepartmentId; every other kind leaves it null.
@@ -922,6 +991,35 @@ function TaskRow({ task, onAction, onDetails, onOpenCase }: {
           <Briefcase className="h-4 w-4" />
         </Button>
       )}
+      {/* Batch 27 — edit + cancel, on STORED field tasks only (see
+          fieldTaskRowIsEditable for the stored-vs-derived discriminator, the
+          agency-issuance group exclusion and the terminal gate, and
+          canEditFieldTaskRow for the authority mirror). Ghost + secondary like the
+          two buttons around them, so the primary action stays dominant. */}
+      {showTaskControls && storedFt && (
+        <>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onEditTask(storedFt)}
+            title="تعديل المهمة"
+            aria-label="تعديل المهمة"
+            data-testid={`task-edit-${task.id}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onCancelTask(storedFt)}
+            title="إلغاء المهمة"
+            aria-label="إلغاء المهمة"
+            data-testid={`task-cancel-${task.id}`}
+          >
+            <Ban className="h-4 w-4 text-destructive" />
+          </Button>
+        </>
+      )}
       {/* General (عام) tasks: a "تفاصيل" eye button → full requester + description +
           linked entity (the card can't fit a long description or the entity link). */}
       {GENERAL_KINDS.has(task.kind) && (
@@ -1027,7 +1125,7 @@ export default function MyTasksPage() {
   // For the GENERAL_TASK_REVIEW modal — the worker's result (completionNotes) +
   // workerId live on the full field task, not the feed item; the field-tasks
   // context already has it loaded app-wide (the requester is assignedTo/assignedBy).
-  const { getTaskById } = useFieldTasks();
+  const { getTaskById, updateFieldTask, cancelTask } = useFieldTasks();
   // Entity lists for resolving a general task's linked entity in the تفاصيل view;
   // getCaseById also backs the case-details modal opened from a task row.
   const { cases, getCaseById } = useCases();
@@ -1110,6 +1208,18 @@ export default function MyTasksPage() {
     deptId: "", assigneeId: "",
   });
   const [creating, setCreating] = useState(false);
+  // Batch 27 — edit / cancel a stored field task, in place on مهامي.
+  // editTask holds the ORIGINAL record (for the guarded-title test, the
+  // same-type link constraint and the "what changed" comparison); editForm holds
+  // the draft. cancelTask holds the record awaiting confirmation.
+  const [editTask, setEditTask] = useState<FieldTask | null>(null);
+  const [editForm, setEditForm] = useState({
+    title: "", description: "", dueDate: "", priority: "متوسط",
+    linkType: "none" as LinkType, linkId: "", assigneeId: "",
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [cancelTaskTarget, setCancelTaskTarget] = useState<FieldTask | null>(null);
+  const [cancellingTask, setCancellingTask] = useState(false);
   // ONE Set for every collapsible group on the page. It holds the keys whose
   // state DIFFERS FROM THEIR DEFAULT — not the collapsed ones.
   //
@@ -1350,6 +1460,101 @@ export default function MyTasksPage() {
     // "/api/", so invalidate it explicitly — keeps the thread current after a
     // worker-complete / requester send-back / close.
     await queryClient.invalidateQueries({ queryKey: ["field-task-events"] });
+  }
+
+  // ---- batch 27: edit / cancel a stored field task ----
+  // The four link columns map 1:1 onto EntityLinkPicker's LinkType (documented at
+  // the component). Whichever column is non-null IS the task's type, and the form
+  // offers only that one — see the picker's `types` prop at the render below.
+  function linkTypeOf(t: FieldTask): LinkType {
+    if (t.caseId) return "case";
+    if (t.consultationId) return "consultation";
+    if (t.contractId) return "contract";
+    if (t.clientId) return "client";
+    return "none";
+  }
+
+  function openEditTask(t: FieldTask) {
+    const lt = linkTypeOf(t);
+    setEditForm({
+      title: t.title || "",
+      description: t.description || "",
+      dueDate: t.dueDate || "",
+      priority: t.priority || "متوسط",
+      linkType: lt,
+      linkId: (lt === "case" ? t.caseId : lt === "consultation" ? t.consultationId
+        : lt === "contract" ? t.contractId : lt === "client" ? t.clientId : "") || "",
+      assigneeId: t.assignedTo || "",
+    });
+    setEditTask(t);
+  }
+
+  async function submitEditTask() {
+    if (!editTask) return;
+    const title = editForm.title.trim();
+    if (!title) {
+      toast({ title: "العنوان مطلوب", variant: "destructive" });
+      return;
+    }
+    if (!editForm.dueDate) {
+      toast({ title: "تاريخ الاستحقاق مطلوب", variant: "destructive" });
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      // ⚠ THE BODY CARRIES ONLY THE SIX EDITABLE FIELDS AND NEVER `status`. That
+      // is not cosmetic: the server classifies this PATCH as an EDIT by exactly
+      // that shape (every key within FieldTaskEditableFields, no status), and the
+      // classification is what admits the creator arm and applies the guarded-title
+      // and same-type rules. Adding status here would make it an unclassified PATCH
+      // and silently drop the creator's authority to send it.
+      //
+      // The link column is written on the SAME field the task already uses —
+      // linkType is locked to the original, so this can only ever rewrite one
+      // column and never introduce a second.
+      const payload: Partial<FieldTask> = {
+        // A guarded task's title input is disabled, so this resends the original
+        // value unchanged and the server's titleChanged test is false.
+        title,
+        description: editForm.description,
+        dueDate: editForm.dueDate,
+        priority: editForm.priority as FieldTask["priority"],
+        assignedTo: editForm.assigneeId,
+      };
+      if (editForm.linkType === "case") payload.caseId = editForm.linkId;
+      else if (editForm.linkType === "consultation") payload.consultationId = editForm.linkId;
+      else if (editForm.linkType === "contract") payload.contractId = editForm.linkId;
+      else if (editForm.linkType === "client") payload.clientId = editForm.linkId;
+      await updateFieldTask(editTask.id, payload);
+      toast({ title: "تم تعديل المهمة" });
+      setEditTask(null);
+      await refreshAfterAction();
+    } catch (err) {
+      toast({ title: "تعذّر تعديل المهمة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function confirmCancelTask() {
+    if (!cancelTaskTarget) return;
+    setCancellingTask(true);
+    try {
+      // REUSED, not reinvented: cancelTask is the context's existing helper and it
+      // PATCHes exactly { status: ملغي } — the same single-field write the five
+      // server-side cancellation sites perform, and precisely the shape the
+      // endpoint recognises as a cancel. No reason and no notification: the owner
+      // ruled cancellation carries no reason, and the memo cancel endpoints this
+      // mirrors send nothing.
+      await cancelTask(cancelTaskTarget.id);
+      toast({ title: "تم إلغاء المهمة" });
+      setCancelTaskTarget(null);
+      await refreshAfterAction();
+    } catch (err) {
+      toast({ title: "تعذّر إلغاء المهمة", description: extractApiError(err), variant: "destructive" });
+    } finally {
+      setCancellingTask(false);
+    }
   }
 
   async function submitAction() {
@@ -1676,7 +1881,8 @@ export default function MyTasksPage() {
         {open && (
           <div className="space-y-2">
             {items.map((t) => (
-              <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails} />
+              <TaskRow key={t.id} task={t} onAction={handleAction} onDetails={setDetailsTask} onOpenCase={openCaseDetails}
+                onEditTask={openEditTask} onCancelTask={setCancelTaskTarget} />
             ))}
           </div>
         )}
@@ -2391,6 +2597,108 @@ export default function MyTasksPage() {
       </Dialog>
 
       {/* ===== Create dialog ===== */}
+      {/* ===== Batch 27 — edit a stored field task ===== */}
+      <Dialog open={!!editTask} onOpenChange={(o) => { if (!o) setEditTask(null); }}>
+        <DialogContent dir="rtl" data-testid="dialog-edit-task">
+          <DialogHeader><DialogTitle>تعديل المهمة</DialogTitle></DialogHeader>
+          {editTask && (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label>العنوان</Label>
+                {/* 🔴 DISABLED ON A GUARDED TASK, with the reason on screen. The
+                    server refuses the same edit through isGuardedFieldTaskTitle —
+                    ONE shared helper over ONE prefix list — so this input can never
+                    offer something the endpoint would 400. Every other field on a
+                    guarded task stays fully editable. */}
+                <Input
+                  value={editForm.title}
+                  disabled={isGuardedFieldTaskTitle(editTask.title)}
+                  onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                  data-testid="input-edit-title"
+                />
+                {isGuardedFieldTaskTitle(editTask.title) && (
+                  <p className="text-xs text-muted-foreground">
+                    عنوان هذه المهمة يحدّد نوعها ومسارها ولا يمكن تعديله — بقية الحقول قابلة للتعديل
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1"><Label>الوصف (اختياري)</Label>
+                <Textarea value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} data-testid="input-edit-description" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1"><Label>تاريخ الاستحقاق</Label>
+                  <HijriDatePicker value={editForm.dueDate} onChange={(v) => setEditForm({ ...editForm, dueDate: v })} data-testid="input-edit-due" /></div>
+                <div className="space-y-1"><Label>الأولوية</Label>
+                  <Select value={editForm.priority} onValueChange={(v) => setEditForm({ ...editForm, priority: v })}>
+                    <SelectTrigger data-testid="select-edit-priority"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="عاجل">عاجل</SelectItem><SelectItem value="عالي">عالي</SelectItem>
+                      <SelectItem value="متوسط">متوسط</SelectItem><SelectItem value="منخفض">منخفض</SelectItem>
+                    </SelectContent>
+                  </Select></div>
+              </div>
+              {/* 🔴 SAME-TYPE ONLY, enforced in the UI by handing the picker a
+                  ONE-MEMBER `types` list — the task's current link type. So the
+                  type dropdown cannot be changed and only records of that type are
+                  offered; a case task moves to another CASE. The server enforces
+                  the same rule independently (it rewrites only the column that is
+                  already non-null). A task linked to nothing offers no picker at
+                  all rather than an empty one. */}
+              {linkTypeOf(editTask) !== "none" ? (
+                <EntityLinkPicker
+                  linkType={editForm.linkType}
+                  linkId={editForm.linkId}
+                  types={[linkTypeOf(editTask)]}
+                  label="السجل المرتبط"
+                  onChange={(linkType, linkId) => setEditForm({ ...editForm, linkType, linkId })}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">هذه المهمة غير مرتبطة بسجل — لا يمكن ربطها لاحقاً</p>
+              )}
+              <div className="space-y-1"><Label>المكلَّف</Label>
+                <Select value={editForm.assigneeId || "none"} onValueChange={(v) => setEditForm({ ...editForm, assigneeId: v === "none" ? "" : v })}>
+                  <SelectTrigger data-testid="select-edit-assignee"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">غير مسندة</SelectItem>
+                    {personOptions.map((u) => (<SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>))}
+                  </SelectContent>
+                </Select></div>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEditTask(null)}>إلغاء</Button>
+            <Button onClick={submitEditTask} disabled={savingEdit} data-testid="button-submit-edit-task">
+              {savingEdit ? "جارٍ الحفظ…" : "حفظ"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Batch 27 — cancel a stored field task ===== */}
+      {/* NO REASON FIELD, deliberately (owner ruling): field_tasks has no
+          cancellation_reason column, the five existing cancellation sites write the
+          status and nothing else, and inventing a home for the text would have
+          meant either DDL or misfiling it under completion_notes — which the row
+          renders to users as «النتيجة». A confirmation step, not a form. */}
+      <Dialog open={!!cancelTaskTarget} onOpenChange={(o) => { if (!o) setCancelTaskTarget(null); }}>
+        <DialogContent dir="rtl" data-testid="dialog-cancel-task">
+          <DialogHeader><DialogTitle>إلغاء المهمة</DialogTitle></DialogHeader>
+          {cancelTaskTarget && (
+            <div className="space-y-2">
+              <p className="text-sm"><BidiText>{cancelTaskTarget.title}</BidiText></p>
+              <p className="text-sm text-muted-foreground">
+                سيتم تعليم المهمة كملغاة وستختفي من قائمة المهام. لا يمكن التراجع عن هذا الإجراء.
+              </p>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setCancelTaskTarget(null)}>تراجع</Button>
+            <Button variant="destructive" onClick={confirmCancelTask} disabled={cancellingTask} data-testid="button-confirm-cancel-task">
+              {cancellingTask ? "جارٍ الإلغاء…" : "إلغاء المهمة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent dir="rtl" data-testid="dialog-create-task">
           <DialogHeader><DialogTitle>إضافة مهمة</DialogTitle></DialogHeader>

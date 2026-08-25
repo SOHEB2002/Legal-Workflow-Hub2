@@ -103,6 +103,10 @@ import {
   getStagesForClassification,
   CollectionTaskTitlePrefix,
   ExecutionTaskTitlePrefix,
+  AgencyIssuanceTaskTitlePrefix,
+  isGuardedFieldTaskTitle,
+  FieldTaskEditableFields,
+  FieldTaskLinkFields,
   getReopenTargetStages,
   AdminCaseSubType,
   computePrescriptionDate,
@@ -923,9 +927,10 @@ async function resolveFieldTaskOwnerIds(
 ): Promise<{ ownerIds: string[]; taskType: string }> {
   const isCollection = task.title.startsWith(CollectionTaskTitlePrefix);
   const isExecution = task.title.startsWith(ExecutionTaskTitlePrefix);
-  // No named constant exists for this prefix — feed blocks 8 and 18 both match
-  // the literal, so matching it here keeps all three in step.
-  const isAgencyIssuance = task.title.startsWith("إصدار وكالة");
+  // Batch 27 gave this prefix a name (AgencyIssuanceTaskTitlePrefix) and put it in
+  // the shared GuardedFieldTaskTitlePrefixes list with the other three. It was a
+  // bare literal here and in getMyTasks block 18; same value, one source now.
+  const isAgencyIssuance = task.title.startsWith(AgencyIssuanceTaskTitlePrefix);
   if (!isCollection && !isExecution && !isAgencyIssuance) {
     return {
       ownerIds: [task.assignedTo || ""],
@@ -17911,8 +17916,100 @@ export async function registerRoutes(
         existingTask.assignedTo === "" &&
         typeof req.body.assignedTo === "string" && req.body.assignedTo.length > 0 &&
         actsAsManager;
-      if (existingTask.assignedTo !== user.id && !canModifyParent && !isUnassignedAssign) {
+
+      // ==================== BATCH 27 — EDIT / CANCEL FROM مهامي ====================
+      // Two new actions on this endpoint, and everything below is scoped to them.
+      // The request is classified FIRST because the creator arm and the terminal
+      // gate both depend on WHICH action this PATCH is:
+      //   EDIT   — one or more of the six editable fields, and no `status`.
+      //   CANCEL — `status: ملغي` and nothing else.
+      // A PATCH that is neither (complete, start, submit a result, the general
+      // lifecycle) is untouched by every rule in this block.
+      const bodyKeys = Object.keys(req.body ?? {});
+      const isCancelRequest =
+        req.body?.status === FieldTaskStatus.CANCELLED &&
+        bodyKeys.every((k) => k === "status");
+      const isEditRequest =
+        !bodyKeys.includes("status") &&
+        bodyKeys.length > 0 &&
+        bodyKeys.every((k) => (FieldTaskEditableFields as readonly string[]).includes(k));
+
+      // 🔴 THE CREATOR ARM IS NARROW BY CONSTRUCTION, and that is the point. The
+      // owner ruled "extend this gate with a creator arm" rather than build a
+      // second endpoint — but this PATCH is also how a task is STARTED, COMPLETED
+      // and run through the whole general (عام) lifecycle. A blanket creator arm
+      // would hand the creator every one of those actions as a side effect, which
+      // is a widening nobody asked for. Gating it on the classification above
+      // grants the creator EXACTLY the two actions this batch adds and nothing
+      // else: a creator who is neither the assignee nor an overseer still cannot
+      // complete the task or submit a result.
+      //
+      // assigned_by IS the creator column — NOT NULL, stamped from the actor for
+      // every task type at creation. Scheduler-created rows carry the literal
+      // "system", which matches no user id, so this arm grants nothing on them.
+      // It fails closed, which is correct: nobody "created" an automatic task.
+      const isCreatorAction =
+        !!existingTask.assignedBy &&
+        existingTask.assignedBy === user.id &&
+        (isEditRequest || isCancelRequest);
+
+      if (existingTask.assignedTo !== user.id && !canModifyParent && !isUnassignedAssign && !isCreatorAction) {
         return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
+      }
+
+      if (isEditRequest || isCancelRequest) {
+        // TERMINAL GATE — a finished task is a record, not a work item. Tested on
+        // the STATUS, matching every other terminal test in the codebase
+        // (getArchivedGeneralTasks, the post-judgment resolved test, the تحصيل
+        // zero-outstanding escape) — all of which read status and treat ملغي as
+        // just as terminal as مكتمل. completed_at exists but is a stamp, not the
+        // state: it is written BY the status transition, so gating on it would
+        // add a second source of truth for one fact.
+        if (existingTask.status === FieldTaskStatus.COMPLETED) {
+          return res.status(400).json({ error: "لا يمكن تعديل أو إلغاء مهمة مكتملة" });
+        }
+        if (existingTask.status === FieldTaskStatus.CANCELLED) {
+          return res.status(400).json({ error: "المهمة ملغاة بالفعل" });
+        }
+      }
+
+      if (isEditRequest) {
+        // 🔴 TITLE IS A DISCRIMINATOR ON FOUR TASK FAMILIES — refused, not silently
+        // dropped. isGuardedFieldTaskTitle is the SHARED test over the one prefix
+        // list in schema.ts; the client disables the input against the same helper,
+        // so this 400 should be unreachable through the UI and exists for the API.
+        // Renaming one of these moves the row out of its feed block AND stops the
+        // parent case ever auto-closing — see the list's own comment.
+        const titleChanged =
+          typeof req.body.title === "string" && req.body.title !== existingTask.title;
+        if (titleChanged && isGuardedFieldTaskTitle(existingTask.title)) {
+          return res.status(400).json({
+            error: "لا يمكن تعديل عنوان هذه المهمة — العنوان يحدّد نوعها ومسارها. بقية الحقول قابلة للتعديل",
+          });
+        }
+
+        // 🔴 SAME-TYPE RULE. field_tasks has FOUR nullable link columns and no
+        // entity_type, so "the linked entity" is whichever one is non-null. The
+        // rule as implemented: the request may rewrite THE COLUMN THAT IS ALREADY
+        // SET, and may not set any other one. Moving a case task to another case
+        // is allowed; turning it into a consultation task is not — that means
+        // deleting the task and creating a new one (owner ruling).
+        //
+        // Reads the CURRENT link off the stored row, never off the body, so a
+        // request that clears one column and sets another in the same PATCH is
+        // still judged against what the task actually is today.
+        const currentLinkField = FieldTaskLinkFields.find((f) => !!existingTask[f]);
+        const attemptedLinkFields = FieldTaskLinkFields.filter(
+          (f) => typeof req.body[f] === "string" && req.body[f].length > 0,
+        );
+        const foreignLink = attemptedLinkFields.find((f) => f !== currentLinkField);
+        if (foreignLink) {
+          return res.status(400).json({
+            error: currentLinkField
+              ? "لا يمكن نقل المهمة إلى نوع مختلف — يمكن نقلها ضمن نفس النوع فقط"
+              : "لا يمكن ربط مهمة غير مرتبطة بسجل جديد",
+          });
+        }
       }
       // Batch 1.5b — OBSERVE ONLY, after the gate has already passed. Nothing
       // below this line is conditional on it. Deliberately NOT applied to the
@@ -18007,6 +18104,58 @@ export async function registerRoutes(
           });
         } catch (e) {
           console.error("[field-tasks PATCH] general-task event write failed:", e);
+        }
+      }
+
+      // BATCH 27 — the audit row for the two new actions. Same writer, same shape
+      // and same best-effort try/catch as the RESULT_SUBMITTED write directly
+      // above; the only difference is that these fire for EVERY task type, not
+      // just عام (see the widened contract on the general_task_events table).
+      //
+      // EDIT records the field-by-field diff — what changed, from what to what —
+      // built from the values that actually landed (`updated`) against the row as
+      // it was (`existingTask`), so a field the storage layer normalised or
+      // ignored cannot be reported as a change that did not happen.
+      // CANCEL records no body: the owner ruled cancellation carries no reason,
+      // and actor + timestamp are columns on the row itself.
+      if (isEditRequest) {
+        try {
+          const labels: Record<string, string> = {
+            title: "العنوان", description: "الوصف", assignedTo: "المكلَّف",
+            dueDate: "تاريخ الاستحقاق", priority: "الأولوية",
+            caseId: "القضية المرتبطة", consultationId: "الاستشارة المرتبطة",
+            contractId: "العقد المرتبط", clientId: "العميل المرتبط",
+          };
+          const shown = (v: unknown) => {
+            const s = String(v ?? "").trim();
+            return s === "" ? "—" : s;
+          };
+          const diff = FieldTaskEditableFields
+            .filter((f) => bodyKeys.includes(f))
+            .map((f) => [f, existingTask[f], updated[f]] as const)
+            .filter(([, before, after]) => shown(before) !== shown(after))
+            .map(([f, before, after]) => `${labels[f] ?? f}: «${shown(before)}» ← «${shown(after)}»`)
+            .join(" · ");
+          // A PATCH that set every field to what it already held changes nothing;
+          // an empty diff row would assert an edit that did not occur.
+          if (diff) {
+            await createGeneralTaskEventActing(req, updated.caseId, {
+              fieldTaskId: updated.id, actorId: user.id, actorName: user.name || user.id,
+              eventType: GeneralTaskEventType.EDITED, body: diff,
+            });
+          }
+        } catch (e) {
+          console.error("[field-tasks PATCH] edit event write failed:", e);
+        }
+      }
+      if (isCancelRequest) {
+        try {
+          await createGeneralTaskEventActing(req, updated.caseId, {
+            fieldTaskId: updated.id, actorId: user.id, actorName: user.name || user.id,
+            eventType: GeneralTaskEventType.CANCELLED, body: null,
+          });
+        } catch (e) {
+          console.error("[field-tasks PATCH] cancel event write failed:", e);
         }
       }
 

@@ -10,7 +10,7 @@ import { SettlementLinkMissingClosureReason, firmDateTimeToInstant, caseNotifica
   HearingRingLeadMinutes, isRingWindowOpen, resolveHearingRingTier,
   HearingRingTier, HearingRingTierLeadMinutes,
   addDaysToDateString, prescriptionClockStopped, prescriptionArrivedTimeBarred,
-  FieldTaskType, isActiveMemo } from "@shared/schema";
+  FieldTaskType, isActiveMemo, NajizReviewReminderTitlePrefix } from "@shared/schema";
 import { sendToUsers } from "./websocket";
 import { resolveNotificationRecipients, type NotificationRecipientUser } from "./notification-recipients";
 import type { LongPausedRecord } from "./storage";
@@ -1011,7 +1011,11 @@ async function checkNajizReviewReminders() {
     //
     // The prefix is a strict prefix of the old string, so it still matches every
     // ناجز reminder already sitting in production — no backfill, no orphans.
-    const TITLE_KEY = "التأكد من حالة الطلب في";
+    // Batch 27 promoted this to a shared constant. It is a MEMBER of
+    // GuardedFieldTaskTitlePrefixes (schema.ts), which is what makes the edit
+    // endpoint refuse to rename these rows — renaming one would break both the
+    // recurrence guard and the auto-cancel below, which is why they were named.
+    const TITLE_KEY = NajizReviewReminderTitlePrefix;
 
     // Group existing najiz reminders by case (title-matched — there is no
     // dedicated taskType for them) for O(1) lookup.

@@ -1074,12 +1074,32 @@ export const fieldTasks = pgTable("field_tasks", {
   //   columns: [t.caseId], foreignColumns: [lawCases.id] }).onDelete("cascade"),
 }));
 
-// Sub-step 4.6 — general (عام) task activity thread (سجل الأخذ والعطا). One row
-// per lifecycle event so the full back-and-forth survives: completionNotes /
-// reviewNote OVERWRITE each cycle, this table ACCUMULATES. Keyed to the
-// field_task; only general tasks ever write events. event_type is a free varchar
-// (extensible) — path-2 توزيع/اعتماد add later with NO schema change. actor_name
-// is denormalized (like case_activity_log.user_name) so the FE needs no lookup.
+// FIELD-TASK ACTIVITY THREAD. One row per event so the full history survives:
+// completionNotes / reviewNote OVERWRITE each cycle, this table ACCUMULATES.
+// Keyed to the field_task. event_type is a free varchar (extensible) — every
+// value added since the table shipped (path-2 توزيع/اعتماد, then تعديل/إلغاء)
+// needed NO schema change. actor_name is denormalized (like
+// case_activity_log.user_name) so the FE needs no lookup.
+//
+// 🔴 THE CONTRACT WIDENED IN BATCH 27 (owner ruling). This header used to read
+// "only general tasks ever write events", and that was true when it shipped as
+// sub-step 4.6 of the general (عام) task lifecycle. IT IS NO LONGER TRUE, and the
+// widening is deliberate rather than a leak: EVERY field task — collection,
+// execution, agency-issuance, najiz reminder, plain field task and عام alike —
+// now writes a row here when it is EDITED (تعديل) or CANCELLED (إلغاء).
+//
+// WHY THIS TABLE RATHER THAN A NEW ONE: field_tasks had no activity log outside
+// the general lifecycle, and the alternative — the parent case's
+// case_activity_log, the precedent the ضبط/صك attachments use — cannot cover the
+// population: a field task may be linked to a consultation, a contract or a
+// client, or to nothing at all, so a case-keyed log would silently drop those
+// rows. This table is already keyed to the field_task itself and already
+// cascades with it, which is exactly the shape the audit needs.
+//
+// ⚠ CONSEQUENCE FOR READERS: a row here no longer implies taskType === عام. The
+// events ENDPOINT (GET /api/field-tasks/:id/events) is unchanged and returns
+// whatever the task has; a general task's الأخذ والعطا thread simply now also
+// shows its edit/cancel history, in the same chronological list.
 export const generalTaskEvents = pgTable("general_task_events", {
   id:          varchar("id", { length: 255 }).primaryKey(),
   fieldTaskId: varchar("field_task_id", { length: 255 }).notNull(),
@@ -2861,6 +2881,88 @@ export const GrievanceResultValues: readonly GrievanceResultValue[] =
 
 export const CollectionTaskTitlePrefix = "إعداد خطاب تحصيل";
 export const ExecutionTaskTitlePrefix = "رفع طلب تنفيذ";
+// The other two title-keyed families, promoted to named constants by batch 27.
+// Both were bare literals before — the agency one in resolveFieldTaskOwnerIds and
+// in getMyTasks block 18, the najiz one as a local `TITLE_KEY` inside the
+// scheduler — which is precisely why a fourth copy was easy to add and hard to
+// find. Values are byte-identical to the literals they replace.
+export const AgencyIssuanceTaskTitlePrefix = "إصدار وكالة";
+export const NajizReviewReminderTitlePrefix = "التأكد من حالة الطلب في";
+
+// ==================== TITLE-GUARDED FIELD TASKS (batch 27) ====================
+// 🔴 THESE FOUR PREFIXES ARE A DISCRIMINATOR, NOT A LABEL. field_tasks has no
+// task-kind column, so four separate mechanisms identify their own rows by
+// matching the TITLE:
+//   • getMyTasks blocks 8 / 17 / 18 — SQL `title LIKE '<prefix>%'` selects the
+//     collection / execution / agency-issuance feed rows, each with LIVE
+//     admin_support owner routing, and the generic block SKIPS the same prefixes
+//     so a row is not listed twice.
+//   • isPostJudgmentTask (routes.ts) — decides whether completing the task counts
+//     toward maybeCloseCaseAfterPostJudgmentTasks, i.e. whether the parent case
+//     AUTO-CLOSES with تم_التحصيل.
+//   • resolveFieldTaskOwnerIds (routes.ts) — the [task-owner-check] audit log.
+//   • checkNajizReviewReminders (scheduler.ts) — finds its own previous row for
+//     BOTH the every-3-days recurrence guard and the auto-cancel when the case
+//     leaves the stage.
+//
+// So renaming one of these tasks does not rename a label: it moves the row to a
+// different feed block under a different owner, stops the case ever auto-closing,
+// and (for najiz) both duplicates the reminder and orphans the old one. Batch 27
+// therefore REFUSES title edits on them — every other field stays editable.
+//
+// ⚠ ONE LIST, and it lives here so the guards that read these prefixes can share
+// it rather than each keeping a copy. Four hand-copied Arabic literals is exactly
+// how the set drifts; adding a fifth family means adding it HERE and nowhere else.
+export const GuardedFieldTaskTitlePrefixes: readonly string[] = [
+  CollectionTaskTitlePrefix,
+  ExecutionTaskTitlePrefix,
+  AgencyIssuanceTaskTitlePrefix,
+  NajizReviewReminderTitlePrefix,
+];
+
+/**
+ * Is this field task's title load-bearing for one of the four mechanisms above?
+ * Shared by the server refusal and the client's disabled title input, so the UI
+ * can never offer an edit the endpoint rejects.
+ *
+ * ⚠ startsWith, matching every guard that reads these prefixes. The najiz family
+ * is the one exception in the wild — checkNajizReviewReminders uses `.includes`
+ * because its own titles interpolate the platform name AFTER the key — but its
+ * titles still BEGIN with the key, so startsWith covers them here too and is the
+ * stricter test of the two.
+ */
+export function isGuardedFieldTaskTitle(title: string | null | undefined): boolean {
+  const t = String(title || "");
+  return GuardedFieldTaskTitlePrefixes.some((p) => t.startsWith(p));
+}
+
+// ==================== THE SIX EDITABLE FIELD-TASK COLUMNS (batch 27) ====================
+// What "edit a field task" means, shared so the client form and the server gate
+// cannot disagree about the scope of the action.
+//
+// ⚠ task_type IS DELIBERATELY ABSENT (owner ruling). Retyping could move a task
+// between routing families; the guards above are keyed on the title rather than
+// the type, but the exclusion stands on its own — a task's KIND is decided when
+// it is created, and changing it means deleting and recreating.
+//
+// The four link columns count as ONE editable concept ("the linked entity") and
+// are constrained further at the endpoint: only the column that is ALREADY
+// non-null may be rewritten. See the same-type rule in PATCH /api/field-tasks/:id.
+// ⚠ `as const`, NOT `readonly string[]` — the members are LITERAL KEYS OF
+// FieldTask, which is what lets the endpoint's diff read existingTask[f] and
+// updated[f] with no cast. Typed as plain strings it needed an
+// `as Record<string, unknown>` on both, which tsc rejects outright (FieldTask has
+// no index signature) and which `as any` would only have hidden. Membership tests
+// against arbitrary request keys widen it back: (… as readonly string[]).includes(k).
+export const FieldTaskEditableFields = [
+  "title", "description", "assignedTo", "dueDate", "priority",
+  "caseId", "consultationId", "contractId", "clientId",
+] as const;
+export type FieldTaskEditableField = typeof FieldTaskEditableFields[number];
+
+/** The four nullable link columns, in the order the same-type rule reports them. */
+export const FieldTaskLinkFields = ["caseId", "consultationId", "contractId", "clientId"] as const;
+export type FieldTaskLinkField = typeof FieldTaskLinkFields[number];
 
 // ==================== الأولوية ====================
 export const Priority = {
@@ -3544,6 +3646,11 @@ export const GeneralTaskEventType = {
   RETURNED_WITH_NOTE: "ملاحظة",     // requester OR dept_head sent it back with a note
   REVIEWED_CLOSED:    "تم_الاطلاع", // requester closed it (no text)
   APPROVED:           "اعتماد",     // dept_head approved a member's result → on to the requester (sub-step 8)
+  // Batch 27 — written by EVERY field task, not just عام (see the table header).
+  // EDITED's body is the field-by-field diff; CANCELLED's body is empty, because
+  // the owner ruled cancellation carries no reason.
+  EDITED:             "تعديل",
+  CANCELLED:          "إلغاء",
 } as const;
 
 export type GeneralTaskEventTypeValue = typeof GeneralTaskEventType[keyof typeof GeneralTaskEventType];
@@ -3555,6 +3662,8 @@ export const GeneralTaskEventTypeLabels: Record<GeneralTaskEventTypeValue, strin
   "ملاحظة": "ملاحظة",
   "تم_الاطلاع": "تم الاطلاع",
   "اعتماد": "اعتماد",
+  "تعديل": "تعديل",
+  "إلغاء": "إلغاء",
 };
 
 // ==================== تخصص المهام (Task-routing specialty) ====================

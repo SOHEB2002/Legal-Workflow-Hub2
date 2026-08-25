@@ -28,7 +28,7 @@ import {
   // findPrimaryJudgmentHearing dropped with block 1c's attending-lawyer owner
   // chain — the feed no longer resolves anyone from a judgment hearing. It stays
   // exported from shared/schema for the three client surfaces that still use it.
-  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix,
+  CollectionTaskTitlePrefix, ExecutionTaskTitlePrefix, AgencyIssuanceTaskTitlePrefix,
   type NotificationLinkedContext,
   CaseStageLabels, type CaseStageValue,
   MemoStageLabels, type MemoStageValue,
@@ -6293,8 +6293,10 @@ export class DatabaseStorage implements IStorage {
         // Agency-issuance (إصدار وكالة) is the same case: its owner is resolved LIVE
         // by the dedicated block below (via agencyIssuanceOwner, not the stored
         // assigned_to), so it must NOT be emitted here too or it would double-surface.
-        if (r.title.startsWith("إعداد خطاب تحصيل") || r.title.startsWith("إصدار وكالة")) continue;
-        const isCollection = r.title.startsWith("إعداد خطاب تحصيل");
+        // (Batch 27 replaced the two bare literals here with the shared constants —
+        // same values, one source, see GuardedFieldTaskTitlePrefixes in schema.ts.)
+        if (r.title.startsWith(CollectionTaskTitlePrefix) || r.title.startsWith(AgencyIssuanceTaskTitlePrefix)) continue;
+        const isCollection = r.title.startsWith(CollectionTaskTitlePrefix);
         // Manually-created general tasks (taskType "عام") get their own kind so
         // the feed labels/routes them distinctly from auto/field tasks. Auto
         // field + collection tasks are never type "عام", so they are unaffected.
@@ -6741,7 +6743,7 @@ export class DatabaseStorage implements IStorage {
           .leftJoin(clients, eq(lawCases.clientId, clients.id))
           .where(and(
             sql`${fieldTasks.status} NOT IN ('مكتمل', 'ملغي')`,
-            sql`${fieldTasks.title} LIKE ${"إصدار وكالة%"}`,
+            sql`${fieldTasks.title} LIKE ${AgencyIssuanceTaskTitlePrefix + "%"}`,
           ));
         const ownerId = agencyIssuanceOwner;
         // GROUP issuance field_tasks by EXACT client name (the block's owner is
