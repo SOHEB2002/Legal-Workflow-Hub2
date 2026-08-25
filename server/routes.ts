@@ -1428,16 +1428,33 @@ const ALLOWED_CASE_TRANSITIONS: StageTransitionRule[] = [
   //     drafting — a stage most of them have no business on.
 
   // ==================== ADMIN PATH (prescription date + grievance) ====================
-  // ⚠ THE FOUR STAGES BELOW LEFT THE PATH ARRAYS AND THEIR EDGES STAY. Nothing
-  // routes through تحديد_تاريخ_التقادم / مراجعة_داخلية_للتظلم / تقديم_التظلم /
-  // انتظار_رد_التظلم any more, so these rules are unreachable from the UI — kept
-  // because a case that historically walked them must still be able to move,
-  // and because removing a rule is how a live workflow breaks silently. Same
-  // rule as the stage VALUES and labels: history keeps working.
-  { from: "استلام", to: "تحديد_تاريخ_التقادم", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
+  // ⚠ THE FOUR STAGES BELOW LEFT THE PATH ARRAYS. Nothing routes through
+  // تحديد_تاريخ_التقادم / مراجعة_داخلية_للتظلم / تقديم_التظلم / انتظار_رد_التظلم
+  // any more. Their OUTBOUND edges stay — a case that historically walked them
+  // must still be able to move, and removing a rule is how a live workflow
+  // breaks silently. Same rule as the stage VALUES and labels: history works.
+  //
+  // 🔴 BUT THE TWO INBOUND EDGES FROM LIVE STAGES ARE GONE (batch 25), and the
+  // distinction is the whole point. "Unreachable from the UI" was never
+  // "unreachable": the FE offers only the case's own resolved path, but PATCH
+  // /api/cases/:id with an explicit targetStage reaches this table directly, and
+  // it is consulted INDEPENDENTLY of the path arrays. So these two were live
+  // doors from an occupied stage into a stage on no path:
+  //     استلام → تحديد_تاريخ_التقادم              (استلام holds 139 cases)
+  //     تحرير_صيغة_التظلم → مراجعة_داخلية_للتظلم    (live on AdminGrievanceStages)
+  // A case driven through either landed off-path, collapsed the progress bar to
+  // index 0 (the 3fcd4e3 class) and could not be advanced — the bar-collapse bug
+  // reproduced from DATA instead of from code. Deleting them seals
+  // تحديد_تاريخ_التقادم and the whole grievance chain behind it: every remaining
+  // edge into those four now starts at another one of the four.
+  //
+  // ⚠ NEITHER DELETION STRANDS A LIVE STAGE. استلام keeps four other outbound
+  // edges (→ استكمال_البيانات / دراسة / تحرير_مذكرة_جوابية / تحرير_صحيفة_الدعوى);
+  // تحرير_صيغة_التظلم keeps → مراجعة_داخلية, which is the edge
+  // AdminGrievanceStages actually walks (schema.ts documents that this path uses
+  // PLAIN مراجعة_داخلية, never the للتظلم twin).
   { from: "تحديد_تاريخ_التقادم", to: "استكمال_البيانات", allowedRoles: ["department_head", "assigned_lawyer", "branch_manager"] },
   { from: "دراسة", to: "تحرير_صيغة_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
-  { from: "تحرير_صيغة_التظلم", to: "مراجعة_داخلية_للتظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تقديم_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "مراجعة_داخلية_للتظلم", to: "تحرير_صيغة_التظلم", allowedRoles: ["internal_reviewer", "branch_manager"] },
   { from: "تقديم_التظلم", to: "انتظار_رد_التظلم", allowedRoles: ["assigned_lawyer", "department_head"] },
