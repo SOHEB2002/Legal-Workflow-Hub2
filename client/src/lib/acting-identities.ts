@@ -10,16 +10,23 @@
 // department-head control anywhere and reported having "no delegated
 // authority at all". The server was granting it; the UI was never offering it.
 //
-// 🔴 all_cases ONLY, AND THAT IS THE SERVER'S OWN RULE, NOT A SHORTCUT.
-// globalActingRoles (acting-context.ts) applies exactly this narrowing to the
-// server's own entity-agnostic gate, with the reasoning that a specific_cases
-// delegation "confers role only inside per-entity gates". A client permission
-// boolean IS entity-agnostic, and the record-level helpers below are
-// deliberately held to the same line rather than re-implementing case-id
-// matching in the browser — so client and server agree by construction and a
-// specific_cases delegate can never be shown a control the server refuses.
+// 🔴 specific_cases IS EXCLUDED, AND THAT IS THE SERVER'S OWN RULE, NOT A
+// SHORTCUT. globalActingRoles (acting-context.ts) applies exactly this narrowing
+// to the server's own entity-agnostic gate, with the reasoning that a
+// specific_cases delegation "confers role only inside per-entity gates". A
+// client permission boolean IS entity-agnostic, and the record-level helpers
+// below are deliberately held to the same line rather than re-implementing
+// case-id matching in the browser — so client and server agree by construction
+// and a specific_cases delegate can never be shown a control the server refuses.
 // Nothing is lost for them: their rows still reach the مهامي feed tagged
 // onBehalfOfUserId with ownerScope "self", and those actions already work.
+//
+// ⚠️ consultations_only IS ADMITTED, and it BREAKS that agree-by-construction
+// property on purpose (owner ruling, follow-up to a00e4ba). Its enforcement is
+// per-REQUEST-PATH on the server, and this file has no request path, so the
+// delegator is admitted session-wide and controls over-show outside
+// consultations. Full rationale and the three concrete costs are at the skip
+// line in buildActingIdentities — read that before changing anything here.
 //
 // ⚠ THESE HELPERS WIDEN NOTHING ON THEIR OWN. They answer "who does this user
 // currently stand for"; each call site decides what that permits. Two classes
@@ -59,9 +66,10 @@ export interface ActingAsResponse {
 export const ACTING_AS_QUERY_KEY = "/api/delegations/acting-as";
 
 // The identity set the client reasons about: SELF first, then every all_cases
-// delegator. Mirrors actingIdentitiesFor(ctx, null) on the server — which is
-// precisely the caseId-less call the consultation/contract gates already make,
-// and which by that function's own rule admits all_cases delegations only.
+// or consultations_only delegator. Mirrors actingIdentitiesFor(ctx, null) on the
+// server — precisely the caseId-less call the consultation/contract gates make,
+// and which by that function's own rule admits exactly these two scopes and
+// skips specific_cases.
 //
 // SELF IS ALWAYS PRESENT AND ALWAYS FIRST, which is what makes every helper
 // below a strict superset of the pre-delegation behaviour: with no active
@@ -76,18 +84,44 @@ export function buildActingIdentities(
     { userId: user.id, role: user.role, departmentId: user.departmentId ?? null },
   ];
   for (const d of delegators ?? []) {
-    // 🔴 BATCH 28 — DELIBERATELY UNCHANGED (owner ruling), and the consequence
-    // is the OPPOSITE of over-showing: a consultations_only delegator is not
-    // all_cases, so it is skipped here and the delegate sees NO delegated
-    // control anywhere — including on the consultations pages the scope exists
-    // to enable. The server honours the delegation regardless, and the مهامي
-    // feed still shows the delegator's rows (getMyTasks is computed server-side
-    // from ctx.delegators, which never passes through this function), so the
-    // scope is usable from مهامي and the API but is invisible on the
-    // consultations list/detail pages. Widening this line to admit
-    // consultations_only is the one-line change that fixes it; it was NOT
-    // authorised in this batch. Do not "tidy" it either way without a ruling.
-    if (d.scope !== "all_cases") continue;
+    // 🔴 ADMIT all_cases AND consultations_only — NOT "admit everything".
+    // specific_cases is still skipped, for the reason the header gives: it
+    // confers role only inside per-entity gates, and re-implementing case-id
+    // matching in the browser is what this file exists to avoid.
+    //
+    // ⚠️ KNOWN, OWNER-ACCEPTED DIVERGENCE FROM "visibility == authorization".
+    // consultations_only is enforced SERVER-side by request path
+    // (pathAllowsConsultationScope, server/acting-context.ts). This function has
+    // no request path — it produces ONE identity set for the whole session — so
+    // admitting the delegator here also widens the cases, memos and contracts
+    // pages, where the server will refuse. That is deliberate and temporary: the
+    // alternative was leaving the scope invisible on the consultation pages it
+    // exists to enable. The real fix is per-entity client identities (the
+    // 12-destructuring-site job in the full entity-type-scope plan); until then
+    // this file intentionally over-shows.
+    //
+    // WHAT OVER-SHOWING COSTS, precisely — two of the three are benign, one is not:
+    //  1. USUALLY a visible Arabic 403 toast (extractApiError). Annoying, not
+    //     destructive: no data loss, and the refusal is legible.
+    //  2. 🔴 IF THE DELEGATE'S OWN ROLE ALREADY PERMITS THE ACTION, NO 403
+    //     FIRES. They act in their OWN name believing they act for the
+    //     delegator, while actorDisplayName correctly stamps only their own name
+    //     (the server dropped the delegator, so there is no "نيابةً عن" to add).
+    //     Low probability, but it is the one case where over-showing MISLEADS
+    //     rather than merely annoys — the audit trail stays correct while the
+    //     actor's understanding of it does not.
+    //  3. 🔴 THE REMINDER BUTTON DOES NOT 403 AT ALL. /api/reminders and
+    //     /api/notifications are ON the server allow-list (they carry
+    //     entityType "consultation"), but the entity is in the BODY, not the
+    //     path — so the delegator survives there for a case/memo/contract body
+    //     too, and canReferenceRelatedEntity → canModifyCase admits it. A
+    //     consultations_only delegate can therefore send a reminder ABOUT a
+    //     non-consultation entity on the delegator's authority. Notification-row
+    //     only: no read, no write, no workflow action on that entity. This leak
+    //     is server-side and predates this line (shipped in a00e4ba); widening
+    //     here only makes it reachable by an ordinary click. Fixing it needs an
+    //     entity-aware check, not a path one — see the report for a00e4ba.
+    if (d.scope !== "all_cases" && d.scope !== "consultations_only") continue;
     out.push({ userId: d.userId, role: d.role, departmentId: d.departmentId ?? null });
   }
   return out;
