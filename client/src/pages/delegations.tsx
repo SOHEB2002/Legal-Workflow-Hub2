@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth-context";
-import { DelegationReasonLabels } from "@shared/schema";
+import { DelegationReasonLabels, DelegationScope, DelegationScopeLabels } from "@shared/schema";
 import {
   Plus, UserCheck, Clock, CheckCircle, XCircle, ArrowLeftRight, RefreshCw,
 } from "lucide-react";
@@ -216,7 +216,7 @@ export default function DelegationsPage() {
                     <TableCell className="text-center"><DualDateDisplay date={d.startDate} compact /></TableCell>
                     <TableCell className="text-center"><DualDateDisplay date={d.endDate} compact /></TableCell>
                     <TableCell className="text-center">
-                      {d.scope === "all_cases" ? "جميع القضايا" : "قضايا محددة"}
+                      {DelegationScopeLabels[d.scope as keyof typeof DelegationScopeLabels] || d.scope}
                     </TableCell>
                     <TableCell className="text-center">{getStatusBadge(d)}</TableCell>
                     <TableCell className="text-center">
@@ -299,8 +299,15 @@ export default function DelegationsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all_cases">جميع القضايا</SelectItem>
-                  <SelectItem value="specific_cases">قضايا محددة</SelectItem>
+                  <SelectItem value={DelegationScope.ALL_CASES}>
+                    {DelegationScopeLabels[DelegationScope.ALL_CASES]}
+                  </SelectItem>
+                  <SelectItem value={DelegationScope.SPECIFIC_CASES}>
+                    {DelegationScopeLabels[DelegationScope.SPECIFIC_CASES]}
+                  </SelectItem>
+                  <SelectItem value={DelegationScope.CONSULTATIONS_ONLY}>
+                    {DelegationScopeLabels[DelegationScope.CONSULTATIONS_ONLY]}
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>

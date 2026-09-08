@@ -42,7 +42,12 @@ export interface ActingIdentity {
 // the amber banner; role / departmentId / scope are the authority terms.
 export interface ActingDelegatorInfo extends ActingIdentity {
   name: string;
-  scope: "all_cases" | "specific_cases";
+  // Batch 28 — TYPE-ONLY widening: the wire now also carries
+  // "consultations_only". The filter in buildActingIdentities is UNCHANGED and
+  // still admits all_cases alone, so a consultations_only delegator is skipped
+  // client-side (see the note there). This union is widened only so the
+  // interface stops contradicting what the endpoint actually sends.
+  scope: "all_cases" | "specific_cases" | "consultations_only";
 }
 
 export interface ActingAsResponse {
@@ -71,6 +76,17 @@ export function buildActingIdentities(
     { userId: user.id, role: user.role, departmentId: user.departmentId ?? null },
   ];
   for (const d of delegators ?? []) {
+    // 🔴 BATCH 28 — DELIBERATELY UNCHANGED (owner ruling), and the consequence
+    // is the OPPOSITE of over-showing: a consultations_only delegator is not
+    // all_cases, so it is skipped here and the delegate sees NO delegated
+    // control anywhere — including on the consultations pages the scope exists
+    // to enable. The server honours the delegation regardless, and the مهامي
+    // feed still shows the delegator's rows (getMyTasks is computed server-side
+    // from ctx.delegators, which never passes through this function), so the
+    // scope is usable from مهامي and the API but is invisible on the
+    // consultations list/detail pages. Widening this line to admit
+    // consultations_only is the one-line change that fixes it; it was NOT
+    // authorised in this batch. Do not "tidy" it either way without a ruling.
     if (d.scope !== "all_cases") continue;
     out.push({ userId: d.userId, role: d.role, departmentId: d.departmentId ?? null });
   }

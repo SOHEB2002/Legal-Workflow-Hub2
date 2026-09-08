@@ -6510,6 +6510,37 @@ export const insertLegalDeadlineSchema = z.object({
 export type InsertLegalDeadline = z.infer<typeof insertLegalDeadlineSchema>;
 export type LegalDeadline = typeof legalDeadlines.$inferSelect;
 
+// ==================== Delegation SCOPE (batch 28) ====================
+// The delegation's authority scope. ONE declaration site, shared by the zod
+// enum below, the acting-context resolver and the delegations UI. Declared HERE
+// rather than beside DelegationReasonLabels because insertDelegationSchema
+// evaluates it at module load — a later declaration is a temporal dead zone.
+//
+// 🔴 consultations_only IS ENFORCED BY REQUEST PATH, NOT BY GATE LOGIC.
+// attachActingContext (server/acting-context.ts) drops a delegator carrying it
+// from ctx.delegators on any path the exported pathAllowsConsultationScope()
+// refuses (grep that name — it is the whole allow-list), so
+// every downstream gate sees "no delegation" and falls back to the real user —
+// the fail-CLOSED direction, with zero gate edits.
+//
+// ON AN ALLOWED PATH IT IS DELIBERATELY INDISTINGUISHABLE FROM all_cases: the
+// path filter is the ONLY restriction, so there is no second, undocumented
+// authority axis. Do not add capability checks keyed on this value — put new
+// restrictions in the path list, which is the one place that can be audited.
+export const DelegationScope = {
+  ALL_CASES: "all_cases",
+  SPECIFIC_CASES: "specific_cases",
+  CONSULTATIONS_ONLY: "consultations_only",
+} as const;
+
+export type DelegationScopeValue = typeof DelegationScope[keyof typeof DelegationScope];
+
+export const DelegationScopeLabels: Record<DelegationScopeValue, string> = {
+  all_cases: "جميع القضايا",
+  specific_cases: "قضايا محددة",
+  consultations_only: "الاستشارات فقط",
+};
+
 export const insertDelegationSchema = z.object({
   fromUserId: z.string().min(1),
   toUserId: z.string().min(1),
@@ -6517,7 +6548,11 @@ export const insertDelegationSchema = z.object({
   reasonDetails: z.string().optional(),
   startDate: z.string().min(1),
   endDate: z.string().min(1),
-  scope: z.enum(["all_cases", "specific_cases"]).optional().default("all_cases"),
+  scope: z.enum([
+    DelegationScope.ALL_CASES,
+    DelegationScope.SPECIFIC_CASES,
+    DelegationScope.CONSULTATIONS_ONLY,
+  ]).optional().default(DelegationScope.ALL_CASES),
   specificCaseIds: z.array(z.string()).optional(),
 });
 
