@@ -4,7 +4,7 @@
 -- 🔴 THIS ONE IS A REAL MIGRATION, UNLIKE BATCH 23'S. Run it BEFORE the code
 -- that declares the column reaches a database.
 --
--- ⚠ ORDER IS NOT OPTIONAL — the standing rule in CLAUDE.md. Drizzle builds an
+-- ⚠ ORDER IS NOT OPTIONAL — the standing rule in AGENTS.md. Drizzle builds an
 -- EXPLICIT column list from the table declaration, so the moment hearing_id is
 -- declared in shared/schema.ts, EVERY read of case_notes selects it. A missing
 -- column does not break "the new feature" — it breaks the notes tab entirely,

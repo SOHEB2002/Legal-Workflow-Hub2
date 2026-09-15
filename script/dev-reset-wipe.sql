@@ -20,7 +20,7 @@
 --     it points at). It deliberately does NOT rely on ON DELETE CASCADE: half
 --     the FKs in this schema are the COMMENTED kind that live only where
 --     apply-fk-constraints.sql has been run, so cascade presence on dev is not
---     guaranteed (see the FK/dev-prod rule in CLAUDE.md). Cascade, where it
+--     guaranteed (see the FK/dev-prod rule in AGENTS.md). Cascade, where it
 --     exists, simply makes some of these deletes no-ops.
 --   • IDEMPOTENT: re-running deletes zero rows and succeeds.
 --

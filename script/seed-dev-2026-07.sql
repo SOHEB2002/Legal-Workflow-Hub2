@@ -102,7 +102,7 @@ BEGIN
   );
   IF missing IS NOT NULL THEN
     RAISE EXCEPTION
-      'SEED ABORTED: missing columns -> %. Run the ALTER TABLE ... ADD COLUMN statements from CLAUDE.md on this DB first.',
+      'SEED ABORTED: missing columns -> %. Add the missing law_cases columns with idempotent ALTER TABLE ... ADD COLUMN IF NOT EXISTS statements; for contract follow-up columns run script/add-contract-follow-up-fields.sql.',
       missing;
   END IF;
 END $$;
@@ -597,7 +597,7 @@ INSERT INTO law_cases (id, case_number, client_id, case_type, status, current_st
   -- that is what the app writes (cases.tsx force-nulls it for under-study
   -- cases), and getClientRoleLabel will display "مدعي" regardless. Keeping it
   -- faithful makes the gap visible instead of faking data the product cannot
-  -- produce. See "Defendant-in-settlement ↔ court linkage" in CLAUDE.md.
+  -- produce. See the workflow invariants in AGENTS.md.
   ('T_case_30','T-2030','T_cl_15','عام','دراسة','دراسة',
      jsonb_build_array(pg_temp.sh('استلام',16,'1','مدير الفرع'),
                        pg_temp.sh('دراسة',11,'T_u_khaled','خالد الشهري','العميل مدعى عليه فعلياً — غير ممثَّل في النموذج')),

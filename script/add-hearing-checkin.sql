@@ -31,7 +31,7 @@
 --   scheduler job, not just the check-in feature. Run this on dev → confirm the
 --   app loads → run it on prod → deploy. db:push was NOT run.
 --
--- Apply to BOTH dev (heliumdb) and prod (neondb), per replit.md / CLAUDE.md.
+-- Apply to BOTH dev (heliumdb) and prod (neondb), per replit.md / AGENTS.md.
 -- Idempotent — safe to re-run.
 -- =====================================================================
 

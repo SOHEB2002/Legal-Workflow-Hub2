@@ -26,7 +26,7 @@
 --   declared EVERY read of these four tables selects it. Run this on dev →
 --   confirm the app loads → run it on prod → deploy. db:push was NOT run.
 --
--- Apply to BOTH dev and prod (per replit.md / CLAUDE.md).
+-- Apply to BOTH dev and prod (per replit.md / AGENTS.md).
 -- Idempotent — safe to re-run.
 -- =====================================================================
 

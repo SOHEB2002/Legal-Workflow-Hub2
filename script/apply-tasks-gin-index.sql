@@ -17,7 +17,7 @@
 -- makes re-runs safe. jsonb_path_ops is the smallest/fastest opclass for the
 -- containment (@>) operator this query uses.
 --
--- FK/dev-prod sync rule (PERMANENT, see CLAUDE.md): run on BOTH dev + prod, and
+-- FK/dev-prod sync rule (PERMANENT, see AGENTS.md): run on BOTH dev + prod, and
 -- re-run on dev after any dev reset (db:push won't recreate it — it's commented
 -- in schema). Safe because IF NOT EXISTS makes it idempotent.
 --

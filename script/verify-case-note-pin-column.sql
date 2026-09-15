@@ -15,7 +15,7 @@
 -- missing on a database, the notes tab would 500 there, for every case, today.
 -- It does not, on either.
 --
--- This file exists because CLAUDE.md's own rule is to re-verify against
+-- This file exists because AGENTS.md's own rule is to re-verify against
 -- information_schema rather than trust a note in a file. Run the SELECT.
 --
 -- Run on BOTH: dev (heliumdb) and prod (neondb).

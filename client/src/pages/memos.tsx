@@ -1022,7 +1022,7 @@ export default function MemosPage() {
   // labor_review_head (the two committee chairs) because the same request may
   // carry reviewNotes / reviewerId — their own annotations. This batch did NOT
   // narrow that gate: narrowing an existing permission was not in scope and
-  // CLAUDE.md forbids incidental permission changes. So a chair could still edit
+  // AGENTS.md forbids incidental permission changes. So a chair could still edit
   // these fields by direct API; they are simply not shown the button, which is the
   // safe direction and matches the owner's stated set.
   //

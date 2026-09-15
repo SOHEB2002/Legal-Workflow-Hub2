@@ -421,7 +421,7 @@ type CaseUrgencySource = keyof typeof CASE_URGENCY_SOURCE_LABEL;
 //   2. IT HAS NOT PASSED — `deadline >= firmToday()`, lexicographic on
 //      "YYYY-MM-DD" against the FIRM'S calendar day (Asia/Riyadh via Intl), never
 //      a UTC slice. The date-boundary bug class is documented at the top of
-//      CLAUDE.md and cost a production outage; `>=` keeps the LAST day of the
+//      AGENTS.md and cost a production outage; `>=` keeps the LAST day of the
 //      window live, which is the day it matters most.
 //
 //   3. THE CASE IS STILL AT محكوم_حكم_ابتدائي.

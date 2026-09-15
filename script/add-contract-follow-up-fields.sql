@@ -28,7 +28,7 @@
 --
 --   1. run on DEV  →  2. confirm the app loads  →  3. run on PROD  →  4. deploy
 --
--- Apply to BOTH dev and prod (per replit.md / CLAUDE.md).
+-- Apply to BOTH dev and prod (per replit.md / AGENTS.md).
 -- Idempotent — safe to re-run.
 --
 -- Run with:

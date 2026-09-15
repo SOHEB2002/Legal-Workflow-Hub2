@@ -821,7 +821,7 @@ export default function ContractsPage() {
     // Every other contract gate on this page is delegation-aware. This one is
     // not, because its server route (DELETE /api/contracts/:id/attachments/:id)
     // was classified alongside the rest and deliberately left raw-role: the
-    // action is irreversible and CLAUDE.md places DELETE at the branch_manager
+    // action is irreversible and AGENTS.md places DELETE at the branch_manager
     // tier. A delegate standing in for a department_head can do everything else
     // to a contract and cannot delete its attachments. Do not convert this in a
     // later sweep; revisit only as an explicit owner decision.

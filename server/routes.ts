@@ -1126,7 +1126,7 @@ function canActOnHearingIdentity(
   // cancelling, flagging, the ضبط file, and the opponent-response flag. The
   // frontend mirrors are widened to match, so the grant is no longer UI-dead.
   // DO NOT RE-REMOVE IT to "restore the Phase 5 mirror" — that mirror is exactly
-  // what changed. See CLAUDE.md, "📎 ATTACHMENTS" / hearing permissions.
+  // what changed. See AGENTS.md, "Workflow and entity invariants" / hearing permissions.
   //
   // viewer is kept per the codebase's viewer-in-can*-helpers convention; it is
   // inert — viewerWriteGuard 403s every viewer write before any handler runs.
@@ -1153,7 +1153,7 @@ function canActOnHearingIdentity(
 // 🔴 A SEPARATE, NARROWER HELPER — canActOnHearing IS DELIBERATELY NOT REUSED
 // AND NOT MODIFIED. That helper admits `admin_support` and `viewer` on top of
 // this set, and it gates result recording, the hearing report, the ضبط file and
-// the opponent-response flag. CLAUDE.md carries an explicit owner instruction
+// the opponent-response flag. AGENTS.md carries the current repository instruction
 // not to re-narrow it ("DO NOT RE-REMOVE department_head … that mirror is
 // exactly what changed"), so touching it to fit this feature is forbidden in
 // both directions.
@@ -3519,9 +3519,9 @@ async function isJudgmentDeedMissing(caseId: string): Promise<boolean> {
 // an audit flags — or to weaken the gate. Both are worse than deleting something
 // that is one paste away from returning.
 //
-// 🔴 RE-ENABLING IS COPY-PASTE, NOT RE-DERIVATION. The full helper, the gate that
-// called it, the re-enable steps and the backlog-measuring SQL are all recorded in
-// CLAUDE.md under "📎 ATTACHMENTS"; the original code is also in git at e52e4ad.
+// 🔴 RE-ENABLING REQUIRES A FRESH BACKLOG MEASUREMENT, NOT RE-DERIVATION.
+// The original helper and gate remain available in git at e52e4ad; inspect that
+// implementation and current production data before proposing to restore it.
 // Do not reconstruct the predicate from scratch — the three terms (has a result /
 // not تراضي-تسوية_ودية / not ملغية) each exist for a reason documented there.
 
@@ -5265,10 +5265,10 @@ export async function registerRoutes(
         // so the firm chose to attach the backlog FIRST and enable the gate after.
         // The ضبط is therefore VISIBLE-BUT-OPTIONAL for now: the badges, the
         // hearings filter, the my-tasks item and the workflow step all still fire.
-        // 🔴 THIS IS INTENDED TO COME BACK. The full predicate, the re-enable steps
-        // and the SQL that measures the remaining backlog are recorded in CLAUDE.md
-        // under "📎 ATTACHMENTS" — do not re-derive them, and do not treat the
-        // absence of a gate here as a decision that minutes are optional forever.
+        // 🔴 THIS IS INTENDED TO COME BACK after a fresh backlog measurement.
+        // The original predicate and gate remain in git at e52e4ad; inspect that
+        // implementation and current production data rather than re-deriving it.
+        // The absent gate does not mean minutes are optional forever.
         // ============ صك SEAL — LEAVING ANY JUDGMENT STAGE ============
         // Placed BEFORE validateStageTransition so it covers every way this PATCH
         // can move the case off a judgment stage in one place: the table edges
@@ -13267,7 +13267,7 @@ export async function registerRoutes(
       // converted to resolve over req.actingContext in this batch; this one was
       // classified alongside them and deliberately left reading reqUser.role.
       // Reason: the action is IRREVERSIBLE (the object-storage blob goes with the
-      // row) and CLAUDE.md places DELETE at the branch_manager tier — the tier
+      // row) and AGENTS.md places DELETE at the branch_manager tier — the tier
       // helper's carve-out list says "DELETE — branch_manager only; never calls
       // this". Nothing in the spec says a delegate is excluded, but nothing says
       // they are included either, and file deletion is not an authority to grant
@@ -17485,8 +17485,8 @@ export async function registerRoutes(
   // decision 2026-08-05: 83 cases would have been blocked on deploy, so the
   // backlog gets attached first). The ضبط is visible-but-optional for now — every
   // badge, filter, my-tasks item and workflow step still fires. The re-enable
-  // steps live in CLAUDE.md under "📎 ATTACHMENTS". Restoring a button HERE is
-  // not the way to bring enforcement back.
+  // rule is summarized in AGENTS.md; the original gate remains in git at e52e4ad.
+  // Restoring a button HERE is not the way to bring enforcement back.
   //
   // WHY THE ROUTE STAYS: it is the ONLY writer of تمت for a postponed hearing, and
   // two live readers key on that status —

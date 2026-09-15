@@ -2026,7 +2026,7 @@ export default function HearingsPage() {
 
       {/* CANCEL HEARING — confirmation + MANDATORY سبب الإلغاء. A Dialog rather
           than the page's legacy window.confirm (used by delete): a native
-          confirm cannot hold a text field, is not RTL-styled, and CLAUDE.md
+          confirm cannot hold a text field, is not RTL-styled, and AGENTS.md
           discourages browser modals. Same shape as the flag dialog above. */}
       <Dialog
         open={!!cancelDialogHearing}
@@ -2140,4 +2140,3 @@ export default function HearingsPage() {
     </div>
   );
 }
-
