@@ -5019,9 +5019,8 @@ export default function CasesPage() {
           <AlertDialogFooter className="gap-2">
             <AlertDialogCancel
               onClick={() => {
-                const kind = hearingPrompt?.hearingType === "تراضي" ? "تراضي" : "محكمة";
                 toast({
-                  title: `يرجى إضافة جلسة ${kind} لاحقاً`,
+                  title: "يرجى إضافة موعد الجلسة لاحقاً",
                   description: "يمكنك إضافة الجلسة من صفحة الجلسات في أي وقت.",
                 });
                 setHearingPrompt(null);
@@ -5036,7 +5035,6 @@ export default function CasesPage() {
                 const params = new URLSearchParams({
                   action: "create",
                   caseId: hearingPrompt.caseId,
-                  type: hearingPrompt.hearingType,
                 });
                 setHearingPrompt(null);
                 setLocation(`/hearings?${params.toString()}`);

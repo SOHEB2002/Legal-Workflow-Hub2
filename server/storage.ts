@@ -24,7 +24,7 @@ import {
   ConsultationCategory, type ConsultationCategoryValue,
   ConsultationActivityType, MemoActivityType, MemoStage, type MemoActivity,
   ContractStage, ContractStatus, ContractActivityType, ContractStageLabels, type ContractStageValue,
-  HearingStatus,
+  HearingStatus, deriveHearingType, hearingTypeSchema, hearingHasRecordedResult,
   // findPrimaryJudgmentHearing dropped with block 1c's attending-lawyer owner
   // chain — the feed no longer resolves anyone from a judgment hearing. It stays
   // exported from shared/schema for the three client surfaces that still use it.
@@ -48,6 +48,7 @@ import {
   firmToday
 } from "@shared/schema";
 import { db } from "./db";
+import { hearingCaseStagePatch, HearingTypeError, type HearingActor } from "./hearing-type-workflow";
 import type { ActingContext } from "./acting-context";
 // MERGE NOTE (origin/main → branch): both sides independently added `ne` to
 // this import — e1f6569 for the labor-committee department exclusions, and
@@ -158,8 +159,8 @@ export interface IStorage {
   getAcknowledgedHearingIds(userId: string, hearingIds: string[]): Promise<Set<string>>;
   getHearingsByCase(caseId: string): Promise<Hearing[]>;
   getHearingById(id: string): Promise<Hearing | undefined>;
-  createHearing(data: Partial<Hearing>): Promise<Hearing>;
-  updateHearing(id: string, data: Partial<Hearing>): Promise<Hearing | undefined>;
+  createHearing(data: Partial<Hearing>, actor?: HearingActor): Promise<Hearing>;
+  updateHearing(id: string, data: Partial<Hearing>, actor?: HearingActor): Promise<Hearing | undefined>;
   deleteHearing(id: string): Promise<boolean>;
 
   // Field Tasks
@@ -2643,58 +2644,69 @@ export class DatabaseStorage implements IStorage {
     return result[0] ? mapDbHearing(result[0]) : undefined;
   }
 
-  async createHearing(data: Partial<Hearing>): Promise<Hearing> {
+  async createHearing(data: Partial<Hearing>, actor?: HearingActor): Promise<Hearing> {
     const id = randomUUID();
     const now = new Date();
-    
-    const newHearing = {
-      id,
-      caseId: data.caseId || "",
-      hearingDate: data.hearingDate || "",
-      hearingTime: data.hearingTime || "",
-      hearingType: data.hearingType || "محكمة",
-      courtName: data.courtName || "المحكمة العامة",
-      courtNameOther: data.courtNameOther || null,
-      courtRoom: data.courtRoom || "",
-      status: data.status || "قادمة",
-      result: data.result || null,
-      resultDetails: data.resultDetails || "",
-      judgmentSide: null,
-      judgmentFinal: null,
-      objectionFeasible: null,
-      objectionDeadline: null,
-      objectionStatus: null,
-      nextHearingDate: null,
-      nextHearingTime: null,
-      responseRequired: data.responseRequired || false,
-      memoRequired: data.memoRequired || false,
-      opponentResponseRequired: data.opponentResponseRequired || false,
-      hearingReport: "",
-      recommendations: "",
-      nextSteps: "",
-      contactCompleted: false,
-      reportCompleted: false,
-      sessionReportExported: false,
-      adminTasksCreated: false,
-      opponentMemos: "",
-      hearingMinutes: "",
-      reminderSent24h: false,
-      reminderSent1h: false,
-      attendingLawyerId: data.attendingLawyerId || null,
-      googleCalendarEventId: null,
-      notes: data.notes || "",
-      createdAt: now,
-      updatedAt: now,
-    };
-    
-    await db.insert(hearings).values(newHearing);
-    return mapDbHearing(newHearing);
+
+    return db.transaction(async tx => {
+      const [caseRow] = await tx.select().from(lawCases).where(eq(lawCases.id, data.caseId || "")).for("update");
+      if (!caseRow) throw new HearingTypeError("القضية غير موجودة");
+      const [department] = caseRow.departmentId
+        ? await tx.select().from(departments).where(eq(departments.id, caseRow.departmentId)) : [];
+      const hearingType = hearingTypeSchema.parse(data.hearingType ?? deriveHearingType(caseRow.currentStage, department?.name));
+      const stagePatch = hearingCaseStagePatch(mapDbCase(caseRow), hearingType, department?.name, actor);
+      const newHearing = {
+        id,
+        caseId: data.caseId || "",
+        hearingDate: data.hearingDate || "",
+        hearingTime: data.hearingTime || "",
+        hearingType,
+        courtName: data.courtName || "المحكمة العامة",
+        courtNameOther: data.courtNameOther || null,
+        courtRoom: data.courtRoom || "",
+        status: data.status || "قادمة",
+        result: data.result || null,
+        resultDetails: data.resultDetails || "",
+        judgmentSide: null,
+        judgmentFinal: null,
+        objectionFeasible: null,
+        objectionDeadline: null,
+        objectionStatus: null,
+        nextHearingDate: null,
+        nextHearingTime: null,
+        responseRequired: data.responseRequired || false,
+        memoRequired: data.memoRequired || false,
+        opponentResponseRequired: data.opponentResponseRequired || false,
+        hearingReport: "",
+        recommendations: "",
+        nextSteps: "",
+        contactCompleted: false,
+        reportCompleted: false,
+        sessionReportExported: false,
+        adminTasksCreated: false,
+        opponentMemos: "",
+        hearingMinutes: "",
+        reminderSent24h: false,
+        reminderSent1h: false,
+        attendingLawyerId: data.attendingLawyerId || null,
+        googleCalendarEventId: null,
+        notes: data.notes || "",
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      if (Object.keys(stagePatch).length) {
+        await tx.update(lawCases).set({ ...stagePatch, updatedAt: now }).where(eq(lawCases.id, caseRow.id));
+      }
+      await tx.insert(hearings).values(newHearing);
+      return mapDbHearing(newHearing);
+    });
   }
 
-  async updateHearing(id: string, data: Partial<Hearing>): Promise<Hearing | undefined> {
+  async updateHearing(id: string, data: Partial<Hearing>, actor?: HearingActor): Promise<Hearing | undefined> {
     const existing = await this.getHearingById(id);
     if (!existing) return undefined;
-    
+
     const { createdAt, updatedAt, agencyVerificationAckAt, flaggedAt, checkedInAt, ...updateFields } = data;
     const updateData: any = { ...updateFields, updatedAt: new Date() };
     // agency_verification_ack_at is a date-mode column — convert the ISO
@@ -2725,7 +2737,30 @@ export class DatabaseStorage implements IStorage {
     if (checkedInAt !== undefined) {
       updateData.checkedInAt = checkedInAt ? new Date(checkedInAt) : null;
     }
-    await db.update(hearings).set(updateData).where(eq(hearings.id, id));
+    if (data.hearingType !== undefined) {
+      await db.transaction(async tx => {
+        const [row] = await tx.select().from(hearings).where(eq(hearings.id, id)).for("update");
+        if (!row) throw new HearingTypeError("الجلسة غير موجودة");
+        const hearingType = hearingTypeSchema.parse(data.hearingType);
+        if (hearingType !== (row.hearingType || "محكمة")) {
+          if (hearingHasRecordedResult(row)) throw new HearingTypeError("لا يمكن تغيير نوع الجلسة بعد تسجيل النتيجة");
+          if (data.caseId !== undefined && data.caseId !== row.caseId) {
+            throw new HearingTypeError("لا يمكن تغيير القضية ونوع الجلسة معاً");
+          }
+          const [caseRow] = await tx.select().from(lawCases).where(eq(lawCases.id, row.caseId)).for("update");
+          if (!caseRow) throw new HearingTypeError("القضية غير موجودة");
+          const [department] = caseRow.departmentId
+            ? await tx.select().from(departments).where(eq(departments.id, caseRow.departmentId)) : [];
+          const patch = hearingCaseStagePatch(mapDbCase(caseRow), hearingType, department?.name, actor);
+          if (Object.keys(patch).length) {
+            await tx.update(lawCases).set({ ...patch, updatedAt: new Date() }).where(eq(lawCases.id, row.caseId));
+          }
+        }
+        await tx.update(hearings).set(updateData).where(eq(hearings.id, id));
+      });
+    } else {
+      await db.update(hearings).set(updateData).where(eq(hearings.id, id));
+    }
 
     return this.getHearingById(id);
   }

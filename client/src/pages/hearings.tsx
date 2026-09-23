@@ -89,7 +89,7 @@ import { useAuth } from "@/lib/auth-context";
 import { hasEffectiveRole, isDeptHeadFor } from "@/lib/acting-identities";
 import { useDepartments } from "@/lib/departments-context";
 import type { Hearing } from "@shared/schema";
-import { HearingStatus, HearingResult, HearingType, type HearingTypeValue } from "@shared/schema";
+import { HearingStatus, HearingResult, HearingType, HearingTypeLabels, deriveHearingType, hearingHasRecordedResult, hearingTypeWorkflowError, type HearingTypeValue } from "@shared/schema";
 import { differenceInDays, isToday } from "date-fns";
 import { formatTimeAmPm, formatDualDate, formatHijriDateFull, arabicWeekday } from "@/lib/date-utils";
 
@@ -265,6 +265,7 @@ export default function HearingsPage() {
   const [conflictHearing, setConflictHearing] = useState<Hearing | null>(null);
   const [replaceHearingId, setReplaceHearingId] = useState<string | null>(null);
   const [editFormData, setEditFormData] = useState({
+    hearingType: "",
     hearingDate: "",
     hearingTime: "",
     courtName: "",
@@ -272,6 +273,7 @@ export default function HearingsPage() {
     attendingLawyerId: "",
   });
 
+  const [hearingTypeOverridden, setHearingTypeOverridden] = useState(false);
   const [formData, setFormData] = useState({
     caseId: "",
     hearingDate: "",
@@ -291,13 +293,14 @@ export default function HearingsPage() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("action") !== "create") return;
     const caseId = params.get("caseId") || "";
-    const type = params.get("type") as HearingTypeValue | null;
-    if (!caseId && !type) return;
-    const c = caseId ? cases.find((x) => x.id === caseId) : undefined;
+    if (!caseId) return;
+    const c = cases.find((x) => x.id === caseId);
+    if (!c) return;
+    setHearingTypeOverridden(false);
     setFormData((prev) => ({
       ...prev,
       caseId: caseId || prev.caseId,
-      hearingType: type && Object.values(HearingType).includes(type) ? type : prev.hearingType,
+      hearingType: deriveHearingType(c.currentStage, getDepartmentName(c.departmentId || "")),
       // "المترافع" first when the case designates one — mirrors the server
       // default in POST /api/hearings so the pre-filled value matches what the
       // server would have chosen anyway.
@@ -309,7 +312,16 @@ export default function HearingsPage() {
     const cleanUrl = window.location.pathname;
     window.history.replaceState(null, "", cleanUrl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cases.length]);
+  }, [cases, departments]);
+
+  // Keep an automatic suggestion current, without overwriting an explicit choice.
+  useEffect(() => {
+    if (hearingTypeOverridden) return;
+    const selected = cases.find(c => c.id === formData.caseId);
+    if (!selected) return;
+    const type = deriveHearingType(selected.currentStage, getDepartmentName(selected.departmentId || ""));
+    setFormData(prev => prev.hearingType === type ? prev : { ...prev, hearingType: type });
+  }, [cases, departments, formData.caseId, hearingTypeOverridden]);
 
   // Open the hearing-detail dialog when navigated here from the case
   // dialog's hearings tab with ?openHearing=<id>. Waits until the
@@ -334,6 +346,7 @@ export default function HearingsPage() {
   });
 
   const resetForm = () => {
+    setHearingTypeOverridden(false);
     setFormData({
       caseId: "",
       hearingDate: "",
@@ -370,15 +383,24 @@ export default function HearingsPage() {
     });
   };
 
+  const validateHearingType = (caseId: string, hearingType: string) => {
+    const linkedCase = cases.find(c => c.id === caseId);
+    const error = linkedCase && hearingTypeWorkflowError(linkedCase, hearingType, getDepartmentName(linkedCase.departmentId || ""));
+    if (error) toast({ title: "نوع الجلسة غير متوافق مع مسار القضية", description: error, variant: "destructive" });
+    return !error;
+  };
+
   const handleAddHearing = async () => {
     if (!formData.hearingDate || !formData.hearingTime) return;
+    if (!validateHearingType(formData.caseId, formData.hearingType)) return;
     if (!formData.caseId || formData.caseId === "none") {
       toast({ title: "يجب اختيار القضية المرتبطة بالجلسة", variant: "destructive" });
       return;
     }
     setSubmitting(true);
     try {
-      await addHearing(formData);
+      const { hearingType, ...hearingData } = formData;
+      await addHearing({ ...hearingData, ...(hearingTypeOverridden ? { hearingType } : {}) });
       if (replaceHearingId) {
         try { await deleteHearing(replaceHearingId); } catch {}
         setReplaceHearingId(null);
@@ -524,6 +546,7 @@ export default function HearingsPage() {
 
   const openEditDialog = (hearing: Hearing) => {
     setEditFormData({
+      hearingType: hearing.hearingType,
       hearingDate: hearing.hearingDate || "",
       hearingTime: hearing.hearingTime || "",
       courtName: hearing.courtName || "",
@@ -535,9 +558,15 @@ export default function HearingsPage() {
 
   const handleEditHearing = async () => {
     if (!editDialogHearing) return;
+    if (editFormData.hearingType !== editDialogHearing.hearingType && !validateHearingType(editDialogHearing.caseId, editFormData.hearingType)) return;
     setSubmitting(true);
     try {
-      await updateHearing(editDialogHearing.id, editFormData);
+      const { hearingType, ...otherFields } = editFormData;
+      await updateHearing(editDialogHearing.id, {
+        ...otherFields,
+        ...(!hearingHasRecordedResult(editDialogHearing) && hearingType !== editDialogHearing.hearingType
+          ? { hearingType } : {}),
+      });
       toast({ title: "تم تعديل الجلسة بنجاح" });
       setEditDialogHearing(null);
     } catch (e: any) {
@@ -849,45 +878,8 @@ export default function HearingsPage() {
                                   if (!selected) return;
                                   // "المترافع" first — same chain as the server.
                                   const autoLawyer = caseAttendanceLawyerId(selected) || "";
-                                  // Auto-derive the hearing type. A DEFAULT ONLY — the
-                                  // "نوع الجلسة" select below stays fully editable, so a
-                                  // user can still record a settlement hearing on a
-                                  // court-stage case, or the reverse.
-                                  const stage = selected.currentStage;
-                                  const settlementStages = new Set([
-                                    "مداولة_الصلح",
-                                    "أغلق_طلب_الصلح",
-                                    "قيد_التدقيق_في_تراضي",
-                                  ]);
-                                  // 🔴 THE STAGE DECIDES COURT-vs-SETTLEMENT; the
-                                  // DEPARTMENT only picks WHICH settlement platform.
-                                  //
-                                  // It used to be `else if (caseType === "عمالي")`,
-                                  // which applied at ANY stage — so a labor case's
-                                  // genuine COURT hearing defaulted to تسوية_ودية.
-                                  // Harmless while the type only labelled the row;
-                                  // once settlement hearings became EXEMPT from the
-                                  // ضبط requirement it would have silently exempted
-                                  // every labor court hearing.
-                                  //
-                                  // That branch was also unreachable for its own
-                                  // purpose: the labor settlement stage IS مداولة_الصلح,
-                                  // which the settlementStages test catches first — so
-                                  // it could never type a real labor settlement hearing
-                                  // and only ever fired where it was wrong.
-                                  //
-                                  // Signal is the RESOLVED DEPARTMENT NAME, never
-                                  // caseType — the documented L5 precedent (caseType is
-                                  // free-text user input; case-progress-bar.tsx says
-                                  // "DO NOT pass the case's caseType field"), and the
-                                  // same resolution the mohr_number prompt uses.
-                                  const deptName = getDepartmentName(selected.departmentId || "");
-                                  let autoType: HearingTypeValue = HearingType.COURT;
-                                  if (settlementStages.has(stage)) {
-                                    autoType = deptName === "عمالي"
-                                      ? HearingType.SETTLEMENT  // الودية / MOHR
-                                      : HearingType.TARADI;     // منصة تراضي
-                                  }
+                                  setHearingTypeOverridden(false);
+                                  const autoType = deriveHearingType(selected.currentStage, getDepartmentName(selected.departmentId || ""));
                                   setFormData(prev => ({
                                     ...prev,
                                     caseId: val,
@@ -967,16 +959,17 @@ export default function HearingsPage() {
                 <Label>نوع الجلسة</Label>
                 <Select
                   value={formData.hearingType}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, hearingType: value as HearingTypeValue })
-                  }
+                  onValueChange={(value) => {
+                    setHearingTypeOverridden(true);
+                    setFormData({ ...formData, hearingType: value as HearingTypeValue });
+                  }}
                 >
                   <SelectTrigger data-testid="select-hearing-type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={HearingType.COURT}>محكمة</SelectItem>
-                    <SelectItem value={HearingType.TARADI}>تراضي</SelectItem>
+                    <SelectItem value={HearingType.TARADI}>صلح</SelectItem>
                     <SelectItem value={HearingType.SETTLEMENT}>تسوية ودية</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1858,6 +1851,24 @@ export default function HearingsPage() {
                 value={editFormData.courtName}
                 onChange={(e) => setEditFormData({ ...editFormData, courtName: e.target.value })}
               />
+            </div>
+            <div>
+              <Label>نوع الجلسة</Label>
+              <Select
+                value={editFormData.hearingType}
+                disabled={!!editDialogHearing && hearingHasRecordedResult(editDialogHearing)}
+                onValueChange={(hearingType) => setEditFormData(prev => ({ ...prev, hearingType }))}
+              >
+                <SelectTrigger data-testid="select-edit-hearing-type"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.values(HearingType).map(type => (
+                    <SelectItem key={type} value={type}>{HearingTypeLabels[type]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {editDialogHearing && hearingHasRecordedResult(editDialogHearing) && (
+                <p className="text-sm text-muted-foreground mt-1">لا يمكن تغيير نوع الجلسة بعد تسجيل النتيجة.</p>
+              )}
             </div>
             {editDialogHearing?.caseId && editDialogHearing.caseId !== "none" && (
               <div>

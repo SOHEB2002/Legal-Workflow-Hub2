@@ -3705,15 +3705,60 @@ export const HearingType = {
 
 export type HearingTypeValue = typeof HearingType[keyof typeof HearingType];
 
-// Display labels, mirroring HearingStatusLabels / HearingResultLabels. Two of the
-// three values are already presentable, but تسوية_ودية carries the enum's
-// underscore and must never reach a user that way — which is the whole reason a
-// map exists rather than printing the raw value.
+// Keep stored values compatible; the conciliation type is displayed as صلح.
 export const HearingTypeLabels: Record<HearingTypeValue, string> = {
   "محكمة": "محكمة",
-  "تراضي": "تراضي",
+  "تراضي": "صلح",
   "تسوية_ودية": "تسوية ودية",
 };
+
+export const hearingTypeSchema = z.enum([HearingType.COURT, HearingType.TARADI, HearingType.SETTLEMENT]);
+
+// A suggestion for NEW hearings only; an explicit valid selection wins.
+export function deriveHearingType(stage?: string | null, departmentName?: string | null): HearingTypeValue {
+  if (stage === CaseStage.CONCILIATION || stage === "قيد_التدقيق_في_تراضي") {
+    return departmentName === "عمالي" ? HearingType.SETTLEMENT : HearingType.TARADI;
+  }
+  return HearingType.COURT;
+}
+
+export function caseSupportsSettlementHearing(
+  lawCase: Pick<LawCase, "caseClassification" | "clientRole" | "memoRequired" | "isSettlementCase" | "adminCaseSubType">,
+  departmentName?: string,
+): boolean {
+  return getStagesForClassification(lawCase.caseClassification as CaseClassificationValue,
+    departmentName, lawCase.clientRole || undefined, !!lawCase.memoRequired,
+    !!lawCase.isSettlementCase, lawCase.adminCaseSubType).includes(CaseStage.CONCILIATION);
+}
+
+export function hearingTypeWorkflowError(lawCase: LawCase, hearingType: string, departmentName?: string): string | null {
+  if (hearingProducesNoMinutes({ hearingType }) && !caseSupportsSettlementHearing(lawCase, departmentName)) {
+    return "لا يمكن اختيار صلح أو تسوية ودية — مسار القضية الحالي لا يتضمن مرحلة مداولة الصلح";
+  }
+  if (hearingType === HearingType.COURT && lawCase.caseClassification === "منظورة_بالمحكمة" && lawCase.isSettlementCase) {
+    return "مسار القضية مخصص للصلح — اختر متابعة التقاضي في مسار القضية أولاً قبل إضافة جلسة محكمة";
+  }
+  return null;
+}
+
+export function hearingHasRecordedResult(hearing: { result?: string | null }): boolean {
+  return !!String(hearing.result ?? "").trim();
+}
+
+// The stored type owns the menu; case context prevents stale settlement sessions
+// from moving a case backwards after it has left the settlement workflow.
+export function getHearingResultOptions(
+  hearingType: string,
+  context: { currentStage?: string | null; hasSettlementTrack: boolean },
+): HearingResultValue[] {
+  if (hearingProducesNoMinutes({ hearingType })) {
+    if (caseIsAtOrPastCourt(context.currentStage) || !context.hasSettlementTrack) return [];
+    return [HearingResult.NEW_SESSION, HearingResult.SETTLEMENT_REACHED,
+      HearingResult.SETTLEMENT_FAILED, HearingResult.SETTLEMENT_LINK_MISSING];
+  }
+  return [HearingResult.NEW_SESSION, HearingResult.JUDGMENT,
+    HearingResult.DISMISSAL, HearingResult.JURISDICTION_DECLINED];
+}
 
 // A hearing that produces NO court ضبط, so the minutes requirement must not
 // apply to it (owner decision 2026-08-04). جلسات الصلح والتسوية are conducted on
@@ -3727,8 +3772,8 @@ export const HearingTypeLabels: Record<HearingTypeValue, string> = {
 //     court hearings;
 //   • caseType is free text, and trusting it is a DOCUMENTED BUG in this codebase
 //     (the L5 labor fix replaced exactly that test with a department lookup).
-// hearing_type is already load-bearing server-side — POST /api/hearings branches
-// on it to choose between the مداولة_الصلح transition and the court promotion —
+// hearing_type is already load-bearing server-side — hearing storage uses it
+// to choose between the مداولة_الصلح transition and the court promotion —
 // so this reuses an existing decision rather than inventing a parallel one.
 //
 // ⚠ معين IS NOT EXCLUDED (owner answer 2026-08-04): معين hearings DO produce a
@@ -5680,7 +5725,7 @@ export const insertHearingSchema = z.object({
   caseId: z.string().min(1, "القضية مطلوبة"),
   hearingDate: z.string().min(1, "تاريخ الجلسة مطلوب"),
   hearingTime: z.string().min(1, "وقت الجلسة مطلوب"),
-  hearingType: z.string().optional().default("محكمة"),
+  hearingType: hearingTypeSchema.optional(),
   courtName: z.string().min(1, "يرجى إدخال اسم المحكمة"),
   courtNameOther: z.string().nullable().optional(),
   courtRoom: z.string().optional().default(""),
@@ -8377,7 +8422,7 @@ export const updateHearingSchema = z.object({
   caseId: z.string().optional(),
   hearingDate: z.string().optional(),
   hearingTime: z.string().optional(),
-  hearingType: z.string().optional(),
+  hearingType: hearingTypeSchema.optional(),
   courtName: z.string().optional(),
   courtNameOther: z.string().nullable().optional(),
   courtRoom: z.string().optional(),

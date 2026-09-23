@@ -15,7 +15,7 @@ import { useClients } from "@/lib/clients-context";
 import { useDepartments } from "@/lib/departments-context";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/hooks/use-toast";
-import { HearingResult, HearingType, caseIsAtOrPastCourt, getStagesForClassification, CaseClassification, type CaseClassificationValue, type Hearing } from "@shared/schema";
+import { HearingResult, HearingResultLabels, getHearingResultOptions, caseSupportsSettlementHearing, type Hearing } from "@shared/schema";
 
 // SHARED hearing-result dialog. Extracted verbatim from the hearings page so the
 // hearings screen AND the unified-tasks hub mount the SAME component → same
@@ -219,97 +219,16 @@ export function HearingResultDialog({
               </SelectTrigger>
               <SelectContent>
                 {(() => {
-                  const ht = hearing?.hearingType;
                   const linkedCase = hearing?.caseId ? getCaseById(hearing.caseId) : null;
-                  const isAdminCourt = ht === HearingType.COURT && linkedCase?.caseType === "إداري";
-                  // 🔴 THE CASE OVERRULES THE HEARING'S OWN TYPE (2026-08-11).
-                  // The two `||` arms below key on hearingType alone and ignored
-                  // the case entirely, so a تراضي hearing left open when its case
-                  // advanced into court kept offering the full settlement menu
-                  // forever. That is the surface that produced the 2026-08-09
-                  // incident: three filed cases at منظورة dragged back to
-                  // أغلق_طلب_الصلح from stale صلح sessions.
-                  //
-                  // POST /api/hearings/:id/result now REJECTS a settlement result
-                  // on a case at or past court, so these options must stop being
-                  // rendered there — visibility == authorization. Same shared
-                  // predicate on both sides (caseIsAtOrPastCourt, shared/schema),
-                  // so the dialog cannot drift from the endpoint.
-                  //
-                  // An unlinked hearing leaves inCourt false and the menu exactly
-                  // as it was, matching the server, which only refuses when it
-                  // actually holds the case row.
-                  const inCourt = caseIsAtOrPastCourt(linkedCase?.currentStage);
-                  // …AND THE CASE MUST HAVE A SETTLEMENT TRACK AT ALL. Mirrors the
-                  // second server guard: the endpoint refuses a settlement result
-                  // when the case's RESOLVED PATH contains no مداولة_الصلح, so the
-                  // options must stop being offered there too.
-                  //
-                  // The at-or-past-court test above does NOT cover this. A case
-                  // parked on a PRE-court stage (دراسة, استكمال_البيانات) passes it
-                  // while having no settlement stage anywhere on its path — the gap
-                  // that produced the 16 rows sitting at تحصيل on
-                  // InCourtNoMemoStages. A تراضي hearing can exist on such a case,
-                  // so hearingType alone kept the menu open.
-                  //
-                  // Refused paths: USAdmin, InCourtDefendant, InCourtPlaintiff,
-                  // InCourtNoMemo. Unchanged: USGeneral, USCommercial, USLabor,
-                  // InCourtSettlement — every path that really does run through
-                  // مداولة_الصلح keeps the menu exactly as it is today.
-                  //
-                  // An unlinked hearing leaves hasSettlementTrack TRUE (permissive),
-                  // matching the server, which only refuses when it holds the case.
-                  const hasSettlementTrack = !linkedCase || getStagesForClassification(
-                    (linkedCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
-                    departments.find((d) => d.id === linkedCase.departmentId)?.name,
-                    linkedCase.clientRole || undefined,
-                    !!linkedCase.memoRequired,
-                    !!linkedCase.isSettlementCase,
-                  ).includes("مداولة_الصلح");
-                  const isSettlementContext =
-                    !inCourt
-                    && hasSettlementTrack
-                    && (
-                      (!!linkedCase?.isSettlementCase && linkedCase?.currentStage === "مداولة_الصلح")
-                      || ht === HearingType.TARADI || ht === HearingType.SETTLEMENT
-                    );
-                  if (isSettlementContext) {
-                    return (
-                      <>
-                        <SelectItem value="موعد_جديد">موعد جديد</SelectItem>
-                        <SelectItem value="تم_الصلح">تم الصلح</SelectItem>
-                        <SelectItem value="لم_يتم_الصلح">لم يتم الصلح</SelectItem>
-                        <SelectItem value="لم_يصلنا_رابط_الصلح">لم يصلنا رابط الصلح</SelectItem>
-                      </>
-                    );
-                  }
-                  if (isAdminCourt) {
-                    return (
-                      <>
-                        <SelectItem value="موعد_جديد">جلسة (موعد جديد)</SelectItem>
-                        <SelectItem value="حكم">حكم</SelectItem>
-                        <SelectItem value="شطب">شطب</SelectItem>
-                        <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
-                      </>
-                    );
-                  }
-                  return (
-                    <>
-                      <SelectItem value="موعد_جديد">جلسة (موعد جديد)</SelectItem>
-                      <SelectItem value="حكم">حكم</SelectItem>
-                      {/* تم_الصلح sits on the DEFAULT (court-hearing) menu too, and
-                          the server now refuses it once the case is in court —
-                          it routes to تحصيل, which is sealed against manual
-                          closure at every tier. Hidden CONDITIONALLY, exactly
-                          where the endpoint would 400. It stays offered for a
-                          pre-court case, where settling is the designed flow;
-                          removing it from this menu outright is a separate
-                          product question and is NOT what this does. */}
-                      {!inCourt && hasSettlementTrack && <SelectItem value="تم_الصلح">تم الصلح</SelectItem>}
-                      <SelectItem value="شطب">شطب</SelectItem>
-                      <SelectItem value="عدم_الاختصاص">عدم الاختصاص</SelectItem>
-                    </>
+                  const hasSettlementTrack = !linkedCase || caseSupportsSettlementHearing(
+                    linkedCase, departments.find(d => d.id === linkedCase.departmentId)?.name,
                   );
+                  const options = getHearingResultOptions(hearing?.hearingType || "محكمة", {
+                    currentStage: linkedCase?.currentStage, hasSettlementTrack,
+                  });
+                  return options.length ? options.map(result => (
+                    <SelectItem key={result} value={result}>{HearingResultLabels[result]}</SelectItem>
+                  )) : <SelectItem value="unavailable" disabled>مرحلة القضية الحالية لا تسمح بنتائج هذه الجلسة</SelectItem>;
                 })()}
               </SelectContent>
             </Select>

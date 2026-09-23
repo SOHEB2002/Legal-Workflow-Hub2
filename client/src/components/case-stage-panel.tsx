@@ -196,8 +196,8 @@ export function CaseStagePanel({
               onHearingPrompt?.({
                 caseId: caseItem.id,
                 hearingType: "تراضي",
-                title: "هل تريد إضافة موعد جلسة تراضي الآن؟",
-                description: "تم قبول الطلب في منصة تراضي. يرجى إضافة موعد جلسة التراضي.",
+                title: "هل تريد إضافة موعد جلسة صلح الآن؟",
+                description: "تم قبول الطلب في منصة تراضي. يرجى إضافة موعد جلسة الصلح.",
               });
             } else if (
               (stageBefore === "قيد_التدقيق_في_ناجز" ||
@@ -207,8 +207,8 @@ export function CaseStagePanel({
               onHearingPrompt?.({
                 caseId: caseItem.id,
                 hearingType: "محكمة",
-                title: "هل تريد إضافة موعد جلسة محكمة الآن؟",
-                description: "تم قبول القضية في المحكمة. يرجى إضافة موعد الجلسة القادمة.",
+                title: "هل تريد إضافة موعد جلسة الآن؟",
+                description: "تم تحديث مرحلة القضية. يرجى إضافة موعد الجلسة القادمة.",
               });
             }
             onChanged?.();

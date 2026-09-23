@@ -34,7 +34,7 @@ import {
   HearingStatusLabels,
   HearingResult,
   HearingResultLabels,
-  HearingType,
+  HearingType, HearingTypeLabels,
   CaseClassification,
   CaseClassificationLabels,
 } from "@shared/schema";
@@ -253,7 +253,7 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
   });
 
   const hearingTypeOptions = useMemo(
-    () => Object.values(HearingType).map((v) => ({ value: v, label: v.replace(/_/g, " ") })),
+    () => Object.values(HearingType).map((v) => ({ value: v, label: HearingTypeLabels[v] })),
     [],
   );
   const resultOptions = useMemo(
@@ -364,7 +364,7 @@ export function HearingsAdvancedFilters({ filters, onChange, departments, users 
 
   const describeFilters = (f: AdvancedHearingsFilters): string => {
     const parts: string[] = [];
-    if (f.hearingTypes.length) parts.push(`النوع: ${f.hearingTypes.join("، ")}`);
+    if (f.hearingTypes.length) parts.push(`النوع: ${f.hearingTypes.map(t => HearingTypeLabels[t as keyof typeof HearingTypeLabels] || t).join("، ")}`);
     if (f.results.length)
       parts.push(`النتيجة: ${f.results.map((r) => HearingResultLabels[r as keyof typeof HearingResultLabels] || r).join("، ")}`);
     if (f.statuses.length)

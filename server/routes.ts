@@ -1,3 +1,4 @@
+import { HearingTypeError } from "./hearing-type-workflow";
 // ExpressResponse is aliased because the bare name `Response` resolves to the
 // DOM fetch Response in this file's lib set — streamAttachmentToResponse needs
 // the Express one (headersSent / writableEnded / pipe target).
@@ -201,7 +202,7 @@ import {
   resolveAdminSupportAssignee,
   setAdminSupportTaskAssignmentSchema,
   SIDEBAR_SECTIONS,
-  StagesAtOrPastCourt,
+  getHearingResultOptions, caseSupportsSettlementHearing,
   caseIsAtOrPastCourt,
   CaseStageLabels,
   type SidebarSectionValue,
@@ -4457,10 +4458,9 @@ export async function registerRoutes(
               caseId: newCase.id,
               hearingDate: req.body.nextHearingDate,
               hearingTime: req.body.nextHearingTime || "10:00",
-              hearingType: "محكمة",
               courtName: (validatedData.courtName || ""),
               status: "قادمة",
-            });
+            }, { id: createdBy, name: req.user?.name });
             autoHearingId = hearing.id;
             autoCreated.push({ type: "hearing", id: hearing.id, hearing });
             await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
@@ -4522,10 +4522,9 @@ export async function registerRoutes(
             caseId: newCase.id,
             hearingDate: req.body.nextHearingDate,
             hearingTime: req.body.nextHearingTime || "10:00",
-            hearingType: "محكمة",
             courtName: (validatedData.courtName || ""),
             status: "قادمة",
-          });
+          }, { id: createdBy, name: req.user?.name });
           autoHearingId = hearing.id;
           autoCreated.push({ type: "hearing", id: hearing.id, hearing });
           await storage.updateCase(newCase.id, { nextHearingDate: req.body.nextHearingDate });
@@ -4586,7 +4585,8 @@ export async function registerRoutes(
         actorName: user.name || createdBy,
       });
 
-      res.status(201).json({ ...newCase, autoCreated });
+      const savedCase = autoHearingId ? await storage.getCaseById(newCase.id) : newCase;
+      res.status(201).json({ ...(savedCase || newCase), autoCreated });
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
@@ -15172,7 +15172,7 @@ export async function registerRoutes(
           }
         }
       }
-      const newHearing = await storage.createHearing(validatedData);
+      const newHearing = await storage.createHearing(validatedData, req.user!);
       const user = req.user!;
       const createdMemos: any[] = [];
 
@@ -15199,139 +15199,7 @@ export async function registerRoutes(
         }
       }
 
-      // Auto-stage transition based on hearing type
-      if (validatedData.caseId && validatedData.caseId !== "none") {
-        try {
-          const caseForStage = await storage.getCaseById(validatedData.caseId);
-          if (caseForStage && !caseForStage.isArchived && caseForStage.currentStage !== "مقفلة") {
-            const hearingType = validatedData.hearingType || "محكمة";
-            const currentStage = caseForStage.currentStage as string;
-
-            if (hearingType === "تراضي" || hearingType === "تسوية_ودية") {
-              const conciliationFromStages = ["قيد_التدقيق_في_ناجز", "قيد_التدقيق_في_تراضي", "أغلق_طلب_الصلح"];
-              if (conciliationFromStages.includes(currentStage)) {
-                const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                // مداولة_الصلح is still pre-trial, so classification stays قيد_الدراسة.
-                await storage.updateCase(caseForStage.id, {
-                  currentStage: "مداولة_الصلح",
-                  stageHistory: [
-                    ...stageHistory,
-                    { stage: "مداولة_الصلح", timestamp: new Date().toISOString(), userId: user?.id || "system", userName: user?.name || "النظام", notes: "انتقال تلقائي عند إنشاء جلسة صلح" },
-                  ],
-                });
-              }
-            } else if (hearingType === "محكمة") {
-              // A COURT hearing means the case HAS entered court, so it is
-              // promoted at that moment rather than left to be discovered later
-              // (owner decision 2026-07-26). WIDENED from four source stages —
-              // أغلق_طلب_الصلح + the three قيد_التدقيق_* — to every pre-court
-              // stage. The narrow list is what produced the wrong-path bug: a
-              // case that failed settlement dropped to أغلق_طلب_الصلح as
-              // قيد_الدراسة, still carried an OLD settlement-era hearing (so this
-              // block never ran for it), and then reached a JUDGMENT while still
-              // classified قيد_الدراسة — after which getStagesForClassification
-              // resolved the UNDER-STUDY array and the progress bar rendered the
-              // labor/general litigation path instead of the in-court one.
-              //
-              // NOT promoted from stages already AT or PAST منظورة. The rule is
-              // "a court hearing means the case is in court" — for those stages
-              // that is ALREADY true, and writing منظورة would REGRESS them:
-              // adding a follow-up hearing to a case at محكوم_حكم_نهائي would
-              // silently erase the judgment. For that group we still repair a
-              // STALE CLASSIFICATION (exactly the cohort the bug above created)
-              // without touching the stage or the history.
-              // CARVE-OUT (appeal path): a court hearing scheduled on a case at
-              // محكوم_حكم_ابتدائي means THE OPPONENT APPEALED — a primary judgment
-              // was issued and the court is sitting again. Promote to
-              // منظورة_استئناف (NOT منظورة, which would read as a fresh first-
-              // instance trial). This is one of the two opponent-appeal triggers;
-              // the other is the explicit "الخصم استأنف" button.
-              //
-              // محكوم_حكم_نهائي and everything after stay PROTECTED below: a final
-              // judgment is not appealable in-app, and writing any earlier stage
-              // over it would erase the judgment.
-              //
-              // THE SET MOVED to shared/schema.ts as StagesAtOrPastCourt so the
-              // settlement guard on POST /api/hearings/:id/result and the client
-              // result dialog share this one rule instead of copying it. It now
-              // CONTAINS محكوم_حكم_ابتدائي, which the local copy omitted — so the
-              // opponent-appeal carve-out described just above, which used to be
-              // expressed implicitly by leaving that stage out of the set, is
-              // written explicitly as `isOpponentAppeal ||` on the branch below.
-              // Behaviour is identical: محكوم_حكم_ابتدائي reaches the promotion
-              // through the new disjunct, every other stage answers exactly as
-              // the local set did.
-              // ⚠ NO صك GATE ON THIS PROMOTION, DELIBERATELY (2026-08-03). The
-              // court has LISTED AN APPEAL SESSION — an external fact that has
-              // already happened. Refusing to promote would leave the case
-              // recorded as still at first instance while a hearing sits on it,
-              // and the refusal would have to either fail the hearing creation (so
-              // the session cannot be diarised at all) or be swallowed here with
-              // no actor and no error surface. Both are worse than a case that is
-              // truthfully on appeal owing a document. The close gate still holds.
-              const isOpponentAppeal = currentStage === "محكوم_حكم_ابتدائي";
-              const courtTargetStage = isOpponentAppeal ? "منظورة_استئناف" : "منظورة";
-              const promoteClassification = caseForStage.caseClassification === "قيد_الدراسة";
-              const classificationFields = promoteClassification
-                ? {
-                    caseClassification: "منظورة_بالمحكمة",
-                    // For قيد_الدراسة the firm is always the plaintiff — persist it
-                    // so the post-promotion UI keeps the role. Same default as the
-                    // PATCH promotion.
-                    ...(!caseForStage.clientRole ? { clientRole: "مدعي" } : {}),
-                  }
-                : {};
-              if (isOpponentAppeal || !StagesAtOrPastCourt.has(currentStage as CaseStageValue)) {
-                const stageHistory = Array.isArray(caseForStage.stageHistory) ? caseForStage.stageHistory : [];
-                await storage.updateCase(caseForStage.id, {
-                  currentStage: courtTargetStage,
-                  ...classificationFields,
-                  stageHistory: [
-                    ...stageHistory,
-                    {
-                      stage: courtTargetStage,
-                      timestamp: new Date().toISOString(),
-                      userId: user?.id || "system",
-                      userName: user?.name || "النظام",
-                      notes: isOpponentAppeal
-                        ? "انتقال تلقائي — جلسة محكمة بعد حكم ابتدائي (استئناف الخصم)"
-                        : "انتقال تلقائي عند إنشاء جلسة محكمة",
-                    },
-                  ],
-                });
-              } else if (promoteClassification) {
-                // Already in/past court but mis-classified — fix the label only.
-                await storage.updateCase(caseForStage.id, classificationFields);
-              }
-            }
-          }
-        } catch (e) {
-          // NO LONGER SWALLOWED. This used to be `console.error(...)` and fall
-          // through, so a failed promotion left the hearing created on a case
-          // stuck in the wrong stage/classification — invisible until the wrong
-          // stage path showed up weeks later. The stage write IS the point of
-          // creating a court hearing, so if it fails the whole request fails:
-          // roll the hearing back and surface a 500 rather than persist the
-          // half-done state. A rollback failure is logged loudly and still 500s
-          // (the hearing then exists but the case is unpromoted — the old
-          // behaviour, now at least visible in the logs).
-          console.error(
-            "[POST hearings] auto-stage FAILED — rolling back hearing",
-            { hearingId: newHearing.id, caseId: validatedData.caseId, hearingType: validatedData.hearingType },
-            e,
-          );
-          try {
-            await storage.deleteHearing(newHearing.id);
-          } catch (rollbackErr) {
-            console.error(
-              "[POST hearings] ROLLBACK FAILED — hearing persists on an unpromoted case",
-              { hearingId: newHearing.id, caseId: validatedData.caseId },
-              rollbackErr,
-            );
-          }
-          return res.status(500).json({ error: "تعذّر تحديث مرحلة القضية — لم يتم إنشاء الجلسة، يرجى المحاولة مرة أخرى" });
-        }
-      }
+      // Storage saves the final type and its case-stage/history update atomically.
 
       if (validatedData.caseId && validatedData.caseId !== "none") {
         try {
@@ -15483,6 +15351,7 @@ export async function registerRoutes(
 
       res.status(201).json({ ...newHearing, createdMemos });
     } catch (error) {
+      if (error instanceof HearingTypeError) return res.status(400).json({ error: error.message });
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: error.errors });
       }
@@ -15545,7 +15414,7 @@ export async function registerRoutes(
         && !!nextAttendee
         && nextAttendee !== priorAttendee;
 
-      const updated = await storage.updateHearing(String(req.params.id), req.body);
+      const updated = await storage.updateHearing(String(req.params.id), req.body, user);
       if (!updated) {
         return res.status(404).json({ error: "الجلسة غير موجودة" });
       }
@@ -15608,6 +15477,7 @@ export async function registerRoutes(
 
       res.json(updated);
     } catch (error) {
+      if (error instanceof HearingTypeError) return res.status(400).json({ error: error.message });
       res.status(500).json({ error: "حدث خطأ في تحديث الجلسة" });
     }
   });
@@ -15938,21 +15808,16 @@ export async function registerRoutes(
       const settlementProbeCase = settlementProbeCaseId
         ? await storage.getCaseById(settlementProbeCaseId)
         : null;
-      const isSettlementHearing =
-        !!settlementProbeCase?.isSettlementCase
-        && settlementProbeCase?.currentStage === "مداولة_الصلح";
-      if (isSettlementHearing) {
-        const allowedSettlementResults: string[] = [
-          HearingResult.NEW_SESSION,
-          HearingResult.SETTLEMENT_REACHED,
-          HearingResult.SETTLEMENT_FAILED,
-          HearingResult.SETTLEMENT_LINK_MISSING,
-        ];
-        if (!allowedSettlementResults.includes(data.result)) {
-          return res.status(400).json({
-            error: "هذه جلسة صلح — النتائج المتاحة: موعد جديد، تم الصلح، أو لم يتم الصلح",
-          });
-        }
+      const resultDepartment = settlementProbeCase?.departmentId
+        ? await storage.getDepartmentById(settlementProbeCase.departmentId) : undefined;
+      const allowedResults = getHearingResultOptions(hearing.hearingType, {
+        currentStage: settlementProbeCase?.currentStage,
+        hasSettlementTrack: !settlementProbeCase || caseSupportsSettlementHearing(settlementProbeCase, resultDepartment?.name),
+      });
+      // Preserve the existing legacy settlement payload spelling.
+      const effectiveResult = data.result === HearingResult.SETTLEMENT ? data.conciliationResult : data.result;
+      if (!allowedResults.some(result => result === effectiveResult)) {
+        return res.status(400).json({ error: "النتيجة غير متاحة لنوع الجلسة ومرحلة القضية الحالية" });
       }
 
       // ==================== 🔴 A SETTLEMENT RESULT CANNOT REACH A COURT-FILED CASE ====================
@@ -16414,6 +16279,7 @@ export async function registerRoutes(
               caseId: effectiveCaseId,
               hearingDate: data.nextHearingDate,
               hearingTime: data.nextHearingTime || hearing.hearingTime,
+              hearingType: hearing.hearingType,
               courtName: hearing.courtName,
               courtNameOther: hearing.courtNameOther,
               courtRoom: hearing.courtRoom,
@@ -16424,7 +16290,7 @@ export async function registerRoutes(
               // so it survives and is what lights the "مطلوب رد من الخصم" badge.
               opponentResponseRequired: data.opponentResponseRequired || false,
               notes: `موعد جديد من جلسة ${hearing.hearingDate}`,
-            });
+            }, reqUser);
             newSessionHearingId = newHearing.id;
             // The new session is now the newest hearing, so it is the flag's
             // carrier and the row the sweep must spare.

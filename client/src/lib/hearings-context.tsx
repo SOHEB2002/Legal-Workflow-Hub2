@@ -1,3 +1,4 @@
+import { useCases } from "@/lib/cases-context";
 import { createContext, useContext, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -51,6 +52,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     enabled: !!user,
   });
 
+  const { refreshCases } = useCases();
   const HEARINGS_KEY = ["/api/hearings"] as const;
   const bgRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -95,6 +97,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     const res = await apiRequest("POST", "/api/hearings", data);
     const hearing = await res.json();
     upsertLocal(hearing);
+    void refreshCases();
     scheduleBackgroundRefetch();
     // The server may have auto-created memos (the explicit responseRequired
     // path, or the deferred-memo pickup from prior hearings on the same
@@ -115,6 +118,7 @@ export function HearingsProvider({ children }: { children: React.ReactNode }) {
     } catch {
       patchLocal(id, data);
     }
+    if (data.hearingType !== undefined) void refreshCases();
     scheduleBackgroundRefetch();
   };
 
