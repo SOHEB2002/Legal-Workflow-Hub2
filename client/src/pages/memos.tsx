@@ -1,3 +1,4 @@
+import { caseWorkflowName, NO_CASE_DEPARTMENT } from "@shared/schema";
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -586,7 +587,7 @@ export default function MemosPage() {
   // departments have loaded.
   useEffect(() => {
     if (departments.length === 0) return;
-    if (filterDept !== "all" && !departments.some((d) => String(d.id) === filterDept)) {
+    if (filterDept !== "all" && filterDept !== NO_CASE_DEPARTMENT && !departments.some((d) => String(d.id) === filterDept)) {
       setFilterDept("all");
     }
   }, [departments, filterDept, setFilterDept]);
@@ -1626,7 +1627,7 @@ export default function MemosPage() {
         }
       }
       const relatedCase = cases.find(c => c.id === m.caseId);
-      if (filterDept !== "all" && !(relatedCase && relatedCase.departmentId === filterDept)) return false;
+      if (filterDept !== "all" && !(relatedCase && (relatedCase.departmentId === null ? NO_CASE_DEPARTMENT : relatedCase.departmentId) === filterDept)) return false;
       if (filterAssignedTo !== "all" && m.assignedTo !== filterAssignedTo) return false;
       if (q) {
         const clientName = relatedCase ? getClientName(relatedCase.clientId) : "";
@@ -1660,7 +1661,7 @@ export default function MemosPage() {
       }
       if (advFilters.priorities.length && !advFilters.priorities.includes(m.priority)) return false;
       if (advFilters.depts.length) {
-        if (!relatedCase || !advFilters.depts.includes(relatedCase.departmentId)) return false;
+        if (!relatedCase || !advFilters.depts.includes(relatedCase.departmentId === null ? NO_CASE_DEPARTMENT : relatedCase.departmentId)) return false;
       }
       if (advFilters.lawyers.length && !advFilters.lawyers.includes(m.assignedTo)) return false;
       if (advFilters.classification) {
@@ -1867,6 +1868,7 @@ export default function MemosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع الأقسام</SelectItem>
+                <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>
                 {departments.map((dept) => (
                   <SelectItem key={String(dept.id)} value={String(dept.id)}>{dept.name}</SelectItem>
                 ))}
@@ -2957,7 +2959,7 @@ export default function MemosPage() {
                     currentStage={detailMemo.currentStage as MemoStageValue}
                     // Batch 17 — «أخرى» renders the four-stage short path.
                     memoType={detailMemo.memoType}
-                    departmentName={getDepartmentName(getMemoCase(detailMemo)?.departmentId || "")}
+                    departmentName={caseWorkflowName(getMemoCase(detailMemo) || {}, getDepartmentName(getMemoCase(detailMemo)?.departmentId))}
                     // 🔴 Batch 10 — DIMMED, not hidden (owner ruling). The gate above
                     // is still `currentStage` only, so a cancelled memo's bar keeps
                     // rendering; it now reads as history rather than as live work,
@@ -3026,7 +3028,7 @@ export default function MemosPage() {
                       تجاوز المراجعة الداخلية
                     </Button>
                   )}
-                  {user && canDoMemoCommitteeDecision(detailMemo, user.role, getDepartmentName(cases.find((c) => c.id === detailMemo.caseId)?.departmentId || "") === "عمالي") && (
+                  {user && canDoMemoCommitteeDecision(detailMemo, user.role, caseWorkflowName(cases.find((c) => c.id === detailMemo.caseId) || {}, getDepartmentName(cases.find((c) => c.id === detailMemo.caseId)?.departmentId)) === "عمالي") && (
                     <Button
                       data-testid={`button-committee-decision-${detailMemo.id}`}
                       onClick={() => openCommitteeDialog(detailMemo)}

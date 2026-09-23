@@ -1,3 +1,4 @@
+import { CaseWorkflowLabels, type CaseWorkflowValue, NO_CASE_DEPARTMENT } from "@shared/schema";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Filter, Save, X, Check, Trash2, Pencil, Bookmark, Clock, CalendarClock } from "lucide-react";
@@ -35,6 +36,7 @@ export type AdvancedCasesFilters = {
   priorities: PriorityType[];
   stages: string[];
   depts: string[];
+  workflows?: string[];
   classifications: string[];
   lawyers: string[];
 };
@@ -50,6 +52,7 @@ export const EMPTY_ADV_FILTERS: AdvancedCasesFilters = {
   priorities: [],
   stages: [],
   depts: [],
+  workflows: [],
   classifications: [],
   lawyers: [],
 };
@@ -59,6 +62,7 @@ export function countActiveAdvFilters(f: AdvancedCasesFilters): number {
     (f.priorities.length > 0 ? 1 : 0) +
     (f.stages.length > 0 ? 1 : 0) +
     (f.depts.length > 0 ? 1 : 0) +
+    (f.workflows?.length ? 1 : 0) +
     (f.classifications.length > 0 ? 1 : 0) +
     (f.lawyers.length > 0 ? 1 : 0)
   );
@@ -159,8 +163,9 @@ const IN_COURT_STAGES_UNION: string[] = [
 // persisted validator accepts — so no option can be dropped on reload.
 export function getFilterStages(
   classifications: string[],
-  deptNames: string[],
+  _deptNames: string[],
 ): string[] {
+  const deptNames: string[] = [];
   if (classifications.length === 0 && deptNames.length === 0) {
     return CaseStageFilterDomain as unknown as string[];
   }
@@ -229,6 +234,7 @@ function describeFilters(
   if (f.stages.length)
     parts.push(`المرحلة: ${f.stages.map((s) => CaseStageLabels[s as keyof typeof CaseStageLabels] || s).join("، ")}`);
   if (f.depts.length) parts.push(`القسم: ${f.depts.map(deptName).join("، ")}`);
+  if (f.workflows?.length) parts.push(`المسار: ${f.workflows.map(w => CaseWorkflowLabels[w as CaseWorkflowValue] || w).join("، ")}`);
   if (f.classifications.length)
     parts.push(
       `التصنيف: ${f.classifications
@@ -421,7 +427,7 @@ export function CasesAdvancedFilters({
   // combination that matches nothing must show an empty list, not edit itself.
 
   const deptOptions = useMemo(
-    () => departments.map((d) => ({ value: String(d.id), label: d.name })),
+    () => [{ value: NO_CASE_DEPARTMENT, label: "اللجان" }, ...departments.map((d) => ({ value: String(d.id), label: d.name }))],
     [departments],
   );
   const classificationOptions = useMemo(
@@ -437,7 +443,7 @@ export function CasesAdvancedFilters({
     [lawyers],
   );
 
-  const deptNameById = (id: string) => departments.find((d) => String(d.id) === id)?.name || id;
+  const deptNameById = (id: string) => id === NO_CASE_DEPARTMENT ? "اللجان" : departments.find((d) => String(d.id) === id)?.name || id;
   const lawyerNameById = (id: string) => lawyers.find((l) => l.id === id)?.name || id;
 
   const apply = (next: AdvancedCasesFilters) => {
@@ -632,6 +638,14 @@ export function CasesAdvancedFilters({
               options={deptOptions}
               placeholder="كل الأقسام"
               testIdPrefix="adv-dept"
+            />
+            <MultiSelectCombo
+              label="مسار القضية"
+              values={draft.workflows || []}
+              onChange={(v) => setDraft({ ...draft, workflows: v })}
+              options={Object.entries(CaseWorkflowLabels).map(([value, label]) => ({ value, label }))}
+              placeholder="كل المسارات"
+              testIdPrefix="adv-workflow"
             />
             <div className="col-span-2">
               <MultiSelectCombo

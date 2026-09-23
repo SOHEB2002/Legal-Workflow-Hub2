@@ -1,3 +1,5 @@
+import { CaseOwnershipFields } from "@/components/case-ownership-fields";
+import { caseWorkflowSelectionPatch, CaseWorkflowLabels, caseWorkflowName, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseOwnershipError } from "@shared/schema";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -648,14 +650,14 @@ interface ActionForm {
   reason: string; decision: string;
   // case_unassigned can route to a specific lawyer OR a whole department
   // (item 7); field-task assign uses assigneeId only.
-  assigneeId: string; assignTarget: "lawyer" | "department"; assignDeptId: string;
+  caseWorkflow: string; assigneeId: string; assignTarget: "lawyer" | "department"; assignDeptId: string;
   hearingReport: string; recommendations: string; nextSteps: string; contactCompleted: string;
   executionRequestNumber: string;
 }
 const EMPTY_FORM: ActionForm = {
   notes: "", proofDescription: "", proofFileLink: "",
   reason: "", decision: InternalReviewDecision.PASSED,
-  assigneeId: "", assignTarget: "lawyer", assignDeptId: "",
+  caseWorkflow: "", assigneeId: "", assignTarget: "lawyer", assignDeptId: "",
   hearingReport: "", recommendations: "", nextSteps: "", contactCompleted: "no",
   executionRequestNumber: "",
 };
@@ -760,9 +762,7 @@ function buildActionRequest(task: MyTaskItem, form: ActionForm): { method: strin
       // Reuse PATCH /api/cases/:id: routing to a department sets departmentId
       // (a case assigned to a dept-but-no-lawyer — the dept_head then picks a
       // lawyer); routing to a lawyer sets primaryLawyerId (item 7).
-      return form.assignTarget === "department"
-        ? { method: "PATCH", url: `/api/cases/${e}`, body: { departmentId: form.assignDeptId } }
-        : { method: "PATCH", url: `/api/cases/${e}`, body: { primaryLawyerId: form.assigneeId } };
+      return { method: "PATCH", url: `/api/cases/${e}`, body: { departmentId: form.assignDeptId === NO_CASE_DEPARTMENT ? null : form.assignDeptId, primaryLawyerId: form.assigneeId || null, ...caseWorkflowSelectionPatch(form.caseWorkflow) } };
     // The DEDICATED assign endpoints, not a bare PATCH: both already exist, are
     // department-scoped for a head, and carry their own validation + activity
     // log. Using PATCH here would bypass that.
@@ -1169,6 +1169,7 @@ export default function MyTasksPage() {
   // department and the unassigned pool has no owner, so both would have dropped
   // out of the filter entirely.
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const [workflowFilter, setWorkflowFilter] = useState("all");
 
   // Active action dialog
   const [actionTask, setActionTask] = useState<MyTaskItem | null>(null);
@@ -1318,7 +1319,8 @@ export default function MyTasksPage() {
 
   // ----- actions -----
   function openAction(task: MyTaskItem) {
-    setForm({ ...EMPTY_FORM });
+    const c = task.kind === MyTaskKind.CASE_UNASSIGNED ? getCaseById(task.entityId) : undefined;
+    setForm({ ...EMPTY_FORM, ...(c ? { assignDeptId: c.departmentId === null ? NO_CASE_DEPARTMENT : c.departmentId || "", assigneeId: c.primaryLawyerId || "", caseWorkflow: c.caseWorkflow || "" } : {}) });
     setActionTask(task);
   }
 
@@ -1563,8 +1565,12 @@ export default function MyTasksPage() {
     if (mode === "reason" && !form.reason.trim()) { toast({ title: "السبب مطلوب", variant: "destructive" }); return; }
     if (mode === "report" && !form.hearingReport.trim()) { toast({ title: "نص التقرير مطلوب", variant: "destructive" }); return; }
     if (mode === "executionRequest" && !form.executionRequestNumber.trim()) { toast({ title: "رقم طلب التنفيذ مطلوب", variant: "destructive" }); return; }
-    if (mode === "assign") {
-      const toDept = actionTask.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department";
+    if (mode === "assign" && actionTask.kind === MyTaskKind.CASE_UNASSIGNED) {
+      const error = caseOwnershipError({ departmentId: form.assignDeptId === NO_CASE_DEPARTMENT ? null : form.assignDeptId, primaryLawyerId: form.assigneeId, ...caseWorkflowSelectionPatch(form.caseWorkflow) }, false);
+      if (error) { toast({ title: error, variant: "destructive" }); return; }
+    }
+    if (mode === "assign" && actionTask.kind !== MyTaskKind.CASE_UNASSIGNED) {
+      const toDept = false;
       if (toDept && !form.assignDeptId) { toast({ title: "اختر القسم المسند إليه", variant: "destructive" }); return; }
       if (!toDept && !form.assigneeId) { toast({ title: "اختر المسند إليه", variant: "destructive" }); return; }
     }
@@ -1687,6 +1693,7 @@ export default function MyTasksPage() {
   // every-option-matches rule. Delegations and case-less general tasks live
   // here; without it they would be unreachable once the filter is used.
   const hasNoDeptTasks = specialtyScoped.some((t) => !t.departmentId);
+  const hasCommitteeTasks = specialtyScoped.some(t => !!t.caseId && t.departmentId === null);
 
   // ----- Apply search + filters, GLOBALLY, before the cards are built -----
   // Not per-card: one predicate over the whole feed, and a card that ends up
@@ -1698,16 +1705,22 @@ export default function MyTasksPage() {
     if (!taskMatchesSearch(t, needle, userName(t.ownerId))) return false;
     if (typeFilter !== "all" && taskTypeKey(t) !== typeFilter) return false;
     if (clientFilter !== "all" && t.clientName !== clientFilter) return false;
-    if (deptFilter === NO_DEPARTMENT) {
+    if (deptFilter === NO_CASE_DEPARTMENT) {
+      if (!t.caseId || t.departmentId !== null) return false;
+    } else if (deptFilter === NO_DEPARTMENT) {
       if (t.departmentId) return false;
     } else if (deptFilter !== "all" && t.departmentId !== deptFilter) {
       return false;
+    }
+    if (workflowFilter !== "all") {
+      const parent = t.caseId ? getCaseById(t.caseId) : undefined;
+      if (!parent || resolveCaseWorkflow(parent, departments.find(d => d.id === parent.departmentId)?.name) !== workflowFilter) return false;
     }
     if (overdueOnly && !t.isOverdue) return false;
     return true;
   });
   const isFiltering = !!needle || typeFilter !== "all"
-    || clientFilter !== "all" || deptFilter !== "all" || overdueOnly;
+    || clientFilter !== "all" || deptFilter !== "all" || workflowFilter !== "all" || overdueOnly;
 
   // OWN AND TEAM DO NOT MIX (owner ruling): the six own cards render first, then
   // a separated team region with its own six. ownerScope is server-computed —
@@ -2061,17 +2074,25 @@ export default function MyTasksPage() {
             {clientOptions.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
           </SelectContent>
         </Select>
+        <Select value={workflowFilter} onValueChange={setWorkflowFilter}>
+          <SelectTrigger className="w-[170px]" data-testid="select-task-case-workflow"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">جميع مسارات القضايا</SelectItem>
+            {Object.entries(CaseWorkflowLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+          </SelectContent>
+        </Select>
         {/* القسم — the RECORD's department, from the server-stamped
             MyTaskItem.departmentId. Rendered only when the loaded feed actually
             spans something to choose between: with one department and no
             department-less tasks the control could only ever be a no-op. */}
-        {(deptOptions.length > 1 || (deptOptions.length === 1 && hasNoDeptTasks)) && (
+        {(hasCommitteeTasks || deptOptions.length > 1 || (deptOptions.length === 1 && hasNoDeptTasks)) && (
           <Select value={deptFilter} onValueChange={setDeptFilter}>
             <SelectTrigger className="w-[160px]" data-testid="select-dept-filter"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">كل الأقسام</SelectItem>
               {deptOptions.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
               {hasNoDeptTasks && <SelectItem value={NO_DEPARTMENT}>بدون قسم</SelectItem>}
+              {hasCommitteeTasks && <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>}
             </SelectContent>
           </Select>
         )}
@@ -2104,7 +2125,7 @@ export default function MyTasksPage() {
               // and was never cleared by مسح before this batch either.
               setSearch(""); setTypeFilter("all");
               setClientFilter("all");
-              setDeptFilter("all"); setOverdueOnly(false);
+              setDeptFilter("all"); setWorkflowFilter("all"); setOverdueOnly(false);
             }}
             data-testid="button-clear-filters"
           >
@@ -2276,28 +2297,10 @@ export default function MyTasksPage() {
 
               {currentMode === "assign" && (
                 <div className="space-y-3">
-                  {/* case_unassigned can route to a specific lawyer OR a whole
-                      department (item 7); field-task assign is lawyer-only. */}
-                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && (
-                    <div className="space-y-1"><Label>إسناد إلى</Label>
-                      <Select value={form.assignTarget} onValueChange={(v) => setForm({ ...form, assignTarget: v as "lawyer" | "department" })}>
-                        <SelectTrigger data-testid="select-assign-target"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="lawyer">محامٍ محدد</SelectItem>
-                          <SelectItem value="department">قسم</SelectItem>
-                        </SelectContent>
-                      </Select></div>
-                  )}
-                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED && form.assignTarget === "department" ? (
-                    <div className="space-y-1"><Label>القسم المسند إليه</Label>
-                      <Select value={form.assignDeptId} onValueChange={(v) => setForm({ ...form, assignDeptId: v })}>
-                        <SelectTrigger data-testid="select-assign-dept"><SelectValue placeholder="اختر قسماً" /></SelectTrigger>
-                        <SelectContent>
-                          {departments.map((d) => (<SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>))}
-                        </SelectContent>
-                      </Select></div>
+                  {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED ? (
+                    <CaseOwnershipFields legacyWorkflowLabel={cases.find(c => c.id === actionTask.entityId)?.caseWorkflow == null ? caseWorkflowName(cases.find(c => c.id === actionTask.entityId) || {}, departments.find(d => d.id === cases.find(c => c.id === actionTask.entityId)?.departmentId)?.name) : undefined} key={actionTask.entityId} value={{ departmentId: form.assignDeptId, primaryLawyerId: form.assigneeId, caseWorkflow: form.caseWorkflow }} onChange={value => setForm({ ...form, assignDeptId: value.departmentId, assigneeId: value.primaryLawyerId, caseWorkflow: value.caseWorkflow })} />
                   ) : (
-                    <div className="space-y-1"><Label>{actionTask?.kind === MyTaskKind.CASE_UNASSIGNED ? "المحامي المسند" : "المسند إليه"}</Label>
+                    <div className="space-y-1"><Label>المسند إليه</Label>
                       <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>
                         <SelectTrigger data-testid="select-assignee"><SelectValue placeholder="اختر موظفاً" /></SelectTrigger>
                         <SelectContent>
@@ -2520,7 +2523,7 @@ export default function MyTasksPage() {
                   /* Memo → parent case → department, the two-hop this entity
                      needs because memos carry no departmentId. An unresolvable
                      parent yields null, which KEEPS the committee. */
-                  departmentName={departments.find((d) => d.id === getCaseById(advanceMemo.caseId)?.departmentId)?.name ?? null}
+                  departmentName={caseWorkflowName(getCaseById(advanceMemo.caseId) || {}, departments.find((d) => d.id === getCaseById(advanceMemo.caseId)?.departmentId)?.name)}
                 />
               )}
               {advanceMemo.awaitingCompletion && (

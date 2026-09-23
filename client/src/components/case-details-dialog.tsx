@@ -1,3 +1,4 @@
+import { caseWorkflowName, caseDepartmentLabel } from "@shared/schema";
 import { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import {
@@ -970,7 +971,9 @@ export function CaseDetailsDialog({
                     </div>
                     <div>
                       <Label className="text-muted-foreground">القسم</Label>
-                      <p>{selectedCase.departmentId === "أخرى" ? (selectedCase.departmentOther || "أخرى") : getDepartmentName(selectedCase.departmentId)}</p>
+                      <p>{selectedCase.departmentId === "أخرى" ? (selectedCase.departmentOther || "أخرى") : caseDepartmentLabel(selectedCase.departmentId, getDepartmentName(selectedCase.departmentId))}</p>
+                      <Label className="text-muted-foreground">مسار القضية</Label>
+                      <p>{caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) || "غير محدد"}</p>
                     </div>
                     <div>
                       <Label className="text-muted-foreground">المحكمة</Label>
@@ -1208,7 +1211,7 @@ export function CaseDetailsDialog({
                       both answer honestly in every state.
                       The «تفاصيل القضية الإدارية» block that stood after this one
                       is GONE (owner ruling) — see the note where it was. */}
-                  {getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
+                  {caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "إداري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">بيانات التظلم</h4>
                       <div className="grid grid-cols-2 gap-4 [&>div]:text-right">
@@ -1293,7 +1296,7 @@ export function CaseDetailsDialog({
                       is قيد_الدراسة or منظورة_بالمحكمة. An in-court admin case had
                       no panel at all — the owner hit exactly that. Department is
                       the only thing that decides whether these fields apply. */}
-                  {getDepartmentName(selectedCase.departmentId || "") === "إداري" && (
+                  {caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "إداري" && (
                     <div className="border-t pt-4" data-testid="panel-violation-details">
                       <div className="flex items-center justify-between mb-3 gap-2">
                         <h4 className="font-semibold">تفاصيل المخالفة</h4>
@@ -1690,7 +1693,7 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "تجاري" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "تجاري" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل منصة تراضي</h4>
                       <div className="space-y-3">
@@ -1730,7 +1733,7 @@ export function CaseDetailsDialog({
                     </div>
                   )}
 
-                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && getDepartmentName(selectedCase.departmentId || "") === "عمالي" && (
+                  {selectedCase.caseClassification === CaseClassification.UNDER_STUDY && caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "عمالي" && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3">سير عمل وزارة الموارد البشرية</h4>
                       <div className="space-y-3">
@@ -1815,7 +1818,7 @@ export function CaseDetailsDialog({
                   )}
                   
                   {CaseStagesOrder.indexOf(selectedCase.currentStage) >= CaseStagesOrder.indexOf(CaseStage.READY_TO_SUBMIT) && (
-                    selectedCase.caseType === "تجاري" || selectedCase.caseType === "عمالي"
+                    caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "تجاري" || caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "عمالي"
                   ) && (
                     <div className="border-t pt-4">
                       <h4 className="font-semibold mb-3 flex items-center gap-2 flex-row-reverse">
@@ -1823,7 +1826,7 @@ export function CaseDetailsDialog({
                         أرقام الطلبات - جاهزة للرفع
                       </h4>
                       <div className="grid grid-cols-2 gap-4" dir="rtl">
-                        {selectedCase.caseType === "تجاري" && (
+                        {caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "تجاري" && (
                           <div className="text-right">
                             <Label className="text-muted-foreground block text-right">رقم الطلب في منصة تراضي</Label>
                             {selectedCase.taradiStatus === "تم_الصلح" || selectedCase.taradiStatus === "لم_يتم_صلح" ? (
@@ -1850,7 +1853,7 @@ export function CaseDetailsDialog({
                             )}
                           </div>
                         )}
-                        {selectedCase.caseType === "عمالي" && (
+                        {caseWorkflowName(selectedCase, getDepartmentName(selectedCase.departmentId)) === "عمالي" && (
                           <div className="text-right">
                             <Label className="text-muted-foreground block text-right">رقم الطلب في ناجز / معين</Label>
                             <div className="flex items-center gap-2 mt-1 justify-end">

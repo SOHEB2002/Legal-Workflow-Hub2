@@ -1,3 +1,6 @@
+import { matchesCaseFilters } from "@shared/case-filters";
+import { CaseOwnershipFields } from "@/components/case-ownership-fields";
+import { caseWorkflowSelectionPatch, CaseWorkflow, CaseWorkflowLabels, caseDepartmentLabel, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowName, caseOwnershipError, type CaseWorkflowValue } from "@shared/schema";
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { useLocation } from "wouter";
@@ -616,7 +619,7 @@ export default function CasesPage() {
   const { memos } = useMemos();
   const { addRecentVisit } = useFavorites();
   const { getStandardsByType } = useStandards();
-  const lawyers = users.filter(u => u.canBeAssignedCases);
+  const lawyers = users.filter(u => u.canBeAssignedCases && u.isActive);
   // Lawyer-filter source: role-based exclusion. Wider than `lawyers` because
   // it must surface anyone who *has* cases (e.g. cases_review_head) — not
   // only those assignable going forward.
@@ -843,12 +846,15 @@ export default function CasesPage() {
   const [deptFilter, setDeptFilter] = usePersistedFilter<string>(
     "cases", "dept", user?.departmentId || "all", anyString,
   );
+  const [workflowFilter, setWorkflowFilter] = usePersistedFilter<string>(
+    "cases", "workflow", "all", oneOf(Object.values(CaseWorkflow), "all"),
+  );
   const [lawyerFilter, setLawyerFilter] = usePersistedFilter<string>(
     "cases", "lawyer", "all", anyString,
   );
   const [advFilters, setAdvFilters] = usePersistedFilter<AdvancedCasesFilters>(
     "cases", "adv", EMPTY_ADV_FILTERS,
-    objectLike(EMPTY_ADV_FILTERS, { stages: CaseStagesOrder as readonly string[] }),
+    objectLike(EMPTY_ADV_FILTERS, { stages: CaseStagesOrder as readonly string[], workflows: Object.values(CaseWorkflow) }),
   );
   // Persisted on its OWN key rather than inside the "adv" object — see the Props
   // comment in cases-advanced-filters.tsx for why a sort is kept out of the
@@ -987,13 +993,14 @@ export default function CasesPage() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editCaseId, setEditCaseId] = useState<string | null>(null);
   const [reassignCaseDialog, setReassignCaseDialog] = useState<LawCase | null>(null);
-  const [reassignCaseLawyerId, setReassignCaseLawyerId] = useState<string>("");
+  const [reassignOwnership, setReassignOwnership] = useState({ departmentId: "", primaryLawyerId: "", caseWorkflow: "" });
   const [editFormData, setEditFormData] = useState({
     clientId: "",
     plaintiffName: "",
     caseType: "" as string,
     caseTypeOther: "",
     departmentId: "",
+    caseWorkflow: "",
     departmentOther: "",
     priority: "متوسط" as PriorityType,
     courtName: "",
@@ -1043,7 +1050,8 @@ export default function CasesPage() {
       plaintiffName: caseItem.plaintiffName || "",
       caseType: (caseItem.caseType || "") as string,
       caseTypeOther: caseItem.caseTypeOther || "",
-      departmentId: caseItem.departmentId || "",
+      departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "",
+      caseWorkflow: caseItem.caseWorkflow || "",
       departmentOther: caseItem.departmentOther || "",
       priority: (caseItem.priority || "متوسط") as PriorityType,
       courtName: caseItem.courtName || "",
@@ -1084,7 +1092,8 @@ export default function CasesPage() {
         plaintiffName: editFormData.plaintiffName,
         caseType: editFormData.caseType as CaseTypeValue,
         caseTypeOther: editFormData.caseTypeOther,
-        departmentId: editFormData.departmentId,
+        departmentId: editFormData.departmentId === NO_CASE_DEPARTMENT ? null : editFormData.departmentId,
+        ...caseWorkflowSelectionPatch(editFormData.caseWorkflow),
         departmentOther: editFormData.departmentOther,
         priority: editFormData.priority,
         courtName: editFormData.courtName,
@@ -1128,19 +1137,19 @@ export default function CasesPage() {
       setShowEditDialog(false);
       setEditCaseId(null);
     } catch (error) {
-      toast({ title: "حدث خطأ أثناء تحديث القضية", variant: "destructive" });
+      toast({ title: "حدث خطأ أثناء تحديث القضية", description: extractApiError(error), variant: "destructive" });
     }
   };
 
   const openReassignCaseDialog = (caseItem: LawCase) => {
-    setReassignCaseLawyerId(caseItem.primaryLawyerId || "");
+    setReassignOwnership({ departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "", primaryLawyerId: caseItem.primaryLawyerId || "", caseWorkflow: caseItem.caseWorkflow || "" });
     setReassignCaseDialog(caseItem);
   };
 
   const handleReassignCase = async () => {
-    if (!reassignCaseDialog || !reassignCaseLawyerId) return;
+    if (!reassignCaseDialog) return;
     try {
-      await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignCaseLawyerId });
+      await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignOwnership.primaryLawyerId || null, departmentId: reassignOwnership.departmentId === NO_CASE_DEPARTMENT ? null : reassignOwnership.departmentId, ...caseWorkflowSelectionPatch(reassignOwnership.caseWorkflow) });
       toast({ title: "تم إسناد القضية لمحامي جديد" });
       setReassignCaseDialog(null);
     } catch (e: any) {
@@ -1164,6 +1173,8 @@ export default function CasesPage() {
     caseType: "" as string,
     caseTypeOther: "",
     departmentId: "",
+    caseWorkflow: "",
+    primaryLawyerId: "",
     departmentOther: "",
     priority: "متوسط" as PriorityType,
     courtName: "",
@@ -1187,6 +1198,7 @@ export default function CasesPage() {
   const [assignData, setAssignData] = useState({
     lawyerId: "",
     departmentId: "",
+    caseWorkflow: "",
     internalReviewerId: "",
     litigatorId: "",
   });
@@ -1199,6 +1211,8 @@ export default function CasesPage() {
       caseTypeOther: "",
       // CREATE-SCOPE — pre-filled and locked for a department_head / employee.
       departmentId: defaultCreateDepartmentId,
+      caseWorkflow: resolveCaseWorkflow({}, getDepartmentName(defaultCreateDepartmentId)) || "",
+      primaryLawyerId: "",
       departmentOther: "",
       priority: "متوسط",
       courtName: "",
@@ -1232,6 +1246,8 @@ export default function CasesPage() {
       return;
     }
 
+    const ownershipError = caseOwnershipError({ ...formData, departmentId: formData.departmentId === NO_CASE_DEPARTMENT ? null : formData.departmentId });
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
     const isPlaintiffNew = formData.caseClassification === CaseClassification.UNDER_STUDY;
     // The إداري mandatory-field block that stood here is GONE with the controls it
     // validated, and so is the isAdminIntake predicate that gated it — with all
@@ -1245,7 +1261,9 @@ export default function CasesPage() {
         plaintiffName: formData.plaintiffName || "",
         caseType: formData.caseType as CaseTypeValue,
         caseTypeOther: formData.caseTypeOther,
-        departmentId: formData.departmentId,
+        primaryLawyerId: formData.primaryLawyerId || null,
+        departmentId: formData.departmentId === NO_CASE_DEPARTMENT ? null : formData.departmentId,
+        caseWorkflow: formData.caseWorkflow as CaseWorkflowValue,
         departmentOther: formData.departmentOther,
         priority: formData.priority,
         courtName: isPlaintiffNew ? "" : formData.courtName,
@@ -1304,21 +1322,26 @@ export default function CasesPage() {
     resetForm();
   };
 
-  const handleAssign = () => {
-    if (!selectedCase || !assignData.lawyerId || !assignData.departmentId) return;
+  const handleAssign = async () => {
+    if (!selectedCase) return;
+    const ownershipError = caseOwnershipError({ departmentId: assignData.departmentId === NO_CASE_DEPARTMENT ? null : assignData.departmentId, primaryLawyerId: assignData.lawyerId, ...caseWorkflowSelectionPatch(assignData.caseWorkflow) }, false);
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
 
     const isReassign = !!selectedCase.primaryLawyerId;
-    assignCase(
+    try {
+    await assignCase(
       selectedCase.id,
       assignData.lawyerId,
-      assignData.departmentId,
+      assignData.departmentId === NO_CASE_DEPARTMENT ? null : assignData.departmentId,
       assignData.internalReviewerId || null,
       assignData.litigatorId || null,
+      caseWorkflowSelectionPatch(assignData.caseWorkflow).caseWorkflow,
     );
     toast({ title: isReassign ? "تم تعديل الإسناد بنجاح" : "تم إسناد القضية بنجاح" });
     setShowAssignDialog(false);
     setSelectedCaseId(null);
-    setAssignData({ lawyerId: "", departmentId: "", internalReviewerId: "", litigatorId: "" });
+    setAssignData({ lawyerId: "", departmentId: "", caseWorkflow: "", internalReviewerId: "", litigatorId: "" });
+    } catch (error) { toast({ title: "تعذر حفظ الإسناد", description: error instanceof Error ? error.message : "", variant: "destructive" }); }
   };
 
   // The toast names the stage THE SERVER LANDED ON, never a hard-coded one: the
@@ -1336,13 +1359,17 @@ export default function CasesPage() {
     }
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (!selectedCase) return;
-    rejectCase(selectedCase.id, rejectNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
-    toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
-    setShowRejectDialog(false);
-    setSelectedCaseId(null);
-    setRejectNotes("");
+    try {
+      await rejectCase(selectedCase.id, rejectNotes || "تم إضافة ملاحظات من لجنة المراجعة");
+      toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
+      setShowRejectDialog(false);
+      setSelectedCaseId(null);
+      setRejectNotes("");
+    } catch (err) {
+      toast({ title: "تعذر إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+    }
   };
 
   const handleDeleteCase = async () => {
@@ -1472,7 +1499,8 @@ export default function CasesPage() {
       // under استكمال_البيانات.
       const displayStage = getCaseDisplayStage(c);
       const matchesStatus = statusFilter === "all" || displayStage === statusFilter;
-      const matchesDept = deptFilter === "all" || c.departmentId === deptFilter;
+      const matchesDept = matchesCaseFilters(c, { departmentId: deptFilter, caseWorkflow: workflowFilter }, getDepartmentName(c.departmentId));
+      const matchesAdvWorkflow = !advFilters.workflows?.length || advFilters.workflows.includes(resolveCaseWorkflow(c, getDepartmentName(c.departmentId)) || "");
       // THREE-WAY PARTITION. "منتهية" is DERIVED from the stage (isCaseConcluded),
       // not stored — but the other two options now also EXCLUDE concluded cases,
       // so the three are mutually exclusive and every case appears under exactly
@@ -1502,7 +1530,7 @@ export default function CasesPage() {
       const matchesAdvStage =
         advFilters.stages.length === 0 || advFilters.stages.includes(displayStage as string);
       const matchesAdvDept =
-        advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId);
+        advFilters.depts.length === 0 || advFilters.depts.includes(c.departmentId === null ? NO_CASE_DEPARTMENT : c.departmentId);
       const matchesAdvClassification =
         advFilters.classifications.length === 0 ||
         advFilters.classifications.includes(c.caseClassification as string);
@@ -1514,7 +1542,7 @@ export default function CasesPage() {
         matchesSearch &&
         matchesViolationSearch &&
         matchesStatus &&
-        matchesDept &&
+        matchesDept && matchesAdvWorkflow &&
         matchesClassification &&
         matchesLawyer &&
         matchesAdvPriority &&
@@ -1640,28 +1668,9 @@ export default function CasesPage() {
       if (sa !== sb) return sa - sb;
       return updatedAtMs(b) - updatedAtMs(a);
     });
-  }, [cases, searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, getClientName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks, caseUrgency]);
+  }, [cases, searchQuery, violationSearch, statusFilter, deptFilter, workflowFilter, classificationFilter, lawyerFilter, advFilters, getClientName, getDepartmentName, caseHasActiveMemoMap, sortByNextHearing, sortByPrescription, nextHearingRanks, caseUrgency]);
 
-  // 🔴 SCOPED BY PATH, NEVER BY DATA. Two behaviours were conflated once and
-  // must not be again:
-  //   (a) hiding stages that currently have NO CASES — data-driven. GONE, and it
-  //       stays gone: a stage on the path is offered whether or not any case sits
-  //       on it, and selecting an empty one yields "لا توجد نتائج مطابقة."
-  //   (b) narrowing options to the department's OWN PATH — path-driven. WANTED,
-  //       and restored here: a General list must not offer التسوية or التظلم
-  //       stages.
-  //
-  // getFilterStages does (b) and unions in UniversalCaseStages, without which the
-  // path lists alone would make closed cases unfilterable the moment a department
-  // is picked — مقفلة is in no path array yet every closed or archived case
-  // displays as exactly that. That union is what keeps (b) from re-opening the
-  // bug the old data-derived list was papering over.
-  //
-  // CLASSIFICATION SCOPES IT TOO, as it always did: in-court and under-study
-  // genuinely reach different stages (the in-court memo paths have no دراسة; the
-  // platform-review stages are under-study only). CONCLUDED_FILTER_VALUE is NOT a
-  // CaseClassification, so it passes NO classification signal rather than
-  // matching nothing — the same workaround the original carried.
+  // Organizational ownership must not hide procedural stage options.
   const basicAllowedStages = useMemo(() => {
     const classifications =
       classificationFilter === "all" || classificationFilter === CONCLUDED_FILTER_VALUE
@@ -1673,10 +1682,8 @@ export default function CasesPage() {
     return getFilterStages(classifications, deptName ? [deptName] : []);
   }, [classificationFilter, deptFilter, departments]);
 
-  const departmentFilteredLawyers = useMemo(() => {
-    if (deptFilter === "all") return filterLawyers;
-    return filterLawyers.filter(u => String(u.departmentId) === deptFilter);
-  }, [filterLawyers, deptFilter]);
+  // Assignee identity is independent of organizational ownership.
+  const departmentFilteredLawyers = filterLawyers;
 
   // 🔴 THE STALE-STAGE PRUNE IS GONE — owner ruling. It used to reset المرحلة to
   // "all" whenever the chosen stage left basicAllowedStages, so narrowing to a
@@ -1706,7 +1713,7 @@ export default function CasesPage() {
   // a user moved out of one — must not leave the list mysteriously empty.
   useEffect(() => {
     if (departments.length === 0) return;
-    if (deptFilter !== "all" && !departments.some(d => String(d.id) === deptFilter)) {
+    if (deptFilter !== "all" && deptFilter !== NO_CASE_DEPARTMENT && !departments.some(d => String(d.id) === deptFilter)) {
       setDeptFilter("all");
     }
   }, [departments, deptFilter]);
@@ -1719,7 +1726,7 @@ export default function CasesPage() {
   // reshuffles the whole list, so the page-4 slice the user was looking at
   // becomes a different set of cases. Someone who turns on "الأقرب أولاً" is
   // asking to see the nearest sessions, which are on page 1.
-  useEffect(() => { setCasePage(1); }, [searchQuery, violationSearch, statusFilter, deptFilter, classificationFilter, lawyerFilter, advFilters, sortBy]);
+  useEffect(() => { setCasePage(1); }, [searchQuery, violationSearch, statusFilter, deptFilter, workflowFilter, classificationFilter, lawyerFilter, advFilters, sortBy]);
 
   // ==================== THE إداري VIOLATION-NUMBER BAR ====================
   // Shown when إداري is SPECIFICALLY SELECTED — by EITHER department control, not
@@ -1732,12 +1739,7 @@ export default function CasesPage() {
   //
   // "all"/empty does NOT show it: the bar is إداري-specific, and offering it over
   // a mixed list would imply the other departments have violation numbers too.
-  const adminDeptId = departments.find((d) => d.name === "إداري")?.id;
-  const showViolationSearch =
-    !!adminDeptId && (
-      deptFilter === String(adminDeptId)
-      || advFilters.depts.includes(String(adminDeptId))
-    );
+  const showViolationSearch = cases.some(c => caseWorkflowName(c, getDepartmentName(c.departmentId)) === "إداري");
 
   // 🔴 CLEARED WHEN IT HIDES, NEVER MERELY HIDDEN. A query left alive behind a
   // hidden input is invisible corruption: the user changes department, sees a
@@ -1766,6 +1768,7 @@ export default function CasesPage() {
     || statusFilter !== "all"
     || classificationFilter !== "all"
     || deptFilter !== "all"
+    || workflowFilter !== "all"
     || lawyerFilter !== "all"
     || countActiveAdvFilters(advFilters) > 0;
   const casesTotalPages = Math.max(1, Math.ceil(filteredCases.length / PAGE_SIZE));
@@ -1841,13 +1844,14 @@ export default function CasesPage() {
   // against a different slice size (page 4 of 15 may not exist at 50).
   const handlePageSizeChange = (size: number) => { setPageSize(size); setCasePage(1); };
 
-  const isDeptHead = user?.role === "department_head";
+
 
   const openAssignDialog = (caseItem: LawCase) => {
     setSelectedCaseId(caseItem.id);
     setAssignData({
       lawyerId: caseItem.primaryLawyerId || "",
-      departmentId: isDeptHead ? (String(user?.departmentId || "")) : (String(caseItem.departmentId || "")),
+      departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "",
+      caseWorkflow: caseItem.caseWorkflow || "",
       internalReviewerId: caseItem.internalReviewerId || "",
       litigatorId: caseItem.litigatorId || "",
     });
@@ -1870,15 +1874,13 @@ export default function CasesPage() {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
     try {
-      // Direct PATCH triggers the server's isDeptTransfer flow:
-      // resets currentStage to استلام, clears lawyers, emits a
-      // department_transferred activity log entry with the reason.
+      // Organizational transfer preserves procedure and assignments; the server audits it.
       await apiRequest("PATCH", `/api/cases/${caseItem.id}`, {
-        departmentId: transferData.toDepartmentId,
+        departmentId: transferData.toDepartmentId === NO_CASE_DEPARTMENT ? null : transferData.toDepartmentId,
         transferReason: transferData.reason,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-      toast({ title: "تم تحويل القضية", description: "أُعيدت لمرحلة الاستلام في القسم الجديد" });
+      toast({ title: "تم تحويل القضية", description: "تم تغيير القسم التنظيمي مع الحفاظ على المسؤول والمسار والمرحلة" });
     } catch (e: any) {
       toast({ title: "فشل تحويل القضية", description: e?.message || "حدث خطأ", variant: "destructive" });
     }
@@ -1966,7 +1968,7 @@ export default function CasesPage() {
   const reminderCase = reminderCaseId ? getCaseById(reminderCaseId) : null;
   const reminderHasDefaultRecipient = !!caseNotificationRecipientId(reminderCase);
   const reminderDeptLawyers = reminderCase
-    ? users.filter(u => u.canBeAssignedCases && u.departmentId === reminderCase.departmentId && u.id !== caseNotificationRecipientId(reminderCase))
+    ? users.filter(u => u.canBeAssignedCases && u.isActive && u.id !== caseNotificationRecipientId(reminderCase))
     : [];
 
   const handleSendReminder = async () => {
@@ -1995,7 +1997,8 @@ export default function CasesPage() {
   // Mirrors canActAtDepartmentTier → entityActorTier on PATCH /api/cases/:id.
   const canAssign = (c: LawCase) =>
     hasEffectiveRole(actingIdentities, "branch_manager", "admin_support")
-    || (permissions.canAssignInDepartment && isDeptHeadFor(actingIdentities, c.departmentId));
+    || (permissions.canAssignInDepartment && isDeptHeadFor(actingIdentities, c.departmentId))
+    || (c.departmentId === null && c.primaryLawyerId === user?.id);
 
   const canReview = (c: LawCase) =>
     permissions.canReviewCases && 
@@ -2024,10 +2027,7 @@ export default function CasesPage() {
   // that 400 unreachable through the UI.
   const isDeptScopedCreator =
     user?.role === "department_head" || user?.role === "employee";
-  const creatableDepartments = isDeptScopedCreator
-    ? departments.filter((d) => d.id === user?.departmentId)
-    : departments;
-  const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "") : "";
+const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "") : "";
 
   const canClose = (c: LawCase) =>
     permissions.canCloseCases &&
@@ -2070,9 +2070,17 @@ export default function CasesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">جميع الأقسام</SelectItem>
+                <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>
                 {departments.map((dept) => (
                   <SelectItem key={String(dept.id)} value={String(dept.id)}>{dept.name}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+            <Select value={workflowFilter} onValueChange={setWorkflowFilter}>
+              <SelectTrigger className="w-[160px]" data-testid="select-workflow-filter"><SelectValue placeholder="مسار القضية" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">جميع المسارات</SelectItem>
+                {Object.entries(CaseWorkflowLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={lawyerFilter} onValueChange={setLawyerFilter}>
@@ -2652,7 +2660,7 @@ export default function CasesPage() {
                       ? (users.find(u => u.id === c.internalReviewerId)?.name || "—")
                       : "—"}
                   </TableCell>
-                  <TableCell className="text-center text-sm break-words">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : getDepartmentName(c.departmentId)}</TableCell>
+                  <TableCell className="text-center text-sm break-words">{c.departmentId === "أخرى" ? (c.departmentOther || "أخرى") : caseDepartmentLabel(c.departmentId, getDepartmentName(c.departmentId))}<div className="text-xs text-muted-foreground">مسار: {caseWorkflowName(c, getDepartmentName(c.departmentId)) || "غير محدد"}</div></TableCell>
                   <TableCell className="text-center">
                     {/* Row actions — Eye stays inline for the common
                         "open details" path; everything else moves into a
@@ -3071,36 +3079,7 @@ export default function CasesPage() {
                     </Select>
                   </div>
                 </div>
-                <div>
-                  <Label>القسم</Label>
-                  <Select
-                    value={formData.departmentId}
-                    onValueChange={(value) => setFormData({ ...formData, departmentId: value, departmentOther: "" })}
-                    disabled={isDeptScopedCreator}
-                  >
-                    <SelectTrigger data-testid="select-department">
-                      <SelectValue placeholder="اختر القسم" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {creatableDepartments.map((dept) => (
-                        <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                      ))}
-                      {/* "أخرى" would land the case outside any department, which a
-                          dept-scoped creator is not allowed to do. */}
-                      {!isDeptScopedCreator && <SelectItem value="أخرى">أخرى</SelectItem>}
-                    </SelectContent>
-                  </Select>
-                  {formData.departmentId === "أخرى" && (
-                    <SmartInput
-                      inputType="text"
-                      data-testid="input-department-other"
-                      value={formData.departmentOther}
-                      onChange={(e) => setFormData({ ...formData, departmentOther: e.target.value })}
-                      placeholder="اكتب اسم القسم..."
-                      className="mt-2"
-                    />
-                  )}
-                </div>
+                <CaseOwnershipFields key={String(showAddDialog)} value={formData} suggestWorkflow allowedDepartmentId={isDeptScopedCreator ? user?.departmentId || undefined : undefined} onChange={value => setFormData({ ...formData, ...value })} />
                 <div>
                   <Label>اسم الخصم</Label>
                   <SmartInput
@@ -3139,13 +3118,13 @@ export default function CasesPage() {
 
                 {formData.caseClassification === CaseClassification.UNDER_STUDY && (
                   <>
-                    {getDepartmentName(formData.departmentId) === "تجاري" && (
+                    {caseWorkflowName(formData) === "تجاري" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
                         <Info className="h-4 w-4 text-blue-600 shrink-0" />
                         <span className="text-xs text-blue-700 dark:text-blue-400">القضايا التجارية تتطلب التقييد في منصة تراضي ومحاولة الصلح قبل رفعها للمحكمة</span>
                       </div>
                     )}
-                    {getDepartmentName(formData.departmentId) === "عمالي" && (
+                    {caseWorkflowName(formData) === "عمالي" && (
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900">
                         <Info className="h-4 w-4 text-blue-600 shrink-0" />
                         <span className="text-xs text-blue-700 dark:text-blue-400">القضايا العمالية تتطلب التقييد في منصة وزارة الموارد البشرية والتسوية الودية قبل رفعها للمحكمة</span>
@@ -3260,64 +3239,7 @@ export default function CasesPage() {
             <DialogTitle>{selectedCase?.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>القسم</Label>
-              {isDeptHead ? (
-                <Input
-                  value={getDepartmentName(user?.departmentId || "")}
-                  disabled
-                  data-testid="select-assign-department"
-                />
-              ) : (
-                <Select
-                  value={assignData.departmentId}
-                  onValueChange={(value) => setAssignData({ ...assignData, departmentId: value, lawyerId: "", internalReviewerId: "", litigatorId: "" })}
-                >
-                  <SelectTrigger data-testid="select-assign-department">
-                    <SelectValue placeholder="اختر القسم" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {departments.map((dept) => (
-                      <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-            <div>
-              <Label>المحامي المسؤول</Label>
-              <Select
-                value={assignData.lawyerId}
-                onValueChange={(value) => setAssignData({
-                  ...assignData,
-                  lawyerId: value,
-                  // Drop the reviewer if it now collides with the chosen lawyer.
-                  internalReviewerId: assignData.internalReviewerId === value ? "" : assignData.internalReviewerId,
-                })}
-              >
-                <SelectTrigger data-testid="select-assign-lawyer">
-                  <SelectValue placeholder="اختر المحامي" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(() => {
-                    const filtered = lawyers.filter(l =>
-                      !assignData.departmentId ||
-                      String(l.departmentId) === String(assignData.departmentId)
-                    );
-                    if (filtered.length === 0) {
-                      return (
-                        <div className="px-3 py-2 text-sm text-muted-foreground text-center">
-                          {assignData.departmentId ? "لا يوجد محامون في هذا القسم" : "اختر القسم أولاً"}
-                        </div>
-                      );
-                    }
-                    return filtered.map((lawyer) => (
-                      <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
-                    ));
-                  })()}
-                </SelectContent>
-              </Select>
-            </div>
+            <CaseOwnershipFields legacyWorkflowLabel={selectedCase?.caseWorkflow == null ? caseWorkflowName(selectedCase || {}, getDepartmentName(selectedCase?.departmentId)) : undefined} key={selectedCase?.id} value={{ ...assignData, primaryLawyerId: assignData.lawyerId }} onChange={value => setAssignData({ ...assignData, ...value, lawyerId: value.primaryLawyerId, internalReviewerId: value.primaryLawyerId === assignData.internalReviewerId ? "" : assignData.internalReviewerId })} />
             <div>
               <Label>المراجع الداخلي</Label>
               <Select
@@ -3342,7 +3264,7 @@ export default function CasesPage() {
                       u.role !== "hr" &&
                       u.role !== "technical_support" &&
                       u.id !== assignData.lawyerId &&
-                      (!assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
+                      (assignData.departmentId === NO_CASE_DEPARTMENT || !assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
                     );
                     if (filtered.length === 0) {
                       return (
@@ -3392,7 +3314,7 @@ export default function CasesPage() {
                       u.role !== "admin_support" &&
                       u.role !== "hr" &&
                       u.role !== "technical_support" &&
-                      (!assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
+                      (assignData.departmentId === NO_CASE_DEPARTMENT || !assignData.departmentId || String(u.departmentId) === String(assignData.departmentId))
                     )
                     .map((u) => (
                       <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
@@ -3410,7 +3332,7 @@ export default function CasesPage() {
             <Button 
               data-testid="button-confirm-assign" 
               onClick={handleAssign}
-              disabled={!assignData.lawyerId || !assignData.departmentId}
+              disabled={!assignData.departmentId || (assignData.departmentId === NO_CASE_DEPARTMENT && !assignData.lawyerId)}
             >
               {selectedCase?.primaryLawyerId ? "حفظ التعديل" : "إسناد"}
             </Button>
@@ -3677,7 +3599,7 @@ export default function CasesPage() {
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            سيتم إرسال طلب التحويل إلى مدير الفرع ورئيس لجنة المراجعة للموافقة عليه.
+            سيتم تحديث القسم التنظيمي مع الحفاظ على المسؤول ومسار القضية ومرحلتها.
           </p>
           <div className="space-y-4">
             <div>
@@ -3690,8 +3612,9 @@ export default function CasesPage() {
                   <SelectValue placeholder="اختر القسم" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value={NO_CASE_DEPARTMENT}>بدون قسم</SelectItem>
                   {departments
-                    .filter(d => d.id !== user?.departmentId)
+                    .filter(d => ["عام", "تجاري", "عمالي", "إداري"].includes(d.name) && d.id !== (transferCaseId ? getCaseById(transferCaseId)?.departmentId : undefined))
                     .map((dept) => (
                       <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
                     ))}
@@ -4263,7 +4186,7 @@ export default function CasesPage() {
             <DialogTitle>إعادة فتح القضية</DialogTitle>
           </DialogHeader>
           {reopenCase && (() => {
-            const reopenDeptName = getDepartmentName(reopenCase.departmentId || "");
+            const reopenDeptName = caseWorkflowName(reopenCase, getDepartmentName(reopenCase.departmentId));
             const reopenStages = getReopenTargetStages(
               (reopenCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
               reopenDeptName,
@@ -4388,21 +4311,7 @@ export default function CasesPage() {
               إسناد لمحامي
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div>
-              <Label>المحامي المسؤول عن القضية</Label>
-              <Select value={reassignCaseLawyerId} onValueChange={setReassignCaseLawyerId}>
-                <SelectTrigger data-testid="select-reassign-case-lawyer">
-                  <SelectValue placeholder="اختر المحامي" />
-                </SelectTrigger>
-                <SelectContent>
-                  {users.filter(u => u.canBeAssignedCases && u.isActive).map((u) => (
-                    <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+          <CaseOwnershipFields legacyWorkflowLabel={reassignCaseDialog?.caseWorkflow == null ? caseWorkflowName(reassignCaseDialog || {}, getDepartmentName(reassignCaseDialog?.departmentId)) : undefined} key={reassignCaseDialog?.id} value={reassignOwnership} onChange={setReassignOwnership} />
           <DialogFooter className="flex gap-2">
             <Button
               variant="outline"
@@ -4414,7 +4323,7 @@ export default function CasesPage() {
             <Button
               data-testid="button-save-reassign-case"
               onClick={handleReassignCase}
-              disabled={!reassignCaseLawyerId}
+              disabled={!reassignOwnership.departmentId || (reassignOwnership.departmentId === NO_CASE_DEPARTMENT && !reassignOwnership.primaryLawyerId)}
             >
               حفظ
             </Button>
@@ -4518,35 +4427,7 @@ export default function CasesPage() {
               </div>
             </div>
 
-            {/* === Department + departmentOther === */}
-            <div>
-              <Label>القسم</Label>
-              <Select
-                value={editFormData.departmentId}
-                onValueChange={(value) => setEditFormData({ ...editFormData, departmentId: value, departmentOther: "" })}
-              >
-                <SelectTrigger data-testid="edit-department">
-                  <SelectValue placeholder="اختر القسم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                  ))}
-                  <SelectItem value="أخرى">أخرى</SelectItem>
-                </SelectContent>
-              </Select>
-              {editFormData.departmentId === "أخرى" && (
-                <SmartInput
-                  inputType="text"
-                  data-testid="edit-department-other"
-                  value={editFormData.departmentOther}
-                  onChange={(e) => setEditFormData({ ...editFormData, departmentOther: e.target.value })}
-                  placeholder="اكتب اسم القسم..."
-                  className="mt-2"
-                />
-              )}
-            </div>
-
+            <CaseOwnershipFields legacyWorkflowLabel={cases.find(c => c.id === editCaseId)?.caseWorkflow == null ? caseWorkflowName(cases.find(c => c.id === editCaseId) || {}, getDepartmentName(cases.find(c => c.id === editCaseId)?.departmentId)) : undefined} key={editCaseId} value={editFormData} onChange={value => setEditFormData({ ...editFormData, ...value, internalReviewerId: value.primaryLawyerId === editFormData.internalReviewerId ? "" : editFormData.internalReviewerId })} />
             {/* === Court details === */}
             <div>
               <Label>رقم القضية لدى المحكمة</Label>
@@ -4626,7 +4507,7 @@ export default function CasesPage() {
                 writer and was hidden for in-court ones, so the value was
                 visible-but-unsettable exactly where the owner first noticed it
                 missing. All three are now settable on any admin case. */}
-            {getDepartmentName(editFormData.departmentId) === "إداري" && (() => {
+            {caseWorkflowName({ caseWorkflow: editFormData.caseWorkflow || null }, getDepartmentName(cases.find(c => c.id === editCaseId)?.departmentId)) === "إداري" && (() => {
               // Resolved from the STORED case, not from editFormData — the form
               // carries no currentStage, and the lock is a property of where the
               // case actually is, not of anything on this form.
@@ -4874,36 +4755,6 @@ export default function CasesPage() {
             <div className="border-t pt-4 space-y-3">
               <h4 className="font-semibold">الإسناد</h4>
               <div>
-                <Label>المحامي المسؤول</Label>
-                <Select
-                  value={editFormData.primaryLawyerId || "__none__"}
-                  onValueChange={(value) =>
-                    setEditFormData({
-                      ...editFormData,
-                      primaryLawyerId: value === "__none__" ? "" : value,
-                      // Drop the reviewer if it now collides with the chosen lawyer.
-                      internalReviewerId:
-                        editFormData.internalReviewerId === value ? "" : editFormData.internalReviewerId,
-                    })
-                  }
-                >
-                  <SelectTrigger data-testid="edit-primary-lawyer">
-                    <SelectValue placeholder="اختر المحامي" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">— بدون —</SelectItem>
-                    {lawyers
-                      .filter((l) =>
-                        !editFormData.departmentId ||
-                        String(l.departmentId) === String(editFormData.departmentId),
-                      )
-                      .map((lawyer) => (
-                        <SelectItem key={lawyer.id} value={lawyer.id}>{lawyer.name}</SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
                 <Label>المراجع الداخلي</Label>
                 <Select
                   value={editFormData.internalReviewerId || "__none__"}
@@ -4927,7 +4778,7 @@ export default function CasesPage() {
                         u.role !== "hr" &&
                         u.role !== "technical_support" &&
                         u.id !== editFormData.primaryLawyerId &&
-                        (!editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
+                        (editFormData.departmentId === NO_CASE_DEPARTMENT || !editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
                       )
                       .map((u) => (
                         <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
@@ -4961,7 +4812,7 @@ export default function CasesPage() {
                         u.role !== "admin_support" &&
                         u.role !== "hr" &&
                         u.role !== "technical_support" &&
-                        (!editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
+                        (editFormData.departmentId === NO_CASE_DEPARTMENT || !editFormData.departmentId || String(u.departmentId) === String(editFormData.departmentId)),
                       )
                       .map((u) => (
                         <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>

@@ -260,48 +260,6 @@ export function CaseProgressBar({
     isSettlementCase,
     adminCaseSubType,
   );
-  // Defensive safety net for cases where departmentName is missing or
-  // doesn't match one of the four canonical labels (legacy rows with no
-  // departmentId, the special "أخرى" department, or transient mismatches
-  // while the departments list is still loading from the server). After
-  // the schema switched to departmentName-driven routing this rarely
-  // triggers — but when it does, scan every variant for the classification
-  // and pick the first one that contains the case's current stage rather
-  // than collapsing the bar onto the wrong path with currentIndex=0.
-  if (stagesOrder.indexOf(normalizedStage) < 0) {
-    if (effectiveClassification === "قيد_الدراسة") {
-      // 🔴 إداري NEEDS BOTH TRACKS, not one name. With no sub-type the admin arm
-      // resolves to AdminUnroutedStages (["استلام"]), so a routed admin case
-      // that reached this net would have matched nothing admin-shaped and been
-      // rescued onto تجاري — which is scanned FIRST and ends in تراضي.
-      const variants: CaseStageValue[][] = [
-        getStagesForClassification(effectiveClassification, "تجاري"),
-        getStagesForClassification(effectiveClassification, "عمالي"),
-        getStagesForClassification(effectiveClassification, "إداري", undefined, undefined, false, "تظلم"),
-        getStagesForClassification(effectiveClassification, "إداري", undefined, undefined, false, "قضية"),
-        getStagesForClassification(effectiveClassification, "عام"),
-      ];
-      for (const v of variants) {
-        if (v.indexOf(normalizedStage) >= 0) {
-          stagesOrder = v;
-          break;
-        }
-      }
-    } else if (effectiveClassification === "منظورة_بالمحكمة") {
-      const variants = [
-        getStagesForClassification(effectiveClassification, undefined, undefined, false, true),
-        getStagesForClassification(effectiveClassification, undefined, "مدعى_عليه", true),
-        getStagesForClassification(effectiveClassification, undefined, "مدعي", true),
-        getStagesForClassification(effectiveClassification, undefined, undefined, false),
-      ];
-      for (const v of variants) {
-        if (v.indexOf(normalizedStage) >= 0) {
-          stagesOrder = v;
-          break;
-        }
-      }
-    }
-  }
   // Dynamic bridge for IN_COURT cases: if the resolved path lacks دراسة but the
   // case is sitting on it, splice دراسة in just before the drafting stage so the
   // bar shows a coherent path and the next-stage button points at drafting (not

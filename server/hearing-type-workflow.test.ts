@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import {
-  deriveHearingType, hearingTypeSchema, hearingHasRecordedResult,
+  caseWorkflowName, deriveHearingType, hearingTypeSchema, hearingHasRecordedResult,
   hearingProducesNoMinutes, getHearingResultOptions, hearingTypeWorkflowError,
   HearingType, HearingResult, type LawCase,
 } from "../shared/schema";
@@ -115,7 +115,7 @@ function storageHarness(result: string | null = null, failInsert = false) {
   }).outputText;
   const storage = runInNewContext(js, {
     db, ...tables, eq: (_column: unknown, id: string) => id,
-    randomUUID: () => "new", deriveHearingType, hearingTypeSchema, hearingHasRecordedResult,
+    randomUUID: () => "new", caseWorkflowName, deriveHearingType, hearingTypeSchema, hearingHasRecordedResult,
     hearingCaseStagePatch, HearingTypeError, mapDbCase: (r: unknown) => r, mapDbHearing: (r: unknown) => r,
   });
   storage.getHearingById = async (id: string) => state.rows.find(r => r.id === id);

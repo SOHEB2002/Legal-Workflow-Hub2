@@ -1,3 +1,5 @@
+import { caseFilterQuerySchema, matchesCaseFilters } from "@shared/case-filters";
+import { UniversalCaseStages, hearingTypeWorkflowError, planCaseOwnershipUpdate, caseWorkflowName, caseOwnershipError, eligibleCaseAssignee, getCaseStages, resolveCaseWorkflow } from "@shared/schema";
 import { HearingTypeError } from "./hearing-type-workflow";
 // ExpressResponse is aliased because the bare name `Response` resolves to the
 // DOM fetch Response in this file's lib set — streamAttachmentToResponse needs
@@ -514,10 +516,28 @@ function caseActorIdentities(user: CaseActorIdentity, caseData: any, ctx?: Actin
   return actingIdentitiesFor(ctx, caseData?.id ?? null).map((i) => ({ id: i.userId, role: i.role, departmentId: i.departmentId }));
 }
 
+async function caseProcedureName(c: LawCase): Promise<string> {
+  const department = c.caseWorkflow == null && c.departmentId ? await storage.getDepartmentById(c.departmentId) : undefined;
+  return caseWorkflowName(c, department?.name);
+}
+async function validateCaseOwnership(c: { departmentId?: string | null; primaryLawyerId?: string | null; caseWorkflow?: string | null }, requireWorkflow = true): Promise<string | null> {
+  const error = caseOwnershipError(c, requireWorkflow);
+  if (error) return error;
+  if (c.departmentId) {
+    const department = await storage.getDepartmentById(c.departmentId);
+    if (!department || !["عام", "تجاري", "عمالي", "إداري"].includes(department.name)) return "اختر قسماً تنظيمياً صالحاً";
+  }
+  if (c.primaryLawyerId) {
+    const assignee = await storage.getUser(c.primaryLawyerId);
+    if (!assignee || !eligibleCaseAssignee(assignee)) return "المسؤول المختار غير نشط أو غير مؤهل لإسناد القضايا";
+  }
+  return null;
+}
 function canModifyCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
+  if (caseData.departmentId === null) return ["branch_manager", "admin_support"].includes(u.role) || isAssignedLawyer(u, caseData);
   const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
   if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
+  if (u.role === "labor_review_head") return isAssignedLawyer(u, caseData) || (!!u.departmentId && caseData.departmentId === u.departmentId);
   // !!u.departmentId — a department_head whose own departmentId is null/"" must
   // not match a row whose departmentId is also empty (legacy / "أخرى" rows).
   // Mirrors the guard canActOnMohrSettlement (:345) and the skip-committee gates
@@ -532,21 +552,20 @@ function canModifyCase(user: CaseActorIdentity, caseData: any, ctx?: ActingConte
   return caseActorIdentities(user, caseData, ctx).some((u) => canModifyCaseIdentity(u, caseData));
 }
 
-function canViewCaseIdentity(u: CaseActorIdentity, caseData: any): boolean {
-  const adminRoles = ["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"];
-  if (adminRoles.includes(u.role)) return true;
-  if (u.role === "labor_review_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
-  if (u.role === "department_head") return !!u.departmentId && caseData.departmentId === u.departmentId;
-  if (u.role === "employee") {
-    return caseData.primaryLawyerId === u.id ||
-      caseData.responsibleLawyerId === u.id ||
-      (Array.isArray(caseData.assignedLawyers) && caseData.assignedLawyers.includes(u.id)) ||
-      caseData.internalReviewerId === u.id;
-  }
-  return false;
-}
+function canViewCaseIdentity(_u: CaseActorIdentity, _caseData: unknown): boolean { return true; }
 function canViewCase(user: CaseActorIdentity, caseData: any, ctx?: ActingContext): boolean {
   return caseActorIdentities(user, caseData, ctx).some((u) => canViewCaseIdentity(u, caseData));
+}
+
+// Viewing is company-wide; annotation remains an independently authorized write.
+function canAnnotateCase(user: CaseActorIdentity, c: LawCase, ctx?: ActingContext): boolean {
+  return caseActorIdentities(user, c, ctx).some(u => {
+    if (c.departmentId === null) return ["branch_manager", "admin_support"].includes(u.role) || isAssignedLawyer(u, c);
+    if (["branch_manager", "admin_support", "cases_review_head", "consultations_review_head", "viewer"].includes(u.role)) return true;
+    if (isAssignedLawyer(u, c)) return true;
+    if (["department_head", "labor_review_head"].includes(u.role)) return !!u.departmentId && u.departmentId === c.departmentId;
+    return u.role === "employee" && c.internalReviewerId === u.id;
+  });
 }
 
 function canEditCaseData(user: CaseActorIdentity, caseData?: any, ctx?: ActingContext): boolean {
@@ -2281,6 +2300,8 @@ function validateStageTransition(
           (entityData.adminCaseSubType as string | null | undefined) ?? null,
         )
       : null;
+  if (entityType === "case" && casePath?.length === 0) return { allowed: false, reason: "يجب تحديد مسار القضية قبل الانتقال" };
+  if (casePath && !casePath.includes(targetStage as CaseStageValue) && !UniversalCaseStages.includes(targetStage as CaseStageValue)) return { allowed: false, reason: "المرحلة المطلوبة ليست ضمن مسار القضية" };
   const caseCurrentIdx = casePath ? casePath.indexOf(currentStage as CaseStageValue) : -1;
   const caseTargetIdx = casePath ? casePath.indexOf(targetStage as CaseStageValue) : -1;
 
@@ -2871,12 +2892,12 @@ async function notifyCaseSentToCommittee(input: {
   caseId: string;
   caseNumber: string;
   departmentId: string | null | undefined;
+  caseWorkflowName: string;
   actorId: string;
   actorName: string;
 }): Promise<void> {
   try {
-    const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
-    const chairRole = (!!laborDeptId && input.departmentId === laborDeptId)
+    const chairRole = (input.caseWorkflowName === "عمالي")
       ? "labor_review_head" : "cases_review_head";
     const users = await storage.getAllUsers();
     // Role SELECTION only. The fan-out itself — de-duplication, blank-id drop,
@@ -4216,7 +4237,10 @@ export async function registerRoutes(
 
   app.get("/api/cases", requireAuth, async (req, res) => {
     try {
-      const allCases = await storage.getAllCases();
+      const parsedFilters = caseFilterQuerySchema.safeParse(req.query);
+      if (!parsedFilters.success) return res.status(400).json({ message: "مرشحات القضايا غير صالحة" });
+      const departments = await storage.getAllDepartments();
+      const allCases = (await storage.getAllCases()).filter(c => matchesCaseFilters(c, parsedFilters.data, departments.find(d => d.id === c.departmentId)?.name));
       // ONE extra query for the whole response, not one per case — the
       // hasReturnedFromReview enrichment idiom, extended. Returns the set of
       // case ids that have a صك file so the map below can stamp a derived
@@ -4379,7 +4403,10 @@ export async function registerRoutes(
       if (!["branch_manager", "admin_support", "department_head", "employee"].includes(user.role)) {
         return res.status(403).json({ error: "ليس لديك صلاحية لإنشاء القضايا" });
       }
-      const caseScope = scopedCreateDepartmentId(user, req.body?.departmentId);
+      if (!Object.prototype.hasOwnProperty.call(req.body ?? {}, "departmentId") || req.body.departmentId === "") return res.status(400).json({ error: "يجب اختيار القسم التنظيمي أو بدون قسم" });
+      const caseScope = req.body?.departmentId === null
+        ? { ok: true as const, departmentId: null }
+        : scopedCreateDepartmentId(user, req.body?.departmentId);
       if (!caseScope.ok) {
         return res.status(400).json({ error: caseScope.error });
       }
@@ -4387,6 +4414,8 @@ export async function registerRoutes(
       // validated payload agree.
       req.body.departmentId = caseScope.departmentId;
       const validatedData = insertCaseSchema.parse(req.body);
+      const ownershipError = await validateCaseOwnership(validatedData);
+      if (ownershipError) return res.status(400).json({ error: ownershipError });
       // Carry clientRole forward explicitly — earlier the field wasn't in the
       // schema, so parse() stripped it and the case was inserted with null.
       validatedData.clientRole = validatedData.clientRole ?? req.body.clientRole ?? null;
@@ -4633,7 +4662,7 @@ export async function registerRoutes(
       // Gate by DEPARTMENT (not the free-text caseType): the settlement panel
       // follows the case's department so a labor-dept case mistyped "تجاري"
       // can't open the commercial تراضي flow (and vice-versa).
-      const taradiDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      const taradiDept = { name: await caseProcedureName(caseItem) };
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || taradiDept?.name !== "تجاري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا التجارية الجديدة" });
       }
@@ -4703,7 +4732,7 @@ export async function registerRoutes(
       // Gate by DEPARTMENT (not the free-text caseType): the MOHR settlement
       // panel follows the case's department (عمالي), matching how the whole
       // stage track is routed. See schema getStagesForClassification.
-      const mohrDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      const mohrDept = { name: await caseProcedureName(caseItem) };
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || mohrDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -4774,7 +4803,7 @@ export async function registerRoutes(
       const user = req.user!;
       if (!canModifyCase(user, caseItem, req.actingContext)) return res.status(403).json({ error: "لا تملك صلاحية لهذا الإجراء" });
       // Gate by DEPARTMENT (not the free-text caseType) — mirrors /mohr.
-      const settlementDept = caseItem.departmentId ? await storage.getDepartmentById(caseItem.departmentId) : null;
+      const settlementDept = { name: await caseProcedureName(caseItem) };
       if (caseItem.caseClassification !== CaseClassification.UNDER_STUDY || settlementDept?.name !== "عمالي") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط للقضايا العمالية الجديدة" });
       }
@@ -4893,9 +4922,7 @@ export async function registerRoutes(
       //     a SECOND LATENT STRANDING the derivation fixes: a settlement case sits
       //     at استلام, passes the stage guard above, and was being written to
       //     دراسة, which is not on its three-stage path either.
-      const skipDept = caseItem.departmentId
-        ? await storage.getDepartmentById(caseItem.departmentId)
-        : null;
+      const skipDept = { name: await caseProcedureName(caseItem) };
       const skipPath = getStagesForClassification(
         caseItem.caseClassification as CaseClassificationValue,
         skipDept?.name,
@@ -4987,6 +5014,30 @@ export async function registerRoutes(
         return res.status(400).json({ error: bodyCheck.error.errors });
       }
 
+      if (["departmentId", "primaryLawyerId", "caseWorkflow"].some(key => key in req.body)) {
+        try {
+          Object.assign(req.body, planCaseOwnershipUpdate(existing, req.body, await caseProcedureName(existing)));
+        } catch (error) {
+          return res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تغيير مسار القضية" });
+        }
+        if (req.body.caseWorkflow !== undefined && (existing.caseWorkflow == null || req.body.caseWorkflow !== resolveCaseWorkflow(existing, await caseProcedureName(existing)))) {
+          const nextCase = { ...existing, ...req.body };
+          const memos = await storage.getMemosByCase(existing.id);
+          for (const memo of memos.filter(isActiveMemo)) {
+            if (!memo.currentStage || !getMemoStagePath(memo.memoType, { departmentName: caseWorkflowName(nextCase), includeTakingNotes: true }).includes(memo.currentStage)) {
+              return res.status(400).json({ error: "لا يمكن تغيير المسار مع مذكرة في مرحلة غير متوافقة" });
+            }
+          }
+          const hearings = await storage.getHearingsByCase(existing.id);
+          for (const hearing of hearings.filter(h => h.status === HearingStatus.UPCOMING)) {
+            const error = hearingTypeWorkflowError(nextCase, hearing.hearingType, caseWorkflowName(nextCase));
+            if (error) return res.status(400).json({ error: "لا يمكن تغيير المسار مع جلسة قادمة غير متوافقة: " + error });
+          }
+        }
+        const ownershipError = await validateCaseOwnership({ ...existing, ...req.body }, existing.caseWorkflow != null || "caseWorkflow" in req.body);
+        if (ownershipError) return res.status(400).json({ error: ownershipError });
+      }
+
       // 🔴 THE SECOND WRITER OF THE JUDGMENT MIRROR, CLOSED. Exactly the same
       // shape as the C3 MOHR back door directly below: updateCaseSchema ADMITS
       // judgmentDeedReceivedDate and objectionWindowDays, and this handler spreads
@@ -5064,7 +5115,7 @@ export async function registerRoutes(
         }
       }
 
-      const caseDataFields = ["clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
+      const caseDataFields = ["caseWorkflow", "clientId", "plaintiffName", "caseType", "caseTypeOther", "departmentOther",
         "courtName", "courtCaseNumber", "judgeName", "circuitNumber", "opponentName", "opponentLawyer", "opponentPhone", "opponentNotes",
         "caseClassification", "previousHearingsCount", "currentSituation", "responseDeadline", "adminCaseSubType", "prescriptionDate", "priority"];
 
@@ -5132,18 +5183,18 @@ export async function registerRoutes(
       // narrowing — admin_support and the review heads could assign before and still
       // can, because neither is the actor this carve-out is aimed at.
       const touchesAssignment =
-        req.body.primaryLawyerId !== undefined
-        || req.body.responsibleLawyerId !== undefined
-        || req.body.assignedLawyers !== undefined;
+        (req.body.primaryLawyerId !== undefined && req.body.primaryLawyerId !== existing.primaryLawyerId)
+        || (req.body.responsibleLawyerId !== undefined && req.body.responsibleLawyerId !== existing.responsibleLawyerId)
+        || (req.body.assignedLawyers !== undefined && JSON.stringify(req.body.assignedLawyers) !== JSON.stringify(existing.assignedLawyers));
       if (touchesAssignment) {
         const assignTargetDeptId = ("departmentId" in req.body ? req.body.departmentId : existing.departmentId);
         const adminAssignRoles = ["admin_support", "cases_review_head", "consultations_review_head"];
         const assignRoles = req.actingContext
           ? actingIdentitiesFor(req.actingContext, existing.id ?? null).map((i) => i.role)
           : [user.role];
-        const assignAllowed =
-          canActAtDepartmentTier(user, existing, assignTargetDeptId, req.actingContext, existing.id ?? null)
-          || assignRoles.some((r) => adminAssignRoles.includes(r));
+        const assignAllowed = assignTargetDeptId === null
+          ? caseActorIdentities(user, existing, req.actingContext).some(i => ["branch_manager", "admin_support"].includes(i.role) || isAssignedLawyer(i, existing))
+          : canActAtDepartmentTier(user, existing, assignTargetDeptId, req.actingContext, existing.id ?? null) || assignRoles.some((r) => adminAssignRoles.includes(r));
         if (!assignAllowed) {
           return res.status(403).json({ error: "يمكنك فقط إسناد قضايا قسمك" });
         }
@@ -5172,6 +5223,7 @@ export async function registerRoutes(
         // named only the assignee.
         const transferAllowed = transferIdentities.some((i) =>
           i.role === "branch_manager" || i.role === "admin_support" ||
+          (existing.departmentId === null && isAssignedLawyer({ id: i.userId }, existing)) ||
           (i.role === "department_head" && !!i.departmentId && existing.departmentId === i.departmentId));
         if (!transferAllowed) {
           return res.status(403).json({ error: "لا تملك صلاحية تغيير قسم هذه القضية" });
@@ -5222,17 +5274,18 @@ export async function registerRoutes(
         // still resolve to the 3-stage settlement path, which contains neither
         // endpoint. Full reasoning at the casePath declaration in
         // validateStageTransition.
-        const mergedCase: any = { ...existing, ...req.body };
+        const mergedCase: any = { ...existing, ...req.body, departmentName: caseWorkflowName({ ...existing, ...req.body }) };
         try {
           const dept = existing.departmentId
             ? await storage.getDepartmentById(existing.departmentId)
             : null;
           if (dept?.name) {
-            mergedCase.departmentName = dept.name;
+            mergedCase.departmentName = caseWorkflowName(mergedCase, dept.name);
           }
         } catch (e) {
           console.error("[PATCH cases] failed to resolve department for path routing", e);
         }
+        if (!mergedCase.departmentName) return res.status(400).json({ error: "يجب تحديد مسار القضية قبل الانتقال" });
         // ============ صك SEAL — CLOSING A CASE THAT REACHED JUDGMENT ============
         // Owner decision 2026-08-03. Broader than the stage seal below, which only
         // covers a case still sitting AT محكوم_حكم_ابتدائي: this one follows the
@@ -5362,8 +5415,7 @@ export async function registerRoutes(
         // keep their table-granted authority.
         if (existing.currentStage === "إحالة_للجنة_المراجعة" &&
             (user.role === "cases_review_head" || user.role === "labor_review_head")) {
-          const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
-          const committeeHead = (!!laborDeptId && existing.departmentId === laborDeptId)
+          const committeeHead = ((await caseProcedureName(existing)) === "عمالي")
             ? "labor_review_head" : "cases_review_head";
           if (user.role !== committeeHead) {
             return res.status(403).json({ error: "ليس لديك صلاحية لقرار لجنة المراجعة على هذه القضية" });
@@ -5431,7 +5483,7 @@ export async function registerRoutes(
           const merged = { ...existing, ...req.body };
           if (!merged.opponentName) return res.status(400).json({ error: "يجب إدخال اسم الخصم قبل الانتقال لمرحلة الدراسة" });
           if (!merged.caseType) return res.status(400).json({ error: "يجب تحديد نوع القضية قبل الانتقال لمرحلة الدراسة" });
-          if (!merged.departmentId) return res.status(400).json({ error: "يجب تحديد القسم قبل الانتقال لمرحلة الدراسة" });
+          if (merged.departmentId === "" || merged.departmentId === undefined) return res.status(400).json({ error: "يجب تحديد القسم التنظيمي أو بدون قسم" });
           if (!merged.primaryLawyerId) return res.status(400).json({ error: "يجب تعيين محامي رئيسي قبل الانتقال لمرحلة الدراسة" });
         }
 
@@ -5462,9 +5514,7 @@ export async function registerRoutes(
         // untouched and the number switches back correctly if the case leaves and
         // re-enters settlement.
         if (targetStage === "مداولة_الصلح") {
-          const settlementDept = existing.departmentId
-            ? await storage.getDepartmentById(existing.departmentId)
-            : null;
+          const settlementDept = { name: await caseProcedureName(existing) };
           if (settlementDept?.name === "عمالي") {
             const mohr = req.body.mohrNumber || existing.mohrNumber;
             if (!mohr || !String(mohr).trim()) {
@@ -5704,6 +5754,10 @@ export async function registerRoutes(
       if (req.body.responsibleLawyerId) usersToCheck.push(req.body.responsibleLawyerId);
       if (Array.isArray(req.body.assignedLawyers)) usersToCheck.push(...req.body.assignedLawyers);
       if (usersToCheck.length > 0) {
+        for (const id of usersToCheck) {
+          const assignee = await storage.getUser(id);
+          if (!assignee || !eligibleCaseAssignee(assignee)) return res.status(400).json({ error: "المسؤول المختار غير نشط أو غير مؤهل لإسناد القضايا" });
+        }
         const check = await validateAssignedUsersActive(usersToCheck);
         if (!check.valid) {
           return res.status(400).json({ error: "لا يمكن إسناد العمل لمستخدم معطّل", inactiveUsers: check.inactiveUsers });
@@ -5760,25 +5814,9 @@ export async function registerRoutes(
         req.body.responsibleLawyerId = null;
       }
 
-      // When a case is transferred to a new department without a simultaneous
-      // lawyer assignment, clear the old lawyer so the new department can re-assign.
-      // Stage restriction was lifted: transfer is now allowed from any stage.
-      // The case's currentStage is reset to "استلام" (the new department's
-      // path starts fresh). Caller may pass `transferReason` for the activity log.
-      const isDeptTransfer =
-        "departmentId" in req.body &&
-        req.body.departmentId &&
-        req.body.departmentId !== existing.departmentId &&
-        // "no simultaneous lawyer assignment" must consider BOTH fields: a body
-        // that moved the case AND set responsibleLawyerId was previously treated
-        // as a bare transfer, so the clear-out below wiped the lawyer the same
-        // request had just assigned.
-        !req.body.primaryLawyerId &&
-        !req.body.responsibleLawyerId &&
-        !req.body.assignedLawyers;
+      // Organizational transfers preserve responsibility, workflow and stage.
+      const isDeptTransfer = "departmentId" in req.body && req.body.departmentId !== existing.departmentId;
 
-      // Capture pre-transfer values BEFORE we mutate req.body so the activity
-      // log gets the right "from" snapshot.
       const transferFromStage = existing.currentStage;
       const transferFromDeptId = existing.departmentId;
       const transferFromInternalReviewerId = existing.internalReviewerId || null;
@@ -5786,68 +5824,6 @@ export async function registerRoutes(
         ? req.body.transferReason.trim()
         : "";
 
-      if (isDeptTransfer) {
-        req.body.primaryLawyerId = null;
-        req.body.responsibleLawyerId = null;
-        req.body.assignedLawyers = [];
-        // The intake-set internal reviewer is scoped to the source
-        // department's roster — they aren't a valid reviewer for the
-        // destination dept. Clear it; the new dept head re-assigns at intake.
-        req.body.internalReviewerId = null;
-        // Reset to استلام so the new department starts the case fresh in
-        // its own stage path. The downstream stageHistory update (line ~1982)
-        // picks this up and writes a stage_changed entry alongside the
-        // department_transferred entry.
-        if (req.body.currentStage === undefined) {
-          req.body.currentStage = CaseStage.RECEPTION;
-        }
-        // Also unassign the lawyer from pending hearings and active memos
-        const caseId = String(req.params.id);
-        try {
-          const caseHearings = await storage.getHearingsByCase(caseId);
-          for (const h of caseHearings) {
-            if (h.status === "قادمة") {
-              await storage.updateHearing(h.id, { attendingLawyerId: null });
-            }
-          }
-          const caseMemos = await storage.getMemosByCase(caseId);
-          for (const m of caseMemos) {
-            // 🔴 WAS `["لم_تبدأ","قيد_التحرير","تحتاج_تعديل"].includes(m.status)` —
-            // one of the two ASSIGNMENT loops batch 11 named and scoped out while
-            // it fixed the five CANCELLATION paths. Same root defect: memos.status
-            // FREEZES AT CREATION (the workflow lives on current_stage), so a memo
-            // filed with the court sits at current_stage = مرفوعة while still
-            // carrying status = لم_تبدأ — which is IN that list. Every department
-            // transfer therefore UNASSIGNED filed memos.
-            //
-            // Milder than a wrongful cancellation, and still wrong: a filed memo has
-            // no remaining work to hand over, so blanking its assignee rewrites the
-            // record of who was responsible for a completed act. isActiveMemo reads
-            // current_stage for filing and status only for ملغاة.
-            if (!isActiveMemo(m)) continue;
-            // "" is the system's unassigned sentinel (memos.assigned_to is
-            // NOT NULL; auto-memos write `primaryLawyerId || responsibleLawyerId || ""`).
-            // The memo mirrors its case: unassigned at transfer, then the
-            // primaryLawyerId-change cascade below re-points it when the new
-            // department assigns a lawyer.
-            await storage.updateMemo(m.id, { assignedTo: "" });
-          }
-        } catch (e) {
-          console.error("Error clearing assignments on department transfer:", e);
-        }
-      }
-
-      // When moving to an internal-review stage, require an internalReviewerId
-      // (either newly provided in req.body or already set on the existing case
-      // from intake / a previous round of the review loop) and validate it.
-      //
-      // Per-review override semantics: if the case already has a persistent
-      // intake-set reviewer, a different reviewer in req.body is treated as a
-      // single-round override — used for the notification routing on this
-      // PATCH but NOT written back to cases.internal_reviewer_id, so the
-      // permanent assignment survives. If no persistent reviewer is set yet
-      // (legacy rows pre-intake-assignment), the chosen one is persisted to
-      // bootstrap the field.
       let activeReviewerForNotification: string | null = null;
       if (
         req.body.currentStage === "مراجعة_داخلية" &&
@@ -5871,7 +5847,7 @@ export async function registerRoutes(
           if (reviewer.role === "admin_support") {
             return res.status(400).json({ error: "لا يمكن اختيار الدعم الإداري كمراجع داخلي" });
           }
-          const targetDeptId = req.body.departmentId || existing.departmentId;
+          const targetDeptId = "departmentId" in req.body ? req.body.departmentId : existing.departmentId;
           if (targetDeptId && reviewer.departmentId !== targetDeptId) {
             return res.status(400).json({ error: "المراجع الداخلي يجب أن يكون من نفس قسم القضية" });
           }
@@ -6000,6 +5976,7 @@ export async function registerRoutes(
         await notifyCaseSentToCommittee({
           caseId: updated.id,
           caseNumber: updated.caseNumber,
+          caseWorkflowName: await caseProcedureName(updated),
           departmentId: updated.departmentId,
           actorId: user.id,
           actorName: user.name,
@@ -6103,6 +6080,13 @@ export async function registerRoutes(
 
       if (user && existing) {
         try {
+          if (updated.caseWorkflow !== existing.caseWorkflow) {
+            await logCaseActivityActing(req, {
+              caseId: updated.id, userId: user.id, userName: user.name || user.id,
+              actionType: "case_workflow_changed", title: "تم تحديث مسار القضية",
+              previousValue: existing.caseWorkflow || "", newValue: updated.caseWorkflow || "",
+            });
+          }
           if (isDeptTransfer) {
             await logCaseActivityActing(req, {
               caseId: String(req.params.id),
@@ -6239,7 +6223,7 @@ export async function registerRoutes(
               priority: "high",
               status: "pending",
               title: "تم تحويل قضية لقسمك",
-              message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك. يرجى إسناد محامٍ مسؤول لها.`,
+              message: `تم تحويل القضية ${existing.caseNumber} إلى قسمك مع الحفاظ على المسار والمرحلة.${updated.primaryLawyerId ? "" : " يرجى تحديد المسؤول عن القضية."}`,
               senderId: user.id,
               senderName: user.name || user.id,
               // Plain id now — departmentHeadsOrBranchManagers returns ids, not rows.
@@ -8232,7 +8216,7 @@ export async function registerRoutes(
       if (!targetCaseStage || typeof targetCaseStage !== "string") {
         return res.status(400).json({ error: "targetCaseStage مطلوب" });
       }
-      if (!caseDepartmentId || typeof caseDepartmentId !== "string") {
+      if (caseDepartmentId !== null && (!caseDepartmentId || typeof caseDepartmentId !== "string")) {
         return res.status(400).json({ error: "caseDepartmentId مطلوب" });
       }
 
@@ -8252,6 +8236,11 @@ export async function registerRoutes(
         currentStage: targetCaseStage,
         departmentId: caseDepartmentId,
       };
+
+      const conversionStages = getCaseStages({ caseClassification: "قيد_الدراسة", clientRole: null, memoRequired: false, isSettlementCase: false, adminCaseSubType: null, ...caseFields });
+      if (!conversionStages.includes(caseFields.currentStage)) return res.status(400).json({ error: "مرحلة البداية لا تتوافق مع مسار القضية المختار" });
+      const ownershipError = await validateCaseOwnership(caseFields);
+      if (ownershipError) return res.status(400).json({ error: ownershipError });
 
       try {
         // The case number is generated inside the storage transaction;
@@ -8733,12 +8722,8 @@ export async function registerRoutes(
       const reqUser = req.user!;
       if (!reqUser) return res.status(401).json({ error: "غير مصرح" });
 
-      // FAST-DENY on the actor's own role, then the AUTHORITATIVE department-routed
-      // check after the case is loaded — the two-stage shape every sibling endpoint
-      // uses. This mirrors the gate inside PATCH /api/cases/:id (the committee
-      // block just after its validateStageTransition call); that gate STAYS, because
-      // the الأخذ_بالملاحظات arm of the committee — rejectCase — still goes through
-      // PATCH and must keep being governed by it.
+      // Both approval and return use this narrow committee authorization.
+      // General PATCH retains its independent mutation and transition guards.
       const ctx = req.actingContext;
       const ownRoleDecides = ["cases_review_head", "labor_review_head", "branch_manager"].includes(reqUser.role);
       if (!ownRoleDecides && !(ctx && hasEffectiveRole(ctx, String(req.params.id), "cases_review_head", "labor_review_head", "branch_manager"))) {
@@ -8806,8 +8791,7 @@ export async function registerRoutes(
       // committee block: a case in عمالي is chaired by labor_review_head
       // EXCLUSIVELY, everything else by cases_review_head. branch_manager always.
       {
-        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
-        const committeeHead = (!!laborDeptId && lawCase.departmentId === laborDeptId)
+        const committeeHead = ((await caseProcedureName(lawCase)) === "عمالي")
           ? "labor_review_head" : "cases_review_head";
         const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
         if (!headDecides && !(ctx && hasEffectiveRole(ctx, lawCase.id, committeeHead, "branch_manager"))) {
@@ -9071,9 +9055,7 @@ export async function registerRoutes(
       // track resolves to AdminUnroutedStages (["استلام"]), which contains no
       // internal-review stage at all, so indexOf returns -1 and the case is told
       // to pick a track instead of being written somewhere off its own path.
-      const reviewDept = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const reviewDept = { name: await caseProcedureName(lawCase) };
       const reviewPath = getStagesForClassification(
         lawCase.caseClassification as CaseClassificationValue,
         reviewDept?.name,
@@ -9880,9 +9862,7 @@ export async function registerRoutes(
       // resolution the /mohr and /taradi panels use. Runs BEFORE the permission
       // check so a non-admin case reports "wrong kind of case" rather than
       // "no permission", matching the /mohr ordering exactly.
-      const department = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const department = { name: await caseProcedureName(lawCase) };
       if (department?.name !== "إداري") {
         return res.status(400).json({ error: "تفاصيل المخالفة متاحة فقط لقضايا القسم الإداري" });
       }
@@ -10126,9 +10106,7 @@ export async function registerRoutes(
       // Department first, then permission — the /violation-details and /mohr
       // ordering, so a non-admin case reports "wrong kind of case" rather than
       // "no permission".
-      const department = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const department = { name: await caseProcedureName(lawCase) };
       if (department?.name !== "إداري") {
         return res.status(400).json({ error: "تحديد المسار متاح فقط لقضايا القسم الإداري" });
       }
@@ -10296,9 +10274,7 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const department = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const department = { name: await caseProcedureName(lawCase) };
       if (department?.name !== "إداري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضايا القسم الإداري" });
       }
@@ -10431,9 +10407,7 @@ export async function registerRoutes(
       const lawCase = await storage.getCaseById(String(req.params.id));
       if (!lawCase) return res.status(404).json({ error: "القضية غير موجودة" });
 
-      const department = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const department = { name: await caseProcedureName(lawCase) };
       if (department?.name !== "إداري") {
         return res.status(400).json({ error: "هذا الإجراء متاح فقط لقضايا القسم الإداري" });
       }
@@ -10543,9 +10517,7 @@ export async function registerRoutes(
       // isn't one of the four canonical labels, which would offer a labor case the
       // General (ناجز) path. Resolve the name server-side (the /taradi idiom) and
       // reject when it can't be resolved for an under-study case.
-      const department = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const department = { name: await caseProcedureName(lawCase) };
       const departmentName = department?.name;
       const CANONICAL_DEPARTMENTS = ["عام", "تجاري", "عمالي", "إداري"];
       if (
@@ -13949,9 +13921,7 @@ export async function registerRoutes(
 
       // Resolve the department name from departmentId — caseType is
       // free-text and must not drive workflow routing.
-      const dept = lawCase.departmentId
-        ? await storage.getDepartmentById(lawCase.departmentId)
-        : null;
+      const dept = { name: await caseProcedureName(lawCase) };
       const validStages = new Set(getStagesForClassification(
         lawCase.caseClassification,
         dept?.name,
@@ -14140,8 +14110,7 @@ export async function registerRoutes(
       // generic path can also reach لجنة_مراجعة → READY/TAKING_NOTES via the table.
       if (memo.currentStage === MemoStage.COMMITTEE &&
           (reqUser.role === "cases_review_head" || reqUser.role === "labor_review_head")) {
-        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
-        const committeeHead = (!!laborDeptId && memoParentCase?.departmentId === laborDeptId)
+        const committeeHead = (!!memoParentCase && (await caseProcedureName(memoParentCase)) === "عمالي")
           ? "labor_review_head" : "cases_review_head";
         if (reqUser.role !== committeeHead) {
           return res.status(403).json({ error: "ليس لديك صلاحية لقرار لجنة المراجعة على هذه المذكرة" });
@@ -14359,9 +14328,7 @@ export async function registerRoutes(
       // getCaseById is added. An unresolvable parent yields a null name and
       // departmentHasCommittee returns true for null: the committee is KEPT.
       // Rejection untouched: still DRAFTING.
-      const memoDeptName = memoReviewParentCase?.departmentId
-        ? (await storage.getAllDepartments()).find((d) => d.id === memoReviewParentCase.departmentId)?.name ?? null
-        : null;
+      const memoDeptName = memoReviewParentCase ? await caseProcedureName(memoReviewParentCase) : null;
       const nextStage = decision === InternalReviewDecision.PASSED
         ? (departmentHasCommittee(memoDeptName) ? MemoStage.COMMITTEE : MemoStage.READY)
         : MemoStage.DRAFTING;
@@ -14448,9 +14415,8 @@ export async function registerRoutes(
       // others → cases_review_head. branch_manager always. Memos have no
       // departmentId, so resolve it through the PARENT case.
       {
-        const laborDeptId = (await storage.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
         const parentCaseForDept = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
-        const committeeHead = (!!laborDeptId && parentCaseForDept?.departmentId === laborDeptId)
+        const committeeHead = (!!parentCaseForDept && (await caseProcedureName(parentCaseForDept)) === "عمالي")
           ? "labor_review_head" : "cases_review_head";
         const headDecides = [committeeHead, "branch_manager"].includes(reqUser.role);
         if (!headDecides && !(ctx && hasEffectiveRole(ctx, memo.caseId, committeeHead, "branch_manager"))) {
@@ -14779,9 +14745,7 @@ export async function registerRoutes(
       // Parent case: the department for the path resolution AND the lawyer fields
       // the permission gate reads. Loaded once, used for both.
       const memoReviewParent = memo.caseId ? await storage.getCaseById(memo.caseId) : null;
-      const memoReviewDept = memoReviewParent?.departmentId
-        ? await storage.getDepartmentById(memoReviewParent.departmentId)
-        : null;
+      const memoReviewDept = { name: memoReviewParent ? await caseProcedureName(memoReviewParent) : "" };
       const memoReviewPath = getMemoStagePath(memo.memoType, {
         departmentName: memoReviewDept?.name,
       });
@@ -15790,7 +15754,9 @@ export async function registerRoutes(
       // Jurisdiction-declined: court ruling that this case belongs to a
       // different department. Requires the FE to pass the target dept.
       if (data.result === HearingResult.JURISDICTION_DECLINED) {
-        if (!data.transferToDepartmentId) {
+        const targetDepartment = data.transferToDepartmentId ? await storage.getDepartmentById(data.transferToDepartmentId) : undefined;
+        if (targetDepartment && !["عام", "تجاري", "عمالي", "إداري"].includes(targetDepartment.name)) return res.status(400).json({ error: "القسم التنظيمي المختار غير صالح" });
+        if (!targetDepartment || !data.transferToDepartmentId) {
           return res.status(400).json({ error: "يجب اختيار القسم المحوّل إليه عند تسجيل عدم الاختصاص" });
         }
       }
@@ -15808,8 +15774,12 @@ export async function registerRoutes(
       const settlementProbeCase = settlementProbeCaseId
         ? await storage.getCaseById(settlementProbeCaseId)
         : null;
+      if (data.result === HearingResult.JURISDICTION_DECLINED && settlementProbeCase?.caseWorkflow == null) {
+        return res.status(400).json({ error: "يجب اختيار مسار القضية القديمة صراحة قبل تغيير القسم" });
+      }
       const resultDepartment = settlementProbeCase?.departmentId
         ? await storage.getDepartmentById(settlementProbeCase.departmentId) : undefined;
+      if (settlementProbeCase && !resolveCaseWorkflow(settlementProbeCase, resultDepartment?.name)) return res.status(400).json({ error: "يجب تحديد مسار القضية قبل تسجيل نتيجة الجلسة" });
       const allowedResults = getHearingResultOptions(hearing.hearingType, {
         currentStage: settlementProbeCase?.currentStage,
         hasSettlementTrack: !settlementProbeCase || caseSupportsSettlementHearing(settlementProbeCase, resultDepartment?.name),
@@ -15912,9 +15882,7 @@ export async function registerRoutes(
       // three under-study paths (settlement), so an unresolved department would
       // silently fall back to General and wrongly permit.
       if (isStageMovingSettlementResult && settlementProbeCase) {
-        const settlementDept = settlementProbeCase.departmentId
-          ? await storage.getDepartmentById(settlementProbeCase.departmentId)
-          : null;
+        const settlementDept = { name: await caseProcedureName(settlementProbeCase) };
         const settlementCasePath = getStagesForClassification(
           settlementProbeCase.caseClassification as CaseClassificationValue,
           settlementDept?.name,
@@ -16210,27 +16178,18 @@ export async function registerRoutes(
 
         // ==================== PATH H: JURISDICTION DECLINED (عدم_الاختصاص) ====================
         // Court ruled it lacks jurisdiction → case moves to the target
-        // department. Reset stage to استلام, clear lawyers, keep
-        // classification (still IN_COURT). Log a dedicated
+        // organizational department without resetting procedure or responsibility. Log a dedicated
         // jurisdiction_transferred activity with the source/target dept
         // ids and the hearing id, then short-circuit — no other PATH
         // applies.
         if (data.result === HearingResult.JURISDICTION_DECLINED) {
           const fromDeptId = existingCase.departmentId || null;
           const toDeptId = data.transferToDepartmentId!;
-          // The intake-set internal reviewer belongs to the source dept's
-          // roster; clear it on jurisdiction transfer so the new dept head
-          // can re-assign someone valid at intake.
+          // Preserve the reviewer; any later review still validates its own authority.
           const previousInternalReviewerId = existingCase.internalReviewerId || null;
           await storage.updateCase(effectiveCaseId, {
             ...caseUpdate,
             departmentId: toDeptId,
-            currentStage: CaseStage.RECEPTION,
-            stageHistory: stageHistoryFor(CaseStage.RECEPTION, "عدم الاختصاص — إعادة القضية لمرحلة الاستلام في القسم المحوّل إليه"),
-            primaryLawyerId: null,
-            responsibleLawyerId: null,
-            assignedLawyers: [],
-            internalReviewerId: null,
           });
           if (reqUser) {
             try {
@@ -16587,9 +16546,7 @@ export async function registerRoutes(
               // that helper returns early when a case has NO post-judgment task
               // at all, so suppressing BOTH would have left every لصالحنا admin
               // case resting at محكوم_حكم_نهائي with nothing able to close it.
-              const judgmentDept = existingCase.departmentId
-                ? await storage.getDepartmentById(existingCase.departmentId)
-                : null;
+              const judgmentDept = { name: await caseProcedureName(existingCase) };
               const isAdministrativeCase = judgmentDept?.name === "إداري";
               if (judgmentType === "لصالحنا" && !isAdministrativeCase) {
                 const executionAssignee = resolveAdminSupportAssignee(AssignableAdminSupportTaskKind.EXECUTION, assignments, allUsers);
@@ -19990,8 +19947,7 @@ export async function registerRoutes(
     else if (period === "this_year") { periodStart = new Date(now.getFullYear(), 0, 1); }
 
     const lawyers = allUsers.filter(u =>
-      (u.role === "employee" || u.role === "department_head") &&
-      u.isActive &&
+      (u.role === "employee" || u.role === "department_head") && u.isActive &&
       (!departmentFilter || u.departmentId === departmentFilter)
     );
 
@@ -20127,7 +20083,7 @@ export async function registerRoutes(
       // Previously this was gated to assigned-lawyer only, which made
       // the "إضافة" button silently 403 for branch_managers / admin_support
       // / dept_heads opening a case detail dialog.
-      if (!canViewCase(user, caseItem, req.actingContext)) {
+      if (!canAnnotateCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة تعليق على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -20172,7 +20128,7 @@ export async function registerRoutes(
       // can drop an internal note. The previous rule (assigned-lawyer
       // OR modify) silently 403'd dept_heads viewing a case outside
       // their dept and any read-only viewer who tried to leave a note.
-      if (!canViewCase(user, caseItem, req.actingContext)) {
+      if (!canAnnotateCase(user, caseItem, req.actingContext)) {
         return res.status(403).json({ error: "لا تملك صلاحية لإضافة ملاحظة على هذه القضية" });
       }
       // 2D'-V3 Pattern-A gate: type check only; handler checks below stay.
@@ -20894,22 +20850,13 @@ export async function registerRoutes(
     const q = String(req.query.q || "").trim().toLowerCase();
     const type = req.query.type as string;
     if (q.length < 2) return res.json({ results: [] });
-    const user = req.user!;
+    const parsedFilters = caseFilterQuerySchema.safeParse(req.query);
+    if (!parsedFilters.success) return res.status(400).json({ message: "مرشحات القضايا غير صالحة" });
     const results: any[] = [];
 
     if (!type || type === "cases") {
-      let cases = await storage.getAllCases();
-      if (user.role === "employee") {
-        // primary first, responsible as fallback. The department clause masked
-        // this for most users, but an employee searching a case in ANOTHER
-        // department that is assigned to them by primaryLawyerId found nothing.
-        cases = cases.filter(c =>
-          c.primaryLawyerId === user.id
-          || c.responsibleLawyerId === user.id
-          || c.departmentId === user.departmentId);
-      } else if (user.role === "department_head") {
-        cases = cases.filter(c => c.departmentId === user.departmentId);
-      }
+      const departments = await storage.getAllDepartments();
+      const cases = (await storage.getAllCases()).filter(c => matchesCaseFilters(c, parsedFilters.data, departments.find(d => d.id === c.departmentId)?.name));
       cases.filter(c =>
         c.caseNumber?.toLowerCase().includes(q) ||
         c.opponentName?.toLowerCase().includes(q) ||
@@ -21140,8 +21087,9 @@ export async function registerRoutes(
       return res.status(403).json({ message: "غير مصرح" });
     }
     let cases = await storage.getAllCases();
-    const { departmentId, status, dateFrom, dateTo } = req.query;
-    if (departmentId) cases = cases.filter(c => c.departmentId === String(departmentId));
+    const parsedFilters = caseFilterQuerySchema.safeParse(req.query);
+    if (!parsedFilters.success) return res.status(400).json({ message: "مرشحات القضايا غير صالحة" });
+    const { status, dateFrom, dateTo } = req.query;
     if (status) cases = cases.filter(c => c.currentStage === String(status));
     if (dateFrom) cases = cases.filter(c => new Date(c.createdAt) >= new Date(String(dateFrom)));
     if (dateTo) cases = cases.filter(c => new Date(c.createdAt) <= new Date(String(dateTo)));
@@ -21149,6 +21097,7 @@ export async function registerRoutes(
     const allUsers = await storage.getAllUsers();
     const depts = await storage.getAllDepartments();
 
+    cases = cases.filter(c => matchesCaseFilters(c, parsedFilters.data, depts.find(d => d.id === c.departmentId)?.name));
     const exportData = cases.map(c => ({
       caseNumber: c.caseNumber,
       caseType: c.caseType,
@@ -21156,14 +21105,15 @@ export async function registerRoutes(
       courtName: c.courtName,
       currentStage: c.currentStage,
       lawyer: allUsers.find(u => u.id === c.responsibleLawyerId)?.name || "",
-      department: depts.find(d => d.id === c.departmentId)?.name || "",
+      department: c.departmentId === null ? "اللجان" : depts.find(d => d.id === c.departmentId)?.name || "",
+      caseWorkflow: resolveCaseWorkflow(c, depts.find(d => d.id === c.departmentId)?.name),
       createdAt: c.createdAt,
       priority: c.priority,
     }));
 
     const csv = generateCSV(exportData,
-      ["رقم القضية", "نوع القضية", "الخصم", "المحكمة", "المرحلة", "المحامي", "القسم", "تاريخ الإنشاء", "الأولوية"],
-      ["caseNumber", "caseType", "opponentName", "courtName", "currentStage", "lawyer", "department", "createdAt", "priority"]
+      ["رقم القضية", "نوع القضية", "الخصم", "المحكمة", "المرحلة", "المحامي", "القسم", "مسار القضية", "تاريخ الإنشاء", "الأولوية"],
+      ["caseNumber", "caseType", "opponentName", "courtName", "currentStage", "lawyer", "department", "caseWorkflow", "createdAt", "priority"]
     );
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename=cases-${Date.now()}.csv`);

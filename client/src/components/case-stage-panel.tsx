@@ -1,3 +1,4 @@
+import { caseWorkflowName } from "@shared/schema";
 import { useState } from "react";
 import { CaseProgressBar } from "@/components/case-progress-bar";
 import { useCases } from "@/lib/cases-context";
@@ -137,7 +138,7 @@ export function CaseStagePanel({
         getHearingsByCase(caseItem.id),
         caseCurrentJudgmentOutcome(caseItem),
       )}
-      departmentName={getDepartmentName(caseItem.departmentId || "")}
+      departmentName={caseWorkflowName(caseItem, getDepartmentName(caseItem.departmentId))}
       disabled={
         stageTransitioning
         || caseItem.awaitingCompletion
@@ -175,7 +176,7 @@ export function CaseStagePanel({
           u.role !== "admin_support" &&
           u.role !== "hr" &&
           u.role !== "technical_support" &&
-          u.departmentId === caseItem.departmentId &&
+          (caseItem.departmentId === null || u.departmentId === caseItem.departmentId) &&
           u.id !== caseItem.primaryLawyerId &&
           u.id !== caseItem.responsibleLawyerId
         )
@@ -188,7 +189,7 @@ export function CaseStagePanel({
           const success = await moveToNextStage(caseItem.id, user.id, user.name, notes, user.role, internalReviewerId, reviewDecision, extraFields, explicitTargetStage);
           if (success) {
             toast({ title: "تم نقل القضية للمرحلة التالية" });
-            const deptName = getDepartmentName(caseItem.departmentId || "");
+            const deptName = caseWorkflowName(caseItem, getDepartmentName(caseItem.departmentId));
             const hasSettlementInHistory = Array.isArray(caseItem.stageHistory) &&
               caseItem.stageHistory.some((h: any) => h.stage === "أغلق_طلب_الصلح");
             const laborAlreadySettled = deptName === "عمالي" && hasSettlementInHistory;
@@ -325,7 +326,7 @@ export function CaseStagePanel({
         const resolveSendBackStage = (): string => {
           const stages = getStagesForClassification(
             (caseItem.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
-            getDepartmentName(caseItem.departmentId || ""),
+            caseWorkflowName(caseItem, getDepartmentName(caseItem.departmentId)),
             caseItem.clientRole || undefined,
             !!caseItem.memoRequired,
             !!caseItem.isSettlementCase,
@@ -395,11 +396,15 @@ export function CaseStagePanel({
           toast({ title: "تعذّر اعتماد القضية", description: extractApiError(err), variant: "destructive" });
         }
       }}
-      onReviewCommitteeAddNotes={(committeeNotes) => {
-        rejectCase(caseItem.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة", "rejected");
-        toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
-        onClosed?.();
-        onChanged?.();
+      onReviewCommitteeAddNotes={async (committeeNotes) => {
+        try {
+          await rejectCase(caseItem.id, committeeNotes || "تم إضافة ملاحظات من لجنة المراجعة");
+          toast({ title: "تم إرسال القضية للأخذ بالملاحظات" });
+          onClosed?.();
+          onChanged?.();
+        } catch (err) {
+          toast({ title: "تعذر إرجاع القضية", description: extractApiError(err), variant: "destructive" });
+        }
       }}
       // Reasoned override — "تجاوز لجنة المراجعة". The callback is passed ONLY
       // when the user satisfies the SERVER's rule for POST /api/cases/:id/

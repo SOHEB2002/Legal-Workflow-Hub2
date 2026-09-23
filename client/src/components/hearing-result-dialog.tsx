@@ -398,7 +398,7 @@ export function HearingResultDialog({
               <p className="text-sm font-medium text-amber-700 flex items-center gap-1">
                 <ArrowLeftRight className="w-4 h-4" /> تحويل القضية لقسم مختص
               </p>
-              <p className="text-xs text-muted-foreground">ستُعاد القضية إلى مرحلة "استلام" في القسم المختار، ويُلغى تعيين المحامين الحاليين.</p>
+              <p className="text-xs text-muted-foreground">سيتغير القسم التنظيمي مع الحفاظ على المسؤول ومسار القضية ومرحلتها.</p>
               <div>
                 <Label>القسم المحوّل إليه <span className="text-destructive">*</span></Label>
                 <Select value={resultForm.transferToDepartmentId} onValueChange={(v) => setResultForm({ ...resultForm, transferToDepartmentId: v })}>

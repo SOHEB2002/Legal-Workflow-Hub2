@@ -1,3 +1,5 @@
+import { matchesCaseFilters } from "@shared/case-filters";
+import { CaseWorkflowLabels, NO_CASE_DEPARTMENT } from "@shared/schema";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -167,10 +169,13 @@ export default function KPIsPage() {
     };
   }, []);
 
+  const [caseDepartmentFilter, setCaseDepartmentFilter] = useState("all");
+  const [caseWorkflowFilter, setCaseWorkflowFilter] = useState("all");
   const caseStats = useMemo(() => {
-    const closedCases = cases.filter(c => c.status === CaseStatus.CLOSED);
-    const activeCases = cases.filter(c => c.status !== CaseStatus.CLOSED);
-    const thisMonthCases = cases.filter(c => {
+    const filteredCases = cases.filter(c => matchesCaseFilters(c, { departmentId: caseDepartmentFilter, caseWorkflow: caseWorkflowFilter }, departments.find(d => d.id === c.departmentId)?.name));
+    const closedCases = filteredCases.filter(c => c.status === CaseStatus.CLOSED);
+    const activeCases = filteredCases.filter(c => c.status !== CaseStatus.CLOSED);
+    const thisMonthCases = filteredCases.filter(c => {
       try {
         const createdDate = parseISO(c.createdAt);
         return isWithinInterval(createdDate, currentMonth);
@@ -179,28 +184,28 @@ export default function KPIsPage() {
       }
     });
 
-    const casesByStage = cases.reduce((acc, c) => {
+    const casesByStage = filteredCases.reduce((acc, c) => {
       acc[c.currentStage] = (acc[c.currentStage] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
-    const casesByDepartment = cases.reduce((acc, c) => {
+    const casesByDepartment = filteredCases.reduce((acc, c) => {
       const dept = departments.find(d => d.id === c.departmentId);
-      const deptName = dept?.name || "غير محدد";
+      const deptName = c.departmentId === null ? "اللجان" : dept?.name || "غير محدد";
       acc[deptName] = (acc[deptName] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
     return {
-      total: cases.length,
+      total: filteredCases.length,
       active: activeCases.length,
       closed: closedCases.length,
       thisMonth: thisMonthCases.length,
       byStage: casesByStage,
       byDepartment: casesByDepartment,
-      closureRate: cases.length > 0 ? Math.round((closedCases.length / cases.length) * 100) : 0,
+      closureRate: filteredCases.length > 0 ? Math.round((closedCases.length / filteredCases.length) * 100) : 0,
     };
-  }, [cases, departments, currentMonth]);
+  }, [cases, departments, currentMonth, caseDepartmentFilter, caseWorkflowFilter]);
 
   const consultationStats = useMemo(() => {
     const closedConsultations = consultations.filter(c => c.status === ConsultationStatus.CLOSED);
@@ -358,6 +363,24 @@ export default function KPIsPage() {
         </div>
       </div>
 
+      <div className="flex items-center gap-2 flex-wrap" aria-label="مرشحات إحصاءات القضايا">
+        <span className="text-sm">إحصاءات القضايا:</span>
+        <Select value={caseDepartmentFilter} onValueChange={setCaseDepartmentFilter}>
+          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">جميع أقسام القضايا</SelectItem>
+            <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>
+            {departments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={caseWorkflowFilter} onValueChange={setCaseWorkflowFilter}>
+          <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">جميع مسارات القضايا</SelectItem>
+            {Object.entries(CaseWorkflowLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard
           title="إجمالي القضايا"

@@ -1,3 +1,4 @@
+import { caseWorkflowName, NO_CASE_DEPARTMENT } from "@shared/schema";
 import { useState, useEffect, useMemo } from "react";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { usePageSize } from "@/hooks/use-page-size";
@@ -239,7 +240,7 @@ export default function HearingsPage() {
   // perfectly valid saved value on every mount.
   useEffect(() => {
     if (departments.length === 0) return;
-    if (filterDepartment !== "all" && !departments.some((d) => String(d.id) === filterDepartment)) {
+    if (filterDepartment !== "all" && filterDepartment !== NO_CASE_DEPARTMENT && !departments.some((d) => String(d.id) === filterDepartment)) {
       setFilterDepartment("all");
     }
   }, [departments, filterDepartment, setFilterDepartment]);
@@ -300,7 +301,7 @@ export default function HearingsPage() {
     setFormData((prev) => ({
       ...prev,
       caseId: caseId || prev.caseId,
-      hearingType: deriveHearingType(c.currentStage, getDepartmentName(c.departmentId || "")),
+      hearingType: deriveHearingType(c.currentStage, caseWorkflowName(c, getDepartmentName(c.departmentId || ""))),
       // "المترافع" first when the case designates one — mirrors the server
       // default in POST /api/hearings so the pre-filled value matches what the
       // server would have chosen anyway.
@@ -319,7 +320,7 @@ export default function HearingsPage() {
     if (hearingTypeOverridden) return;
     const selected = cases.find(c => c.id === formData.caseId);
     if (!selected) return;
-    const type = deriveHearingType(selected.currentStage, getDepartmentName(selected.departmentId || ""));
+    const type = deriveHearingType(selected.currentStage, caseWorkflowName(selected, getDepartmentName(selected.departmentId || "")));
     setFormData(prev => prev.hearingType === type ? prev : { ...prev, hearingType: type });
   }, [cases, departments, formData.caseId, hearingTypeOverridden]);
 
@@ -601,12 +602,11 @@ export default function HearingsPage() {
   // with an empty department yields an EMPTY list plus a line saying which —
   // never the whole firm. Falling open is the defect being fixed.
   const attendingCandidatesFor = (caseId: string | null | undefined) => {
-    const deptId = caseId ? (getCaseById(caseId)?.departmentId || "") : "";
-    const options = deptId
-      ? users.filter((u) => u.canBeAssignedCases && u.isActive
-          && !!u.departmentId && String(u.departmentId) === String(deptId))
-      : [];
+    const parent = caseId ? getCaseById(caseId) : undefined;
+    const deptId = parent?.departmentId;
+    const options = parent ? users.filter(u => u.canBeAssignedCases && u.isActive) : [];
     return { deptId, options };
+
   };
 
   // The read-only department line shown above each list. 🔴 DELIBERATELY NOT
@@ -615,11 +615,11 @@ export default function HearingsPage() {
   // A hearing has no department of its own — changing it here would move nothing
   // and would only widen the candidate list, which is precisely the leak being
   // closed. It is shown, not offered.
-  const renderAttendingDeptLine = (deptId: string) => (
+  const renderAttendingDeptLine = (deptId: string | null | undefined) => (
     <p className="text-xs text-muted-foreground mt-1">
       {deptId
-        ? <>القسم: <strong>{getDepartmentName(deptId)}</strong> — تظهر أسماء هذا القسم فقط</>
-        : "تعذّر تحديد قسم القضية — لا يمكن اختيار محامٍ"}
+        ? <>القسم: <strong>{getDepartmentName(deptId)}</strong> — المسؤول مستقل عن القسم</>
+        : deptId === null ? "بدون قسم (اللجان) — اختر أي مسؤول مؤهل" : "اختر القضية أولاً"}
     </p>
   );
 
@@ -681,12 +681,10 @@ export default function HearingsPage() {
 
   const getDepartmentForHearing = (hearing: Hearing) => {
     const caseData = hearing.caseId ? getCaseById(hearing.caseId) : null;
-    return caseData?.departmentId || null;
+    return caseData?.departmentId;
   };
 
-  const lawyersForFilter = filterDepartment === "all"
-    ? users.filter(u => u.canBeAssignedCases)
-    : users.filter(u => u.canBeAssignedCases && u.departmentId === filterDepartment);
+  const lawyersForFilter = users.filter(u => u.canBeAssignedCases);
 
   const basicSearchQ = basicSearch.trim().toLowerCase();
   const filteredHearings = hearings
@@ -699,7 +697,7 @@ export default function HearingsPage() {
       }
       if (filterDepartment !== "all") {
         const deptId = getDepartmentForHearing(h);
-        if (deptId !== filterDepartment) return false;
+        if ((deptId === null ? NO_CASE_DEPARTMENT : deptId) !== filterDepartment) return false;
       }
       if (filterLawyer !== "all") {
         const lawyerId = getLawyerForHearing(h);
@@ -721,7 +719,7 @@ export default function HearingsPage() {
       }
       if (advFilters.depts.length) {
         const deptId = getDepartmentForHearing(h);
-        if (!deptId || !advFilters.depts.includes(deptId)) return false;
+        if (deptId === undefined || !advFilters.depts.includes(deptId === null ? NO_CASE_DEPARTMENT : deptId)) return false;
       }
       if (advFilters.lawyers.length) {
         const lawyerId = getLawyerForHearing(h);
@@ -879,7 +877,7 @@ export default function HearingsPage() {
                                   // "المترافع" first — same chain as the server.
                                   const autoLawyer = caseAttendanceLawyerId(selected) || "";
                                   setHearingTypeOverridden(false);
-                                  const autoType = deriveHearingType(selected.currentStage, getDepartmentName(selected.departmentId || ""));
+                                  const autoType = deriveHearingType(selected.currentStage, caseWorkflowName(selected, getDepartmentName(selected.departmentId || "")));
                                   setFormData(prev => ({
                                     ...prev,
                                     caseId: val,
@@ -930,7 +928,7 @@ export default function HearingsPage() {
                       </div>
                       <div>
                         <span className="text-muted-foreground">القسم:</span>{" "}
-                        <span className="font-medium">{getDepartmentName(c.departmentId || "")}</span>
+                        <span className="font-medium">{c.departmentId === null ? "اللجان" : getDepartmentName(c.departmentId || "")}</span>
                       </div>
                     </div>
                   );
@@ -1131,6 +1129,7 @@ export default function HearingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">كل الأقسام</SelectItem>
+                <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>
                 {departments.map((d) => (
                   <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
                 ))}

@@ -1,3 +1,4 @@
+import { caseOwnershipError, caseWorkflowName } from "@shared/schema";
 import {
   type User, type LawCase, type CaseStageTransition, type Client, type Consultation, type Hearing,
   type FieldTask, type GeneralTaskEvent, type ContactLog, type Notification, type DepartmentInfo, type Memo,
@@ -907,6 +908,7 @@ function mapDbCase(dbCase: any): LawCase {
     currentStage: dbCase.currentStage,
     stageHistory: dbCase.stageHistory || [],
     departmentId: dbCase.departmentId,
+    caseWorkflow: dbCase.caseWorkflow as LawCase["caseWorkflow"],
     assignedLawyers: dbCase.assignedLawyers || [],
     primaryLawyerId: dbCase.primaryLawyerId,
     responsibleLawyerId: dbCase.responsibleLawyerId,
@@ -1774,6 +1776,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCase(data: Partial<LawCase>, createdBy: string): Promise<LawCase> {
+    const ownershipError = caseOwnershipError(data);
+    if (ownershipError) throw new Error(ownershipError);
     const id = randomUUID();
     const now = new Date();
     // When the user supplies a court case number we use it verbatim — no
@@ -1790,8 +1794,9 @@ export class DatabaseStorage implements IStorage {
       status: CaseStatus.RECEIVED,
       currentStage: CaseStage.RECEPTION,
       stageHistory: [],
-      departmentId: data.departmentId || "",
-      assignedLawyers: [],
+      departmentId: data.departmentId ?? null,
+      caseWorkflow: data.caseWorkflow!,
+      assignedLawyers: data.primaryLawyerId ? [data.primaryLawyerId] : [],
       primaryLawyerId: data.primaryLawyerId || null,
       // 🔴 HARD NULL, not a pass-through. primaryLawyerId is the single canonical
       // field; no create path may seed the legacy column with a lawyer, even from
@@ -2653,7 +2658,7 @@ export class DatabaseStorage implements IStorage {
       if (!caseRow) throw new HearingTypeError("القضية غير موجودة");
       const [department] = caseRow.departmentId
         ? await tx.select().from(departments).where(eq(departments.id, caseRow.departmentId)) : [];
-      const hearingType = hearingTypeSchema.parse(data.hearingType ?? deriveHearingType(caseRow.currentStage, department?.name));
+      const hearingType = hearingTypeSchema.parse(data.hearingType ?? deriveHearingType(caseRow.currentStage, caseWorkflowName(caseRow, department?.name)));
       const stagePatch = hearingCaseStagePatch(mapDbCase(caseRow), hearingType, department?.name, actor);
       const newHearing = {
         id,
@@ -4620,6 +4625,9 @@ export class DatabaseStorage implements IStorage {
       teamScoped && ownerId !== uid ? "team" : "self";
     // jsonb containment of THIS user in a case's assignedLawyers[] (mirrors getSidebarCounts).
     const assignedToMe = sql`${lawCases.assignedLawyers} @> ${JSON.stringify([uid])}::jsonb`;
+    // Cross-department responsibility grants personal task visibility, independently
+    // of the existing department-head supervisory scope.
+    const caseDepartmentOrAssigned = or(eq(lawCases.departmentId, userDept || ""), eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe);
     // "the case HAS a lawyer" and "the case has NONE" — EXACT logical inverses,
     // defined adjacent so they can never drift apart. Both used to test
     // primaryLawyerId ALONE, which put a responsible-only case in the WRONG bucket
@@ -4816,7 +4824,7 @@ export class DatabaseStorage implements IStorage {
         ? and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             hasAnyLawyer)
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
+        ? and(caseDepartmentOrAssigned, inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             hasAnyLawyer)
         : and(inArray(lawCases.currentStage, LAWYER_WORK_STAGES),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
@@ -4882,7 +4890,7 @@ export class DatabaseStorage implements IStorage {
         ? and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             hasAnyLawyer)
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
+        ? and(caseDepartmentOrAssigned, eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             hasAnyLawyer)
         : and(eq(lawCases.currentStage, SETTLEMENT_DIRECTION_STAGE),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
@@ -5092,7 +5100,7 @@ export class DatabaseStorage implements IStorage {
       // fetched by ruling-presence (+ dept for a head) and filtered by resolved
       // owner below.
       const deedWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedNoDate, deedCaseLive, caseNotPaused)
+        ? and(caseDepartmentOrAssigned, hasJudgmentRecord, deedNoDate, deedCaseLive, caseNotPaused)
         : and(hasJudgmentRecord, deedNoDate, deedCaseLive, caseNotPaused);
       const deedRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
@@ -5215,7 +5223,7 @@ export class DatabaseStorage implements IStorage {
       // The fragment is the shared one hoisted beside deedNoDate, so this and
       // its 1c twin are the exact complement of each other by construction.
       const attachWhere = deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused)
+        ? and(caseDepartmentOrAssigned, hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused)
         : and(hasJudgmentRecord, deedArrived, deedCaseLive, caseNotPaused);
       const attachRows = await db.select({
         id: lawCases.id, caseNumber: lawCases.caseNumber,
@@ -5349,7 +5357,7 @@ export class DatabaseStorage implements IStorage {
       const lapsedScopeWhere = firmWideScoped
         ? and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow)
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow)
+        ? and(caseDepartmentOrAssigned, eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow)
         : and(eq(lawCases.currentStage, PRIMARY_JUDGMENT_STAGE), deedPresent, currentJudgmentOpensWindow,
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
       const lapsedWhere = and(lapsedScopeWhere, caseNotPaused);
@@ -5429,7 +5437,7 @@ export class DatabaseStorage implements IStorage {
         const oppScopeWhere = firmWideScoped
           ? and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
           : deptHeadScoped
-          ? and(inArray(lawCases.id, flaggedCaseIds), eq(lawCases.departmentId, userDept!),
+          ? and(inArray(lawCases.id, flaggedCaseIds), caseDepartmentOrAssigned,
               ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`)
           : and(inArray(lawCases.id, flaggedCaseIds), ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`,
               or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
@@ -5531,7 +5539,7 @@ export class DatabaseStorage implements IStorage {
             caseNotPaused,
           )
         : and(
-            eq(lawCases.departmentId, userDept!),
+            caseDepartmentOrAssigned,
             hasNoLawyer,
             sql`${lawCases.currentStage} NOT IN ('مقفلة', 'مشطوبة')`,
             caseNotPaused,
@@ -5781,7 +5789,7 @@ export class DatabaseStorage implements IStorage {
       const scopeWhere = firmWideScoped
         ? hActionable
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), hActionable)
+        ? and(or(caseDepartmentOrAssigned, eq(hearings.attendingLawyerId, uid)), hActionable)
         : and(eq(hearings.attendingLawyerId, uid), hActionable);
       const where = and(scopeWhere, caseAlive);
       // clients LEFT-joined for the agency-verification grouping key (the موكّل's
@@ -5950,7 +5958,7 @@ export class DatabaseStorage implements IStorage {
       const scopeWhere = firmWideScoped
         ? and(mActionable, sql`${memos.assignedTo} <> ''`)
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), mActionable, sql`${memos.assignedTo} <> ''`)
+        ? and(or(caseDepartmentOrAssigned, eq(memos.assignedTo, uid)), mActionable, sql`${memos.assignedTo} <> ''`)
         : and(eq(memos.assignedTo, uid), mActionable);
       const where = and(scopeWhere, memoNotPaused);
       const rows = await db.select({
@@ -6094,7 +6102,7 @@ export class DatabaseStorage implements IStorage {
         ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused)
         : deptHeadScoped
         ? and(hasReviewer(memos.internalReviewerId), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused,
-            eq(lawCases.departmentId, userDept!), notOwnWork(memos.assignedTo))
+            or(eq(memos.internalReviewerId, uid), eq(lawCases.departmentId, userDept!)), notOwnWork(memos.assignedTo))
         : and(eq(memos.internalReviewerId, uid), eq(memos.currentStage, "مراجعة_داخلية"), ne(memos.status, "ملغاة"), memoNotPaused);
       const memoRows = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId,
           reviewerId: memos.internalReviewerId })
@@ -6134,7 +6142,9 @@ export class DatabaseStorage implements IStorage {
       // undefined and drizzle's and(...) drops them (firm-wide heads unaffected).
       if (isCasesReviewHead || isConsultationsReviewHead || isLaborReviewHead) {
         const laborDeptId = (await this.getAllDepartments()).find((d) => d.name === "عمالي")?.id;
-        const caseNotLabor = laborDeptId ? ne(lawCases.departmentId, laborDeptId) : undefined;
+        const legacyLabor = laborDeptId ? eq(lawCases.departmentId, laborDeptId) : sql`false`;
+        const caseLabor = sql`(${lawCases.caseWorkflow} = 'labor' OR (${lawCases.caseWorkflow} IS NULL AND ${legacyLabor}))`;
+        const caseNotLabor = sql`NOT COALESCE(${caseLabor}, false)`;
         const consultNotLabor = laborDeptId ? ne(consultations.departmentId, laborDeptId) : undefined;
         const contractNotLabor = laborDeptId ? ne(contracts.departmentId, laborDeptId) : undefined;
 
@@ -6210,31 +6220,31 @@ export class DatabaseStorage implements IStorage {
         }
         // NEW — labor committee head: same four queries, scoped to عمالي only
         // (guarded on laborDeptId so a missing dept means the labor head sees nothing here).
-        if (isLaborReviewHead && laborDeptId) {
+        if (isLaborReviewHead) {
           const cc = await db.select({ id: lawCases.id, caseNumber: lawCases.caseNumber })
             // Same lifecycle terms as the non-labor case committee query above —
             // the labor head's arm had the identical gap.
-            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), eq(lawCases.departmentId, laborDeptId), caseNotPaused,
+            .from(lawCases).where(and(eq(lawCases.currentStage, "إحالة_للجنة_المراجعة"), caseLabor, caseNotPaused,
               ne(lawCases.status, "مغلق"), sql`${lawCases.isArchived} IS NOT TRUE`));
           for (const r of cc) tasks.push({ id: `review_pending:committee_case:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — قضية ${r.caseNumber}`, entityType: "case", entityId: r.id, caseId: r.id,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const mc = await db.select({ id: memos.id, title: memos.title, caseId: memos.caseId })
             .from(memos).innerJoin(lawCases, eq(memos.caseId, lawCases.id))
-            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), eq(lawCases.departmentId, laborDeptId), memoNotPaused));
+            .where(and(eq(memos.currentStage, "لجنة_مراجعة"), caseLabor, memoNotPaused));
           for (const r of mc) tasks.push({ id: `review_pending:committee_memo:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — مذكرة ${r.title}`, entityType: "memo", entityId: r.id, caseId: r.caseId,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const conc = await db.select({ id: consultations.id, type: consultations.consultationType,
             consultationNumber: consultations.consultationNumber })
-            .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة"), eq(consultations.departmentId, laborDeptId)));
+            .from(consultations).where(and(eq(consultations.status, "active"), eq(consultations.currentStage, "لجنة_مراجعة"), laborDeptId ? eq(consultations.departmentId, laborDeptId) : sql`false`));
           for (const r of conc) tasks.push({ id: `review_pending:committee_consultation:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — استشارة ${r.consultationNumber} (${r.type})`, entityType: "consultation", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
           const ctc = await db.select({ id: contracts.id, title: contracts.title })
             // Same status='active' fix as the non-labor contract committee
             // query above — the labor head's arm had the identical gap.
-            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), eq(contracts.departmentId, laborDeptId), contractNotPaused, eq(contracts.status, ContractStatus.ACTIVE)));
+            .from(contracts).where(and(eq(contracts.currentStage, "لجنة_مراجعة"), laborDeptId ? eq(contracts.departmentId, laborDeptId) : sql`false`, contractNotPaused, eq(contracts.status, ContractStatus.ACTIVE)));
           for (const r of ctc) tasks.push({ id: `review_pending:committee_contract:${r.id}`, kind: MyTaskKind.REVIEW_PENDING,
             title: `قرار لجنة المراجعة — عقد ${r.title}`, entityType: "contract", entityId: r.id, caseId: null,
             ownerId: uid, ownerScope: "self", dueDate: null, isOverdue: false, actionHint: "review" });
@@ -6304,7 +6314,7 @@ export class DatabaseStorage implements IStorage {
             .leftJoin(users, eq(fieldTasks.assignedTo, users.id))
             .where(and(ftActionable, or(
               eq(fieldTasks.assignedTo, uid),
-              eq(lawCases.departmentId, userDept!),
+              caseDepartmentOrAssigned,
               eq(fieldTasks.routedDepartmentId, userDept!),
               and(
                 eq(fieldTasks.taskType, FieldTaskType.GENERAL),
@@ -6430,7 +6440,7 @@ export class DatabaseStorage implements IStorage {
       const scopeWhere = firmWideScoped
         ? eq(legalDeadlines.status, "نشط")
         : deptHeadScoped
-        ? and(eq(lawCases.departmentId, userDept!), eq(legalDeadlines.status, "نشط"))
+        ? and(caseDepartmentOrAssigned, eq(legalDeadlines.status, "نشط"))
         : and(eq(legalDeadlines.status, "نشط"),
             or(eq(lawCases.primaryLawyerId, uid), eq(lawCases.responsibleLawyerId, uid), assignedToMe));
       const where = and(scopeWhere, caseAlive);
@@ -7638,6 +7648,8 @@ export class DatabaseStorage implements IStorage {
         : generateCaseNumber();
       const now = new Date();
 
+      const ownershipError = caseOwnershipError(caseFields);
+      if (ownershipError) throw new Error(ownershipError);
       const newCaseRow = {
         id: newCaseId,
         caseNumber,
@@ -7648,8 +7660,9 @@ export class DatabaseStorage implements IStorage {
         status: CaseStatus.RECEIVED,
         currentStage: caseFields.currentStage || CaseStage.RECEPTION,
         stageHistory: [],
-        departmentId: caseFields.departmentId || existingCon.departmentId,
-        assignedLawyers: [],
+        departmentId: caseFields.departmentId ?? null,
+        caseWorkflow: caseFields.caseWorkflow!,
+        assignedLawyers: caseFields.primaryLawyerId ? [caseFields.primaryLawyerId] : [],
         primaryLawyerId: caseFields.primaryLawyerId || null,
         // Same hard null as createCase — the consultation→case conversion must not
         // seed the legacy column either. (The convert dialog sends only

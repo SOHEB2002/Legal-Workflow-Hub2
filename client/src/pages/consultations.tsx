@@ -1,3 +1,5 @@
+import { CaseOwnershipFields } from "@/components/case-ownership-fields";
+import { NO_CASE_DEPARTMENT, workflowForDepartmentName, caseOwnershipError, getCaseStages } from "@shared/schema";
 import { useState, useEffect, useMemo } from "react";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -102,7 +104,6 @@ import {
   ConsultationActivityTypeLabels,
   CaseStage,
   CaseStageLabels,
-  CaseStagesOrder,
 } from "@shared/schema";
 import { ConsultationStagesBar } from "@/components/consultation-stages-bar";
 import {
@@ -1213,9 +1214,9 @@ export default function ConsultationsPage() {
 
   const [showConvertDialog, setShowConvertDialog] = useState(false);
   const [convertConsultation, setConvertConsultation] = useState<Consultation | null>(null);
-  const [convertData, setConvertData] = useState<{ targetCaseStage: string; caseDepartmentId: string }>({
+  const [convertData, setConvertData] = useState<{ targetCaseStage: string; caseDepartmentId: string; caseWorkflow: string; primaryLawyerId: string }>({
     targetCaseStage: CaseStage.RECEPTION,
-    caseDepartmentId: "",
+    caseDepartmentId: "", caseWorkflow: "", primaryLawyerId: "",
   });
 
   const [showEarlyCloseDialog, setShowEarlyCloseDialog] = useState(false);
@@ -1647,7 +1648,7 @@ export default function ConsultationsPage() {
     setConvertConsultation(c);
     setConvertData({
       targetCaseStage: CaseStage.RECEPTION,
-      caseDepartmentId: c.departmentId || "",
+      caseDepartmentId: c.departmentId || "", caseWorkflow: workflowForDepartmentName(getDepartmentName(c.departmentId)) || "", primaryLawyerId: "",
     });
     setShowConvertDialog(true);
   };
@@ -1655,7 +1656,7 @@ export default function ConsultationsPage() {
   const closeConvertDialog = () => {
     setShowConvertDialog(false);
     setConvertConsultation(null);
-    setConvertData({ targetCaseStage: CaseStage.RECEPTION, caseDepartmentId: "" });
+    setConvertData({ targetCaseStage: CaseStage.RECEPTION, caseDepartmentId: "", caseWorkflow: "", primaryLawyerId: "" });
   };
 
   const handleConvertToCase = async () => {
@@ -1670,11 +1671,14 @@ export default function ConsultationsPage() {
       toast({ title: "اختر قسم القضية", variant: "destructive" });
       return;
     }
+    const ownershipError = caseOwnershipError({ ...convertData, departmentId: convertData.caseDepartmentId === NO_CASE_DEPARTMENT ? null : convertData.caseDepartmentId });
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
     setActionInProgress(true);
     try {
       await apiRequest("POST", `/api/consultations/${convertConsultation.id}/convert-to-case`, {
         targetCaseStage: convertData.targetCaseStage,
-        caseDepartmentId: convertData.caseDepartmentId,
+        caseDepartmentId: convertData.caseDepartmentId === NO_CASE_DEPARTMENT ? null : convertData.caseDepartmentId,
+        caseWorkflow: convertData.caseWorkflow, primaryLawyerId: convertData.primaryLawyerId || null,
       });
       await refreshConsultations();
       toast({
@@ -4639,7 +4643,7 @@ export default function ConsultationsPage() {
                   <SelectValue placeholder="اختر المرحلة" />
                 </SelectTrigger>
                 <SelectContent>
-                  {CaseStagesOrder.map((stage) => (
+                  {getCaseStages({ caseWorkflow: convertData.caseWorkflow, caseClassification: "قيد_الدراسة", clientRole: null, memoRequired: false, isSettlementCase: false, adminCaseSubType: null }).map((stage) => (
                     <SelectItem key={stage} value={stage}>
                       {CaseStageLabels[stage] || stage}
                     </SelectItem>
@@ -4647,30 +4651,7 @@ export default function ConsultationsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label>قسم القضية <span className="text-red-500">*</span></Label>
-              <Select
-                value={convertData.caseDepartmentId}
-                onValueChange={(value) => setConvertData({ ...convertData, caseDepartmentId: value })}
-              >
-                <SelectTrigger data-testid="select-case-department">
-                  <SelectValue placeholder="اختر القسم" />
-                </SelectTrigger>
-                <SelectContent>
-                  {departments.map((dept) => (
-                    <SelectItem key={dept.id} value={dept.id}>
-                      {dept.name}
-                      {convertConsultation && dept.id === convertConsultation.departmentId
-                        ? " (افتراضي)"
-                        : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground mt-1">
-                الافتراضي هو قسم الاستشارة. يمكنك اختيار قسم مختلف للقضية الجديدة.
-              </p>
-            </div>
+            <CaseOwnershipFields key={convertConsultation?.id} value={{ ...convertData, departmentId: convertData.caseDepartmentId }} suggestWorkflow onChange={value => setConvertData({ ...convertData, ...value, caseDepartmentId: value.departmentId })} />
           </div>
           <DialogFooter className="gap-2">
             <Button

@@ -1,3 +1,6 @@
+import { CaseWorkflowLabels, NO_CASE_DEPARTMENT } from "@shared/schema";
+import { useDepartments } from "@/lib/departments-context";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useMemo, useState } from "react";
 import { format, parseISO, differenceInDays, startOfMonth, endOfMonth, isWithinInterval, subMonths } from "date-fns";
 import { ar } from "date-fns/locale";
@@ -370,12 +373,15 @@ function CourtAnalyticsSection() {
 }
 
 function ExportSection() {
+  const { departments } = useDepartments();
+  const [departmentId, setDepartmentId] = useState("all");
+  const [caseWorkflow, setCaseWorkflow] = useState("all");
   const [exporting, setExporting] = useState<string | null>(null);
 
   const handleExportCases = async () => {
     setExporting("cases");
     try {
-      await downloadExport("/api/export/cases", `cases-export-${Date.now()}.csv`);
+      await downloadExport(`/api/export/cases?${new URLSearchParams({ departmentId, caseWorkflow })}`, `cases-export-${Date.now()}.csv`);
     } finally {
       setExporting(null);
     }
@@ -392,6 +398,22 @@ function ExportSection() {
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
+      <span className="text-sm">تصفية تصدير القضايا:</span>
+      <Select value={departmentId} onValueChange={setDepartmentId}>
+        <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">جميع الأقسام</SelectItem>
+          <SelectItem value={NO_CASE_DEPARTMENT}>اللجان</SelectItem>
+          {departments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Select value={caseWorkflow} onValueChange={setCaseWorkflow}>
+        <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">جميع المسارات</SelectItem>
+          {Object.entries(CaseWorkflowLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+        </SelectContent>
+      </Select>
       <Button
         variant="outline"
         size="sm"

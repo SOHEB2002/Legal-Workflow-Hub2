@@ -1,6 +1,7 @@
+import { caseWorkflowName, getCaseStages, type CaseWorkflowValue } from "@shared/schema";
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import type { LawCase, CaseStatusValue, ReviewDecisionType, CaseStageValue, UserRoleType, CaseClassificationValue } from "@shared/schema";
-import { CaseStatus, Priority, CaseStage, CaseClassification, CommitteeDecision, getStagesForClassification, caseNotificationRecipientId } from "@shared/schema";
+import type { LawCase, CaseStatusValue, CaseStageValue, UserRoleType, CaseClassificationValue } from "@shared/schema";
+import { CaseStatus, Priority, CaseStage, CaseClassification, CommitteeDecision, caseNotificationRecipientId } from "@shared/schema";
 import { apiRequest, queryClient } from "./queryClient";
 import { validateCaseForward, validateCaseBackward, normalizeCaseStage, createStageTransitionRecord } from "./transitions-engine";
 import { notifyCaseAssigned, notifyCaseReturnedForRevision } from "./notification-triggers";
@@ -13,13 +14,13 @@ interface CasesContextType {
   addCase: (data: Partial<LawCase>, createdBy: string, createdByName: string) => Promise<LawCase>;
   updateCase: (id: string, data: Partial<LawCase>) => Promise<void>;
   deleteCase: (id: string) => Promise<void>;
-  assignCase: (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => void;
+  assignCase: (id: string, lawyerId: string, departmentId: string | null, internalReviewerId?: string | null, litigatorId?: string | null, caseWorkflow?: CaseWorkflowValue) => Promise<void>;
   // Returns the case as the SERVER left it, so callers can name the stage the
   // committee actually landed on instead of assuming جاهزة_للرفع. Rejects on
   // failure — it used to return void and swallow everything, so the toast fired
   // unconditionally and lied whenever the request 400'd.
   approveCase: (id: string, notes?: string) => Promise<LawCase>;
-  rejectCase: (id: string, notes: string, decision: ReviewDecisionType) => void;
+  rejectCase: (id: string, notes: string) => Promise<LawCase>;
   markReadyToSubmit: (id: string) => void;
   markSubmitted: (id: string) => void;
   closeCase: (id: string) => void;
@@ -27,7 +28,7 @@ interface CasesContextType {
   moveToPreviousStage: (id: string, userId: string, userName: string, notes?: string, userRole?: string, internalReviewerId?: string) => Promise<boolean>;
   skipDataCompletion: (id: string, userId: string, userName: string, notes?: string) => Promise<boolean>;
   getCaseById: (id: string) => LawCase | undefined;
-  getCasesByDepartment: (departmentId: string) => LawCase[];
+  getCasesByDepartment: (departmentId: string | null) => LawCase[];
   getCasesByLawyer: (lawyerId: string) => LawCase[];
   getCasesByClient: (clientId: string) => LawCase[];
   getActiveCases: () => LawCase[];
@@ -98,46 +99,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
   // we scan every variant and pick the first that does, which keeps
   // moveToNextStage from returning false with no PATCH on edge-case data.
   const resolveStagesOrderForCase = (lawCase: LawCase): CaseStageValue[] => {
-    const classification = (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue;
-    const departmentName = getDepartmentName(lawCase.departmentId || "");
-    const clientRole = (lawCase as any).clientRole as string | undefined;
-    const memoRequired = !!(lawCase as any).memoRequired;
-    const isSettlementCase = !!(lawCase as any).isSettlementCase;
-    const adminCaseSubType = lawCase.adminCaseSubType ?? null;
-    const primary = getStagesForClassification(classification, departmentName, clientRole, memoRequired, isSettlementCase, adminCaseSubType);
-    if (primary.indexOf(lawCase.currentStage) >= 0) return primary;
-    // IN_COURT has multiple variants keyed on clientRole/memoRequired/isSettlementCase,
-    // not on department. Fall back across all IN_COURT variants if the current stage
-    // isn't in the primary choice.
-    if (classification === "منظورة_بالمحكمة") {
-      const variants = [
-        getStagesForClassification(classification, departmentName, undefined, false, true),
-        getStagesForClassification(classification, departmentName, "مدعى_عليه", true),
-        getStagesForClassification(classification, departmentName, "مدعي", true),
-        getStagesForClassification(classification, departmentName, undefined, false),
-      ];
-      for (const v of variants) {
-        if (v.indexOf(lawCase.currentStage) >= 0) return v;
-      }
-      return primary;
-    }
-    // 🔴 THE ADMIN ARM IS NOW TWO CANDIDATES, NOT ONE. Passing "إداري" with no
-    // sub-type resolves to AdminUnroutedStages (just ["استلام"]), so a routed
-    // admin case that fell through `primary` would have been scanned against a
-    // one-element array and then rescued onto whichever NON-admin path matched
-    // first — تجاري is scanned first here, and it ends in تراضي/مداولة_الصلح.
-    // Both tracks are named explicitly so the scanner can actually find them.
-    const candidates = [
-      getStagesForClassification(classification, "تجاري", clientRole, memoRequired),
-      getStagesForClassification(classification, "عام", clientRole, memoRequired),
-      getStagesForClassification(classification, "عمالي", clientRole, memoRequired),
-      getStagesForClassification(classification, "إداري", clientRole, memoRequired, false, "تظلم"),
-      getStagesForClassification(classification, "إداري", clientRole, memoRequired, false, "قضية"),
-    ];
-    for (const c of candidates) {
-      if (c.indexOf(lawCase.currentStage) >= 0) return c;
-    }
-    return primary;
+    return getCaseStages(lawCase, getDepartmentName(lawCase.departmentId));
   };
 
   const fetchCases = useCallback(async () => {
@@ -231,12 +193,13 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
       status: CaseStatus.RECEIVED,
       currentStage: initialStage,
       stageHistory: [{ stage: initialStage, timestamp: now, userId: createdBy, userName: createdByName, notes: "استلام القضية" }],
-      departmentId: data.departmentId || "",
+      departmentId: data.departmentId ?? null,
+      caseWorkflow: data.caseWorkflow,
       assignedLawyers: [],
       // responsibleLawyerId is no longer sent — primaryLawyerId is the single
       // canonical field (batch 3). The server hard-nulls the legacy column on
       // insert anyway, so the row is identical either way.
-      primaryLawyerId: null,
+      primaryLawyerId: data.primaryLawyerId || null,
       courtName: data.courtName || "",
       courtCaseNumber: data.courtCaseNumber || "",
       judgeName: data.judgeName || "",
@@ -315,16 +278,17 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     // changes nothing about what deleteCase leaves in case_comments.
   };
 
-  const assignCase = (id: string, lawyerId: string, departmentId: string, internalReviewerId?: string | null, litigatorId?: string | null) => {
+  const assignCase = async (id: string, lawyerId: string, departmentId: string | null, internalReviewerId?: string | null, litigatorId?: string | null, caseWorkflow?: CaseWorkflowValue) => {
     const lawCase = cases.find(c => c.id === id);
-    const isReassign = !!(lawCase?.primaryLawyerId);
+
     const updateData: any = {
-      assignedLawyers: [lawyerId],
+      assignedLawyers: lawyerId ? [lawyerId] : [],
       // ONE canonical field. responsibleLawyerId used to be written here with the
       // SAME lawyerId — the assign dialog has always had one control, labelled
       // "المحامي المسؤول". The server clears the legacy column when the primary
       // changes, so it cannot be left naming a superseded lawyer.
-      primaryLawyerId: lawyerId,
+      primaryLawyerId: lawyerId || null,
+      ...(caseWorkflow ? { caseWorkflow } : {}),
       departmentId,
     };
     // The internal reviewer slot is the persistent intake-time choice. Pass
@@ -339,11 +303,9 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     if (litigatorId !== undefined) {
       updateData.litigatorId = litigatorId || null;
     }
-    if (!isReassign) {
-      updateData.status = CaseStatus.STUDY as CaseStatusValue;
-    }
-    updateCase(id, updateData);
-    notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
+
+    await updateCase(id, updateData);
+    if (lawyerId) notifyCaseAssigned(id, lawCase?.caseNumber || "", lawyerId).catch(() => {});
   };
 
   // 🔴 THE COMMITTEE DECISION IS NO LONGER MADE HERE. This used to hard-code
@@ -375,26 +337,16 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
     return migrateCase(updatedCase);
   };
 
-  const rejectCase = (id: string, notes: string, decision: ReviewDecisionType) => {
-    const lawCase = cases.find(c => c.id === id);
-    if (!lawCase || !user) return;
-    const newTransition = createStageTransitionRecord(
-      CaseStage.TAKING_NOTES,
-      user.id,
-      user.name,
-      notes || "إرجاع بملاحظات اللجنة"
-    );
-    updateCase(id, {
-      status: CaseStatus.AMENDMENTS as CaseStatusValue,
-      currentStage: CaseStage.TAKING_NOTES,
-      stageHistory: [...(lawCase.stageHistory || []), newTransition],
-      reviewDecision: decision,
-      reviewNotes: notes,
+  const rejectCase = async (id: string, notes: string): Promise<LawCase> => {
+    const response = await apiRequest("POST", `/api/cases/${id}/committee-decision`, {
+      decision: CommitteeDecision.NEEDS_NOTES,
+      notes,
     });
-    // SECOND caller of notifyCaseReturnedForRevision — it had its own inline copy
-    // of the chain, in the OLD responsible-first order, so the two callers could
-    // notify different people about the same event. Both now use the helper.
-    notifyCaseReturnedForRevision(id, lawCase?.caseNumber || "", caseNotificationRecipientId(lawCase) || null, notes).catch(() => {});
+    const updatedCase: LawCase = await response.json();
+    setCases(prev => prev.map(c => c.id === id ? migrateCase(updatedCase) : c));
+    scheduleBackgroundRefetch();
+    notifyCaseReturnedForRevision(id, updatedCase.caseNumber || "", caseNotificationRecipientId(updatedCase) || null, notes).catch(() => {});
+    return migrateCase(updatedCase);
   };
 
   const markReadyToSubmit = (id: string) => {
@@ -414,7 +366,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
 
   const getCaseById = (id: string) => cases.find((c) => c.id === id);
 
-  const getCasesByDepartment = (departmentId: string) =>
+  const getCasesByDepartment = (departmentId: string | null) =>
     cases.filter((c) => c.departmentId === departmentId);
 
   const getCasesByLawyer = (lawyerId: string) =>
@@ -468,7 +420,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
           userId,
           lawCase,
           (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
-          getDepartmentName(lawCase.departmentId || ""),
+          caseWorkflowName(lawCase, getDepartmentName(lawCase.departmentId)),
         );
         if (!validation.allowed) {
           return false;
@@ -536,7 +488,7 @@ export function CasesProvider({ children }: { children: React.ReactNode }) {
         userId,
         lawCase,
         (lawCase.caseClassification || CaseClassification.UNDER_STUDY) as CaseClassificationValue,
-        getDepartmentName(lawCase.departmentId || ""),
+        caseWorkflowName(lawCase, getDepartmentName(lawCase.departmentId)),
       );
       if (!validation.allowed) {
         return false;

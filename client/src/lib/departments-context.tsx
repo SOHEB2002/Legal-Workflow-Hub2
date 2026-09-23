@@ -5,8 +5,8 @@ import { useAuth } from "./auth-context";
 
 interface DepartmentsContextType {
   departments: DepartmentInfo[];
-  getDepartmentById: (id: string) => DepartmentInfo | undefined;
-  getDepartmentName: (id: string) => string;
+  getDepartmentById: (id: string | null | undefined) => DepartmentInfo | undefined;
+  getDepartmentName: (id: string | null | undefined) => string;
 }
 
 const DepartmentsContext = createContext<DepartmentsContextType | undefined>(undefined);
@@ -73,9 +73,9 @@ export function DepartmentsProvider({ children }: { children: React.ReactNode })
     };
   }, [user]);
 
-  const getDepartmentById = (id: string) => departments.find((d) => d.id === id);
+  const getDepartmentById = (id: string | null | undefined) => departments.find((d) => d.id === id);
 
-  const getDepartmentName = (id: string): string => {
+  const getDepartmentName = (id: string | null | undefined): string => {
     if (!id) return "غير محدد";
     const dept = departments.find((d) => d.id === id);
     if (dept?.name) return dept.name;

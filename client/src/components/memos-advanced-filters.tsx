@@ -1,3 +1,4 @@
+import { NO_CASE_DEPARTMENT } from "@shared/schema";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Filter, Save, X, Check, Trash2, Pencil, Bookmark, Clock, CalendarClock } from "lucide-react";
@@ -332,7 +333,7 @@ export function MemosAdvancedFilters({ filters, onChange, departments, users, so
     [],
   );
   const deptOptions = useMemo(
-    () => departments.map((d) => ({ value: String(d.id), label: d.name })),
+    () => [{ value: NO_CASE_DEPARTMENT, label: "اللجان" }, ...departments.map((d) => ({ value: String(d.id), label: d.name }))],
     [departments],
   );
 
@@ -340,10 +341,8 @@ export function MemosAdvancedFilters({ filters, onChange, departments, users, so
   // cases/hearings filters.
   const lawyerOptions = useMemo(() => {
     const eligible = users.filter((u) => !LAWYER_FILTER_EXCLUDED_ROLES.has(u.role));
-    const scoped =
-      draft.depts.length === 0
-        ? eligible
-        : eligible.filter((u) => u.departmentId && draft.depts.includes(u.departmentId));
+    // Case ownership does not constrain the assignee’s department.
+    const scoped = eligible;
     return scoped.map((u) => ({ value: u.id, label: u.name }));
   }, [users, draft.depts]);
 
@@ -357,7 +356,7 @@ export function MemosAdvancedFilters({ filters, onChange, departments, users, so
     }
   }, [lawyerOptions, draft.lawyers]);
 
-  const deptNameById = (id: string) => departments.find((d) => String(d.id) === id)?.name || id;
+  const deptNameById = (id: string) => id === NO_CASE_DEPARTMENT ? "اللجان" : departments.find((d) => String(d.id) === id)?.name || id;
   const userNameById = (id: string) => users.find((u) => u.id === id)?.name || id;
 
   const apply = (next: AdvancedMemosFilters) => {

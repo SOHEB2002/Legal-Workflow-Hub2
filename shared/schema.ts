@@ -58,7 +58,8 @@ export const lawCases = pgTable("law_cases", {
   status: varchar("status", { length: 50 }).notNull(),
   currentStage: varchar("current_stage", { length: 50 }).notNull(),
   stageHistory: jsonb("stage_history").default([]),
-  departmentId: varchar("department_id", { length: 255 }).notNull(),
+  departmentId: varchar("department_id", { length: 255 }),
+  caseWorkflow: varchar("case_workflow", { length: 32 }),
   assignedLawyers: jsonb("assigned_lawyers").default([]),
   primaryLawyerId: varchar("primary_lawyer_id", { length: 255 }),
   responsibleLawyerId: varchar("responsible_lawyer_id", { length: 255 }),
@@ -1667,6 +1668,73 @@ export const Department = {
 export type DepartmentType = typeof Department[keyof typeof Department];
 
 // ==================== أنواع القضايا ====================
+export const CaseWorkflow = {
+  GENERAL: "general", COMMERCIAL: "commercial", LABOR: "labor", ADMINISTRATIVE: "administrative",
+} as const;
+export type CaseWorkflowValue = typeof CaseWorkflow[keyof typeof CaseWorkflow];
+export const caseWorkflowSchema = z.enum(["general", "commercial", "labor", "administrative"]);
+export const CaseWorkflowLabels: Record<CaseWorkflowValue, string> = {
+  general: "عام", commercial: "تجاري", labor: "عمالي", administrative: "إداري",
+};
+export const NO_CASE_DEPARTMENT = "__no_department__";
+export function workflowForDepartmentName(name?: string | null): CaseWorkflowValue | null {
+  return (Object.keys(CaseWorkflowLabels) as CaseWorkflowValue[]).find(key => CaseWorkflowLabels[key] === name) ?? null;
+}
+// Isolated legacy compatibility. Only missing persisted workflows consult the
+// old department; unknown departments stay unresolved, never guessed as General.
+export function resolveCaseWorkflow(c: { caseWorkflow?: string | null }, legacyDepartmentName?: string | null): CaseWorkflowValue | null {
+  if (c.caseWorkflow != null) {
+    const parsed = caseWorkflowSchema.safeParse(c.caseWorkflow);
+    return parsed.success ? parsed.data : null;
+  }
+  return workflowForDepartmentName(legacyDepartmentName);
+}
+// Adapter for existing procedural helpers whose vocabulary is Arabic labels.
+export function caseWorkflowName(c: { caseWorkflow?: string | null }, legacyDepartmentName?: string | null): string {
+  const workflow = resolveCaseWorkflow(c, legacyDepartmentName);
+  return workflow ? CaseWorkflowLabels[workflow] : "";
+}
+export function caseDepartmentLabel(id: string | null | undefined, name?: string): string {
+  return id === null ? "اللجان" : name || "غير محدد";
+}
+export function eligibleCaseAssignee(user: { isActive: boolean; canBeAssignedCases: boolean }): boolean {
+  return user.isActive && user.canBeAssignedCases;
+}
+export function suggestedCaseWorkflow(current: string, explicitlyChosen: boolean, departmentName?: string | null): string {
+  return explicitlyChosen ? current : workflowForDepartmentName(departmentName) || "";
+}
+/** An empty edit selection leaves a legacy workflow unresolved; never submit its runtime fallback. */
+export function caseWorkflowSelectionPatch(selection: string): { caseWorkflow?: CaseWorkflowValue } {
+  return selection ? { caseWorkflow: caseWorkflowSchema.parse(selection) } : {};
+}
+
+export function planCaseOwnershipUpdate(
+  existing: Pick<LawCase, "departmentId" | "caseWorkflow" | "currentStage" | "caseClassification" | "clientRole" | "memoRequired" | "isSettlementCase" | "adminCaseSubType">,
+  patch: Partial<Pick<LawCase, "departmentId" | "primaryLawyerId" | "caseWorkflow">>,
+  legacyDepartmentName?: string | null,
+): typeof patch {
+  const result = { ...patch };
+  const oldWorkflow = resolveCaseWorkflow(existing, legacyDepartmentName);
+  if (patch.departmentId !== undefined && patch.departmentId !== existing.departmentId && existing.caseWorkflow == null && patch.caseWorkflow === undefined) {
+    throw new Error("يجب اختيار مسار القضية القديمة صراحة قبل تغيير القسم");
+  }
+  if (result.caseWorkflow !== undefined && (existing.caseWorkflow == null || result.caseWorkflow !== oldWorkflow) && !getCaseStages({ ...existing, ...result }).includes(existing.currentStage)) {
+    throw new Error("المرحلة الحالية لا تتوافق مع مسار القضية المختار؛ لن يتم تغيير المرحلة تلقائياً");
+  }
+  return result;
+}
+export function caseOwnershipError(c: { departmentId?: string | null; primaryLawyerId?: string | null; caseWorkflow?: string | null }, requireWorkflow = true): string | null {
+  if (c.departmentId === undefined || c.departmentId === "") return "يجب اختيار القسم التنظيمي أو بدون قسم";
+  if (c.departmentId === null && !c.primaryLawyerId) return "المسؤول عن القضية مطلوب عند اختيار بدون قسم";
+  if ((requireWorkflow || c.caseWorkflow != null) && !caseWorkflowSchema.safeParse(c.caseWorkflow).success) return "يجب اختيار مسار القضية";
+  return null;
+}
+export function getCaseStages(c: Pick<LawCase, "caseClassification" | "clientRole" | "memoRequired" | "isSettlementCase" | "adminCaseSubType"> & { caseWorkflow?: string | null }, legacyDepartmentName?: string | null): CaseStageValue[] {
+  const name = caseWorkflowName(c, legacyDepartmentName);
+  if (!name) return [];
+  return getStagesForClassification(c.caseClassification, name, c.clientRole || undefined, c.memoRequired, c.isSettlementCase, c.adminCaseSubType);
+}
+
 export const CaseType = {
   GENERAL: "عام",
   COMMERCIAL: "تجاري",
@@ -2542,11 +2610,11 @@ export function getStagesForClassification(
         return adminCaseSubType === "تظلم" ? AdminGrievanceStages
           : adminCaseSubType === "قضية" ? AdminLawsuitStages
           : AdminUnroutedStages;
-      default: return UnderStudyGeneralStages;
+      default: return [];
     }
   }
 
-  return UnderStudyGeneralStages;
+  return [];
 }
 
 // 🔴 DOES THE ADMIN TRACK QUESTION («مسار التظلم» / «مسار الدعوى») STILL APPLY?
@@ -3723,15 +3791,14 @@ export function deriveHearingType(stage?: string | null, departmentName?: string
 }
 
 export function caseSupportsSettlementHearing(
-  lawCase: Pick<LawCase, "caseClassification" | "clientRole" | "memoRequired" | "isSettlementCase" | "adminCaseSubType">,
+  lawCase: Pick<LawCase, "caseClassification" | "clientRole" | "memoRequired" | "isSettlementCase" | "adminCaseSubType"> & { caseWorkflow?: string | null },
   departmentName?: string,
 ): boolean {
-  return getStagesForClassification(lawCase.caseClassification as CaseClassificationValue,
-    departmentName, lawCase.clientRole || undefined, !!lawCase.memoRequired,
-    !!lawCase.isSettlementCase, lawCase.adminCaseSubType).includes(CaseStage.CONCILIATION);
+  return getCaseStages(lawCase, departmentName).includes(CaseStage.CONCILIATION);
 }
 
 export function hearingTypeWorkflowError(lawCase: LawCase, hearingType: string, departmentName?: string): string | null {
+  if (!resolveCaseWorkflow(lawCase, departmentName)) return "يجب تحديد مسار القضية قبل إضافة جلسة";
   if (hearingProducesNoMinutes({ hearingType }) && !caseSupportsSettlementHearing(lawCase, departmentName)) {
     return "لا يمكن اختيار صلح أو تسوية ودية — مسار القضية الحالي لا يتضمن مرحلة مداولة الصلح";
   }
@@ -4198,7 +4265,8 @@ export interface LawCase {
   status: CaseStatusValue;
   currentStage: CaseStageValue;
   stageHistory: CaseStageTransition[];
-  departmentId: string;
+  departmentId: string | null;
+  caseWorkflow: CaseWorkflowValue | null;
   assignedLawyers: string[];
   primaryLawyerId: string | null;
   responsibleLawyerId: string | null;
@@ -5634,7 +5702,9 @@ export const insertCaseSchema = z.object({
   clientId: z.string().optional().nullable().default(""),
   caseType: z.string().min(1, "نوع القضية مطلوب"),
   caseTypeOther: z.string().optional().default(""),
-  departmentId: z.string().optional(),
+  departmentId: z.string().min(1).nullable(),
+  caseWorkflow: caseWorkflowSchema,
+  primaryLawyerId: z.string().nullable().optional(),
   departmentOther: z.string().optional().default(""),
   priority: z.enum(["عاجل", "عالي", "متوسط", "منخفض"]).default("متوسط"),
   courtName: z.string().optional().default(""),
@@ -5668,6 +5738,9 @@ export const insertCaseSchema = z.object({
   // since the admin path was built (boolean, default false). This declares an
   // EXISTING column to an EXISTING validator. No migration.
   grievanceRequired: z.boolean().optional().default(false),
+}).superRefine((value, ctx) => {
+  const error = caseOwnershipError(value);
+  if (error) ctx.addIssue({ code: z.ZodIssueCode.custom, message: error });
 });
 
 export type InsertCase = z.infer<typeof insertCaseSchema>;
@@ -6687,7 +6760,9 @@ export const updateDelegationSchema = z.object({
 
 export const convertConsultationToCaseSchema = z.object({
   targetCaseStage: z.string().min(1, "targetCaseStage مطلوب"),
-  caseDepartmentId: z.string().min(1, "caseDepartmentId مطلوب"),
+  caseDepartmentId: z.string().min(1).nullable(),
+  caseWorkflow: caseWorkflowSchema,
+  primaryLawyerId: z.string().nullable().optional(),
 }).passthrough();
 
 // ---- 2D' V2 — shared workflow body-shape schemas (approved decision c) ----
@@ -8302,7 +8377,8 @@ export const updateCaseSchema = z.object({
   departmentOther: z.string().optional(),
   status: z.string().optional(),
   currentStage: z.string().optional(),
-  departmentId: z.string().optional(),
+  departmentId: z.string().min(1).nullable().optional(),
+  caseWorkflow: caseWorkflowSchema.optional(),
   assignedLawyers: z.array(z.string()).optional(),
   primaryLawyerId: z.string().nullable().optional(),
   responsibleLawyerId: z.string().nullable().optional(),
