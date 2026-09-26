@@ -44,7 +44,7 @@ async function patch(body: Record<string, unknown>, overrides: Record<string, un
     console: { ...console, error: (...args: unknown[]) => errors.push(args) },
     storage: {
       getCaseById: async () => row,
-      getDepartmentById: async (id: string) => ["general", "commercial"].includes(id) ? { id, name: id === "general" ? "عام" : "تجاري" } : undefined,
+      getDepartmentById: async (id: string) => ["general", "commercial", "labor", "administrative"].includes(id) ? { id, name: schema.CaseWorkflowLabels[id as schema.CaseWorkflowValue] } : undefined,
       getUser: async (id: string) => users.find(u => u.id === id),
       updateCase: async (_id: string, update: Record<string, unknown>) => { writes.push({ ...update }); row = { ...row, ...update }; return row; },
       createNotification: async () => {},
@@ -58,7 +58,7 @@ async function patch(body: Record<string, unknown>, overrides: Record<string, un
     ENTITY_TIER_RANK: { assignee: 1, department: 2, manager: 3 },
     prescriptionInputsChanged: () => false,
   };
-  const helpers = ["caseProcedureName", "validateCaseOwnership", "isAssignedLawyer", "caseActorIdentities", "canModifyCaseIdentity", "canModifyCase", "entityActorTier", "canActAtDepartmentTier"];
+  const helpers = ["caseProcedureName", "validateCaseOwnership", "isAssignedLawyer", "caseActorIdentities", "canModifyCaseIdentity", "canModifyCase", "canEditCaseData", "entityActorTier", "canActOnEntityTiered", "canActAtDepartmentTier"];
   for (const name of helpers) {
     const fn = find(routes, n => ts.isFunctionDeclaration(n) && n.name?.text === name);
     globals[name] = compile(`(${fn.getText(routes)})`, globals);
@@ -95,23 +95,84 @@ test("backend null department requires a valid resulting responsible person", as
   for (const primaryLawyerId of ["inactive", "ineligible", "missing"]) assert.equal((await patch({ departmentId: null, primaryLawyerId })).status, 400);
   assert.equal((await patch({ departmentId: null })).row.primaryLawyerId, "old");
 });
-test("explicit unassignment is allowed for a real department; authorization and legacy safeguards remain", async () => {
+test("explicit unassignment is allowed for a real department; authorization and unmapped-legacy safeguards remain", async () => {
   const cleared = await patch({ departmentId: "commercial", primaryLawyerId: null });
   assert.equal(cleared.status, 200);
   assert.equal(cleared.row.primaryLawyerId, null);
   assert.equal((await patch({ departmentId: "commercial" }, {}, "employee")).status, 403);
   assert.equal((await patch({ departmentId: "missing" })).status, 400);
-  const legacy = await patch({ departmentId: "commercial" }, { caseWorkflow: null });
+  const legacy = await patch({ departmentId: "commercial" }, { caseWorkflow: null, departmentId: null });
   assert.equal(legacy.status, 400);
   assert.equal(legacy.writes.length, 0);
 });
+test("legacy General and Labor transfers save the source default without a legacy-required 400", async () => {
+  for (const departmentId of ["general", "labor"]) {
+    for (const currentStage of ["منظورة", "محكوم_حكم_نهائي", "مقفلة"]) {
+      const result = await patch({ departmentId: "commercial" }, { departmentId, caseWorkflow: null, currentStage });
+      assert.equal(result.status, 200, JSON.stringify(result.response));
+      assert.equal(result.row.caseWorkflow, departmentId);
+      assert.equal(result.row.departmentId, "commercial");
+      assert.equal(result.row.currentStage, currentStage);
+      assert.deepEqual(result.row.stageHistory, fixture().stageHistory);
+      assert.equal(result.row.caseClassification, fixture().caseClassification);
+      assert.equal(result.row.primaryLawyerId, "old");
+    }
+  }
+});
+test("legacy defaults are saved on edit/reassignment and selected overrides win", async () => {
+  for (const body of [{ departmentId: "general" }, { primaryLawyerId: "cross" }]) {
+    const result = await patch(body, { caseWorkflow: null });
+    assert.equal(result.status, 200, JSON.stringify(result.response));
+    assert.equal(result.row.caseWorkflow, "general");
+  }
+  for (const departmentId of ["general", null, "unknown"]) {
+    const result = await patch({ departmentId: "commercial", caseWorkflow: "labor" }, { departmentId, caseWorkflow: null, currentStage: "منظورة" });
+    assert.equal(result.status, 200, JSON.stringify(result.response));
+    assert.equal(result.row.caseWorkflow, "labor");
+    assert.equal(result.row.currentStage, "منظورة");
+    assert.deepEqual(result.row.stageHistory, fixture().stageHistory);
+  }
+  for (const departmentId of [null, "unknown"]) {
+    const result = await patch({ departmentId: "commercial" }, { departmentId, caseWorkflow: null });
+    assert.equal(result.status, 400);
+    assert.equal(result.writes.length, 0);
+  }
+});
+test("legacy transfer UI prefills current department, submits default/override, and requires unmapped selection", async () => {
+  for (const [name, expected] of [["عام", "general"], ["عمالي", "labor"], ["أخرى", ""], ["", ""]]) {
+    const row = { ...fixture(), caseWorkflow: null };
+    let form: Record<string, unknown> = {};
+    const payloads: Record<string, unknown>[] = [];
+    const globals: Record<string, unknown> = {
+      ...schema, users, getDepartmentName: () => name, transferCaseId: row.id, getCaseById: () => row,
+      setTransferCaseId: () => {}, setTransferData: (value: Record<string, unknown>) => { form = value; },
+      setShowTransferDialog: () => {}, toast: () => {},
+      apiRequest: async (_method: string, _url: string, body: Record<string, unknown>) => { payloads.push(body); },
+      queryClient: { invalidateQueries: async () => {} },
+    };
+    const callback = (name: string) => {
+      const node = find(ui, n => ts.isVariableDeclaration(n) && n.name.getText(ui) === name) as ts.VariableDeclaration;
+      return compile(`(${node.initializer!.getText(ui)})`, globals) as (row?: unknown) => Promise<void>;
+    };
+    await callback("openTransferDialog")(row);
+    assert.equal(form.caseWorkflow, expected);
+    globals.transferData = { ...form, toDepartmentId: "commercial", reason: "reason" };
+    await callback("handleTransferRequest")();
+    assert.equal(payloads.length, expected ? 1 : 0);
+    if (expected) assert.equal(payloads[0].caseWorkflow, expected);
+    globals.transferData = { ...form, toDepartmentId: "commercial", caseWorkflow: "administrative", reason: "reason" };
+    await callback("handleTransferRequest")();
+    assert.equal(payloads.at(-1)?.caseWorkflow, "administrative");
+    for (const payload of payloads) for (const key of ["currentStage", "stageHistory", "caseClassification", "primaryLawyerId"]) assert.equal(Object.hasOwn(payload, key), false);
+  }
+});
 test("transfer dialog opens at an advanced stage with existing assignee and submits only ownership fields", async () => {
   const row = fixture();
-  let form = { toDepartmentId: "", primaryLawyerId: "", reason: "" };
+  let form = { toDepartmentId: "", primaryLawyerId: "", caseWorkflow: "", reason: "" };
   let opened = false;
   const payloads: Record<string, unknown>[] = [];
   const globals: Record<string, unknown> = {
-    ...schema, users, transferCaseId: row.id, getCaseById: () => row,
+    ...schema, users, getDepartmentName: () => "عام", transferCaseId: row.id, getCaseById: () => row,
     setTransferCaseId: () => {}, setTransferData: (value: typeof form) => { form = value; },
     setShowTransferDialog: (value: boolean) => { opened = value; }, toast: () => {},
     apiRequest: async (_method: string, _url: string, body: Record<string, unknown>) => { payloads.push(body); },

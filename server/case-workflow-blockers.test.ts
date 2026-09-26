@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
-import { CommitteeDecision, CaseClassification, ReviewDecision, workflowDecisionSchema, caseWorkflowName, caseWorkflowSelectionPatch, NO_CASE_DEPARTMENT } from "../shared/schema";
+import { CommitteeDecision, CaseClassification, ReviewDecision, workflowDecisionSchema, caseWorkflowName, caseWorkflowSelectionPatch, resolveCaseWorkflow, MyTaskKind, NO_CASE_DEPARTMENT } from "../shared/schema";
 
 // Execute the checked-out handlers/predicates without importing server startup or a database.
 function source(path: string) {
@@ -20,14 +20,35 @@ function evaluate(node: ts.Node, file: ts.SourceFile, globals: Record<string, un
   return runInNewContext(ts.transpileModule(`(${node.getText(file)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, globals);
 }
 const routes = source("./routes.ts");
-test("existing-case forms keep persisted selection separate from fallback and omit blank workflow in edits", async () => {
+test("My Tasks assignment prefills and submits the legacy source default or user override", () => {
+  const file = source("../client/src/pages/my-tasks.tsx");
+  const open = select(file, n => ts.isFunctionDeclaration(n) && n.name?.text === "openAction");
+  const build = select(file, n => ts.isFunctionDeclaration(n) && n.name?.text === "buildActionRequest");
+  for (const [departmentId, name, expected] of [["source", "عام", "general"], ["source", "عمالي", "labor"], [null, "", ""], ["source", "أخرى", ""]]) {
+    let form: Record<string, unknown> = {};
+    const task = { kind: MyTaskKind.CASE_UNASSIGNED, entityId: "case" };
+    const globals = {
+      MyTaskKind, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowSelectionPatch, EMPTY_FORM: {},
+      isUnassignedTypeTask: () => false,
+      departments: departmentId ? [{ id: departmentId, name }] : [],
+      getCaseById: () => ({ departmentId, caseWorkflow: null, primaryLawyerId: "lawyer" }),
+      setForm: (value: Record<string, unknown>) => { form = value; }, setActionTask: () => {},
+    };
+    (evaluate(open, file, globals) as (task: unknown) => void)(task);
+    assert.equal(form.caseWorkflow, expected);
+    const request = evaluate(build, file, globals) as (task: unknown, form: unknown) => { body: { caseWorkflow?: string } };
+    assert.equal(request(task, { ...form, assignDeptId: "destination" }).body.caseWorkflow, expected || undefined);
+    assert.equal(request(task, { ...form, caseWorkflow: "commercial" }).body.caseWorkflow, "commercial");
+  }
+});
+test("existing-case forms prefill the source department default and submit it or the override", async () => {
   const file = source("../client/src/pages/cases.tsx");
   for (const [open, setter, submit, formName] of [
     ["openEditDialog", "setEditFormData", "handleEditCase", "editFormData"],
     ["openReassignCaseDialog", "setReassignOwnership", "handleReassignCase", "reassignOwnership"],
     ["openAssignDialog", "setAssignData", "handleAssign", "assignData"],
   ]) {
-    for (const selection of ["", "labor"]) {
+    for (const selection of ["general", "labor"]) {
       let form: Record<string, unknown> = {};
       let payload: Record<string, unknown> | undefined;
       const row = { id: "case", departmentId: "dept", primaryLawyerId: "lawyer", caseWorkflow: null, currentStage: "توجيه_العميل_بالتسوية" };
@@ -43,7 +64,7 @@ test("existing-case forms keep persisted selection separate from fallback and om
       };
       const declaration = (name: string) => select(file, n => ts.isVariableDeclaration(n) && n.name.getText(file) === name) as ts.VariableDeclaration;
       (evaluate(declaration(open).initializer!, file, globals) as (row: unknown) => void)(row);
-      assert.equal(form.caseWorkflow, "", `${open}: legacy fallback is not an explicit selection`);
+      assert.equal(form.caseWorkflow, "general", `${open}: default comes from current department`);
       form.caseWorkflow = selection;
       globals[formName] = form;
       await (evaluate(declaration(submit).initializer!, file, globals) as () => Promise<void>)();

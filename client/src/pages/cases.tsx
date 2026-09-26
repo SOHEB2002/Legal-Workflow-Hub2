@@ -946,7 +946,7 @@ export default function CasesPage() {
 
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [transferCaseId, setTransferCaseId] = useState<string | null>(null);
-  const [transferData, setTransferData] = useState({ toDepartmentId: "", primaryLawyerId: "", reason: "" });
+  const [transferData, setTransferData] = useState({ toDepartmentId: "", primaryLawyerId: "", caseWorkflow: "", reason: "" });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
   const [, setLocation] = useLocation();
@@ -1051,7 +1051,7 @@ export default function CasesPage() {
       caseType: (caseItem.caseType || "") as string,
       caseTypeOther: caseItem.caseTypeOther || "",
       departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "",
-      caseWorkflow: caseItem.caseWorkflow || "",
+      caseWorkflow: resolveCaseWorkflow(caseItem, getDepartmentName(caseItem.departmentId)) || "",
       departmentOther: caseItem.departmentOther || "",
       priority: (caseItem.priority || "متوسط") as PriorityType,
       courtName: caseItem.courtName || "",
@@ -1142,7 +1142,7 @@ export default function CasesPage() {
   };
 
   const openReassignCaseDialog = (caseItem: LawCase) => {
-    setReassignOwnership({ departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "", primaryLawyerId: caseItem.primaryLawyerId || "", caseWorkflow: caseItem.caseWorkflow || "" });
+    setReassignOwnership({ departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "", primaryLawyerId: caseItem.primaryLawyerId || "", caseWorkflow: resolveCaseWorkflow(caseItem, getDepartmentName(caseItem.departmentId)) || "" });
     setReassignCaseDialog(caseItem);
   };
 
@@ -1324,7 +1324,7 @@ export default function CasesPage() {
 
   const handleAssign = async () => {
     if (!selectedCase) return;
-    const ownershipError = caseOwnershipError({ departmentId: assignData.departmentId === NO_CASE_DEPARTMENT ? null : assignData.departmentId, primaryLawyerId: assignData.lawyerId, ...caseWorkflowSelectionPatch(assignData.caseWorkflow) }, false);
+    const ownershipError = caseOwnershipError({ departmentId: assignData.departmentId === NO_CASE_DEPARTMENT ? null : assignData.departmentId, primaryLawyerId: assignData.lawyerId, ...caseWorkflowSelectionPatch(assignData.caseWorkflow) });
     if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
 
     const isReassign = !!selectedCase.primaryLawyerId;
@@ -1851,7 +1851,7 @@ export default function CasesPage() {
     setAssignData({
       lawyerId: caseItem.primaryLawyerId || "",
       departmentId: caseItem.departmentId === null ? NO_CASE_DEPARTMENT : caseItem.departmentId || "",
-      caseWorkflow: caseItem.caseWorkflow || "",
+      caseWorkflow: resolveCaseWorkflow(caseItem, getDepartmentName(caseItem.departmentId)) || "",
       internalReviewerId: caseItem.internalReviewerId || "",
       litigatorId: caseItem.litigatorId || "",
     });
@@ -1860,7 +1860,7 @@ export default function CasesPage() {
 
   const openTransferDialog = (caseItem: LawCase) => {
     setTransferCaseId(caseItem.id);
-    setTransferData({ toDepartmentId: "", primaryLawyerId: caseItem.primaryLawyerId || "", reason: "" });
+    setTransferData({ toDepartmentId: "", primaryLawyerId: caseItem.primaryLawyerId || "", caseWorkflow: resolveCaseWorkflow(caseItem, getDepartmentName(caseItem.departmentId)) || "", reason: "" });
     setShowTransferDialog(true);
   };
 
@@ -1868,7 +1868,7 @@ export default function CasesPage() {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
     const departmentId = transferData.toDepartmentId === NO_CASE_DEPARTMENT ? null : transferData.toDepartmentId;
-    const ownershipError = caseOwnershipError({ departmentId, primaryLawyerId: transferData.primaryLawyerId }, false);
+    const ownershipError = caseOwnershipError({ departmentId, primaryLawyerId: transferData.primaryLawyerId, caseWorkflow: transferData.caseWorkflow });
     if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
     if (transferData.primaryLawyerId && !users.some(u => u.id === transferData.primaryLawyerId && eligibleCaseAssignee(u))) {
       toast({ title: "اختر مسؤولاً نشطاً ومؤهلاً لإسناد القضايا", variant: "destructive" });
@@ -1880,6 +1880,7 @@ export default function CasesPage() {
         departmentId,
         ...((caseItem.primaryLawyerId || "") !== transferData.primaryLawyerId
           ? { primaryLawyerId: transferData.primaryLawyerId || null } : {}),
+        ...(transferData.caseWorkflow !== caseItem.caseWorkflow ? caseWorkflowSelectionPatch(transferData.caseWorkflow) : {}),
         transferReason: transferData.reason,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
@@ -3242,7 +3243,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             <DialogTitle>{selectedCase?.primaryLawyerId ? "تعديل الإسناد" : "إسناد القضية"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <CaseOwnershipFields legacyWorkflowLabel={selectedCase?.caseWorkflow == null ? caseWorkflowName(selectedCase || {}, getDepartmentName(selectedCase?.departmentId)) : undefined} key={selectedCase?.id} value={{ ...assignData, primaryLawyerId: assignData.lawyerId }} onChange={value => setAssignData({ ...assignData, ...value, lawyerId: value.primaryLawyerId, internalReviewerId: value.primaryLawyerId === assignData.internalReviewerId ? "" : assignData.internalReviewerId })} />
+            <CaseOwnershipFields key={selectedCase?.id} value={{ ...assignData, primaryLawyerId: assignData.lawyerId }} onChange={value => setAssignData({ ...assignData, ...value, lawyerId: value.primaryLawyerId, internalReviewerId: value.primaryLawyerId === assignData.internalReviewerId ? "" : assignData.internalReviewerId })} />
             <div>
               <Label>المراجع الداخلي</Label>
               <Select
@@ -3602,7 +3603,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            سيتم تحديث القسم التنظيمي مع الحفاظ على المسار والمرحلة. يبقى المسؤول الحالي ما لم تغيّره صراحة.
+            تغيير القسم يحافظ على المرحلة والمسار والمسؤول، إلا إذا غيّرت المسار أو المسؤول صراحة. للقضية القديمة يُحفظ المسار الافتراضي المشتق من قسمها الحالي.
           </p>
           <div className="space-y-4">
             <div>
@@ -3635,6 +3636,15 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
               </Select>
             </div>
             <div>
+              <Label>مسار القضية *</Label>
+              <Select value={transferData.caseWorkflow} onValueChange={caseWorkflow => setTransferData({ ...transferData, caseWorkflow })}>
+                <SelectTrigger data-testid="select-transfer-workflow"><SelectValue placeholder="اختر مسار القضية" /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(CaseWorkflowLabels).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label>سبب التحويل</Label>
               <Textarea
                 data-testid="input-transfer-reason"
@@ -3651,7 +3661,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             </Button>
             <Button
               onClick={handleTransferRequest}
-              disabled={!transferData.toDepartmentId || !transferData.reason.trim() || (transferData.toDepartmentId === NO_CASE_DEPARTMENT && !transferData.primaryLawyerId)}
+              disabled={!transferData.toDepartmentId || !transferData.caseWorkflow || !transferData.reason.trim() || (transferData.toDepartmentId === NO_CASE_DEPARTMENT && !transferData.primaryLawyerId)}
               data-testid="button-submit-transfer"
             >
               <ArrowLeftRight className="w-4 h-4 ml-2" />
@@ -4324,7 +4334,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
               إسناد لمحامي
             </DialogTitle>
           </DialogHeader>
-          <CaseOwnershipFields legacyWorkflowLabel={reassignCaseDialog?.caseWorkflow == null ? caseWorkflowName(reassignCaseDialog || {}, getDepartmentName(reassignCaseDialog?.departmentId)) : undefined} key={reassignCaseDialog?.id} value={reassignOwnership} onChange={setReassignOwnership} />
+          <CaseOwnershipFields key={reassignCaseDialog?.id} value={reassignOwnership} onChange={setReassignOwnership} />
           <DialogFooter className="flex gap-2">
             <Button
               variant="outline"
@@ -4440,7 +4450,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
               </div>
             </div>
 
-            <CaseOwnershipFields legacyWorkflowLabel={cases.find(c => c.id === editCaseId)?.caseWorkflow == null ? caseWorkflowName(cases.find(c => c.id === editCaseId) || {}, getDepartmentName(cases.find(c => c.id === editCaseId)?.departmentId)) : undefined} key={editCaseId} value={editFormData} onChange={value => setEditFormData({ ...editFormData, ...value, internalReviewerId: value.primaryLawyerId === editFormData.internalReviewerId ? "" : editFormData.internalReviewerId })} />
+            <CaseOwnershipFields key={editCaseId} value={editFormData} onChange={value => setEditFormData({ ...editFormData, ...value, internalReviewerId: value.primaryLawyerId === editFormData.internalReviewerId ? "" : editFormData.internalReviewerId })} />
             {/* === Court details === */}
             <div>
               <Label>رقم القضية لدى المحكمة</Label>

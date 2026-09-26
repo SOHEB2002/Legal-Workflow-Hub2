@@ -6,12 +6,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export type CaseOwnershipForm = { departmentId: string; primaryLawyerId: string; caseWorkflow: string };
-export function CaseOwnershipFields({ value, onChange, suggestWorkflow = false, allowedDepartmentId, legacyWorkflowLabel }: {
+export function CaseOwnershipFields({ value, onChange, suggestWorkflow = false, allowedDepartmentId }: {
   value: CaseOwnershipForm;
   onChange: (value: CaseOwnershipForm) => void;
   suggestWorkflow?: boolean;
   allowedDepartmentId?: string;
-  legacyWorkflowLabel?: string;
 }) {
   const { departments } = useDepartments();
   const { users } = useAuth();
@@ -35,12 +34,12 @@ export function CaseOwnershipFields({ value, onChange, suggestWorkflow = false, 
           {users.filter(eligibleCaseAssignee).map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
         </SelectContent></Select>
     </div>
-    <div><Label>مسار القضية{suggestWorkflow ? " *" : ""}</Label>
+    <div><Label>مسار القضية *</Label>
       <Select value={value.caseWorkflow} onValueChange={caseWorkflow => { manuallyChosen.current = true; onChange({ ...value, caseWorkflow }); }}>
         <SelectTrigger><SelectValue placeholder="اختر مسار القضية" /></SelectTrigger><SelectContent>
           {Object.entries(CaseWorkflowLabels).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
         </SelectContent></Select>
-      {!value.caseWorkflow && !suggestWorkflow && <p className="text-sm text-muted-foreground">المسار غير محفوظ. {legacyWorkflowLabel ? `المسار القديم للعرض فقط: ${legacyWorkflowLabel}. ` : ""}لن يحفظ مسار إلا عند اختياره صراحة. يلزم الاختيار قبل تغيير القسم.</p>}
+      {!suggestWorkflow && <p className="text-sm text-muted-foreground">للقضية القديمة يُقترح المسار من قسمها الحالي ويُحفظ عند الحفظ. يمكنك تغييره. إذا لم يظهر مسار افتراضي، يجب اختياره.</p>}
     </div>
   </div>;
 }

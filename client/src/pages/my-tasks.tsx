@@ -1320,7 +1320,7 @@ export default function MyTasksPage() {
   // ----- actions -----
   function openAction(task: MyTaskItem) {
     const c = task.kind === MyTaskKind.CASE_UNASSIGNED ? getCaseById(task.entityId) : undefined;
-    setForm({ ...EMPTY_FORM, ...(c ? { assignDeptId: c.departmentId === null ? NO_CASE_DEPARTMENT : c.departmentId || "", assigneeId: c.primaryLawyerId || "", caseWorkflow: c.caseWorkflow || "" } : {}) });
+    setForm({ ...EMPTY_FORM, ...(c ? { assignDeptId: c.departmentId === null ? NO_CASE_DEPARTMENT : c.departmentId || "", assigneeId: c.primaryLawyerId || "", caseWorkflow: resolveCaseWorkflow(c, departments.find(d => d.id === c.departmentId)?.name) || "" } : {}) });
     setActionTask(task);
   }
 
@@ -1566,7 +1566,7 @@ export default function MyTasksPage() {
     if (mode === "report" && !form.hearingReport.trim()) { toast({ title: "نص التقرير مطلوب", variant: "destructive" }); return; }
     if (mode === "executionRequest" && !form.executionRequestNumber.trim()) { toast({ title: "رقم طلب التنفيذ مطلوب", variant: "destructive" }); return; }
     if (mode === "assign" && actionTask.kind === MyTaskKind.CASE_UNASSIGNED) {
-      const error = caseOwnershipError({ departmentId: form.assignDeptId === NO_CASE_DEPARTMENT ? null : form.assignDeptId, primaryLawyerId: form.assigneeId, ...caseWorkflowSelectionPatch(form.caseWorkflow) }, false);
+      const error = caseOwnershipError({ departmentId: form.assignDeptId === NO_CASE_DEPARTMENT ? null : form.assignDeptId, primaryLawyerId: form.assigneeId, ...caseWorkflowSelectionPatch(form.caseWorkflow) });
       if (error) { toast({ title: error, variant: "destructive" }); return; }
     }
     if (mode === "assign" && actionTask.kind !== MyTaskKind.CASE_UNASSIGNED) {
@@ -2298,7 +2298,7 @@ export default function MyTasksPage() {
               {currentMode === "assign" && (
                 <div className="space-y-3">
                   {actionTask?.kind === MyTaskKind.CASE_UNASSIGNED ? (
-                    <CaseOwnershipFields legacyWorkflowLabel={cases.find(c => c.id === actionTask.entityId)?.caseWorkflow == null ? caseWorkflowName(cases.find(c => c.id === actionTask.entityId) || {}, departments.find(d => d.id === cases.find(c => c.id === actionTask.entityId)?.departmentId)?.name) : undefined} key={actionTask.entityId} value={{ departmentId: form.assignDeptId, primaryLawyerId: form.assigneeId, caseWorkflow: form.caseWorkflow }} onChange={value => setForm({ ...form, assignDeptId: value.departmentId, assigneeId: value.primaryLawyerId, caseWorkflow: value.caseWorkflow })} />
+                    <CaseOwnershipFields key={actionTask.entityId} value={{ departmentId: form.assignDeptId, primaryLawyerId: form.assigneeId, caseWorkflow: form.caseWorkflow }} onChange={value => setForm({ ...form, assignDeptId: value.departmentId, assigneeId: value.primaryLawyerId, caseWorkflow: value.caseWorkflow })} />
                   ) : (
                     <div className="space-y-1"><Label>المسند إليه</Label>
                       <Select value={form.assigneeId} onValueChange={(v) => setForm({ ...form, assigneeId: v })}>

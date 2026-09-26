@@ -49,31 +49,25 @@ test("assignee-only change preserves department, workflow and stage", () => {
   assert.equal(next.caseWorkflow, c.caseWorkflow);
   assert.equal(next.currentStage, c.currentStage);
 });
-test("department-only change preserves explicit workflow; legacy transfer requires a deliberate decision", () => {
-  const c = fixture();
-  assert.deepEqual(planCaseOwnershipUpdate(c, { departmentId: "new" }), { departmentId: "new" });
-  for (const name of ["عام", "أخرى"]) {
-    const legacy = fixture({ caseWorkflow: null });
-    assert.throws(() => planCaseOwnershipUpdate(legacy, { departmentId: "new" }, name), /صراحة/);
-    assert.equal(legacy.caseWorkflow, null);
-    assert.deepEqual(planCaseOwnershipUpdate(legacy, { departmentId: "new", ...caseWorkflowSelectionPatch("labor") }, name), { departmentId: "new", caseWorkflow: "labor" });
-  }
-});
-test("ordinary legacy edit and reassignment omit fallback and preserve null, including ambiguous rows", () => {
-  for (const currentStage of ["دراسة", "توجيه_العميل_بالتسوية"] as const) {
-    const legacy = fixture({ caseWorkflow: null, currentStage });
-    assert.equal(resolveCaseWorkflow(legacy, "عام"), "general");
-    for (const patch of [{ departmentId: legacy.departmentId }, { primaryLawyerId: "other" }]) {
-      const update = planCaseOwnershipUpdate(legacy, { ...patch, ...caseWorkflowSelectionPatch("") }, "عام");
-      assert.equal(Object.hasOwn(update, "caseWorkflow"), false);
-      assert.equal({ ...legacy, ...update }.caseWorkflow, null);
+test("legacy ownership edits materialize current department default without changing procedure", () => {
+  for (const [name, workflow] of [["عام", "general"], ["تجاري", "commercial"], ["عمالي", "labor"], ["إداري", "administrative"]] as const) {
+    const legacy = fixture({ caseWorkflow: null, currentStage: "محكوم_حكم_نهائي" });
+    for (const patch of [{ departmentId: "new" }, { primaryLawyerId: "new" }, { departmentId: legacy.departmentId }]) {
+      const next = { ...legacy, ...planCaseOwnershipUpdate(legacy, patch, name) };
+      assert.equal(next.caseWorkflow, workflow);
+      assert.equal(next.currentStage, legacy.currentStage);
+      assert.equal(next.caseClassification, legacy.caseClassification);
     }
   }
 });
-test("explicit legacy workflow is saved only when compatible, even when it equals the fallback", () => {
-  const ambiguous = fixture({ caseWorkflow: null, currentStage: "توجيه_العميل_بالتسوية" });
-  assert.throws(() => planCaseOwnershipUpdate(ambiguous, caseWorkflowSelectionPatch("general"), "عام"), /المرحلة/);
-  assert.deepEqual(planCaseOwnershipUpdate(ambiguous, caseWorkflowSelectionPatch("labor"), "عام"), { caseWorkflow: "labor" });
+test("unmapped legacy departments require a selected workflow; overrides remain supported", () => {
+  const legacy = fixture({ caseWorkflow: null });
+  for (const name of [null, "أخرى", "unknown"]) {
+    assert.throws(() => planCaseOwnershipUpdate(legacy, { departmentId: "new" }, name), /اختر مسار/);
+    assert.deepEqual(planCaseOwnershipUpdate(legacy, caseWorkflowSelectionPatch("labor"), name), { caseWorkflow: "labor" });
+  }
+  assert.deepEqual(planCaseOwnershipUpdate(legacy, caseWorkflowSelectionPatch("labor"), "عام"), { caseWorkflow: "labor" });
+  assert.deepEqual(planCaseOwnershipUpdate(fixture(), { departmentId: "new" }, "إداري"), { departmentId: "new" });
 });
 test("General path ignores Administrative organizational ownership", () => {
   assert.deepEqual(getCaseStages(fixture(), "إداري"), UnderStudyGeneralStages);

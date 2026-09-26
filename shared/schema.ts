@@ -1703,7 +1703,7 @@ export function eligibleCaseAssignee(user: { isActive: boolean; canBeAssignedCas
 export function suggestedCaseWorkflow(current: string, explicitlyChosen: boolean, departmentName?: string | null): string {
   return explicitlyChosen ? current : workflowForDepartmentName(departmentName) || "";
 }
-/** An empty edit selection leaves a legacy workflow unresolved; never submit its runtime fallback. */
+/** Omit an empty selection; the ownership planner validates unresolved legacy rows. */
 export function caseWorkflowSelectionPatch(selection: string): { caseWorkflow?: CaseWorkflowValue } {
   return selection ? { caseWorkflow: caseWorkflowSchema.parse(selection) } : {};
 }
@@ -1715,10 +1715,11 @@ export function planCaseOwnershipUpdate(
 ): typeof patch {
   const result = { ...patch };
   const oldWorkflow = resolveCaseWorkflow(existing, legacyDepartmentName);
-  if (patch.departmentId !== undefined && patch.departmentId !== existing.departmentId && existing.caseWorkflow == null && patch.caseWorkflow === undefined) {
-    throw new Error("يجب اختيار مسار القضية القديمة صراحة قبل تغيير القسم");
+  if (existing.caseWorkflow == null && patch.caseWorkflow === undefined) {
+    if (!oldWorkflow) throw new Error("تعذر تحديد مسار افتراضي من القسم الحالي؛ اختر مسار القضية");
+    result.caseWorkflow = oldWorkflow;
   }
-  if (result.caseWorkflow !== undefined && (existing.caseWorkflow == null || result.caseWorkflow !== oldWorkflow) && !getCaseStages({ ...existing, ...result }).includes(existing.currentStage)) {
+  if (result.caseWorkflow !== undefined && result.caseWorkflow !== oldWorkflow && !getCaseStages({ ...existing, ...result }).includes(existing.currentStage)) {
     throw new Error("المرحلة الحالية لا تتوافق مع مسار القضية المختار؛ لن يتم تغيير المرحلة تلقائياً");
   }
   return result;

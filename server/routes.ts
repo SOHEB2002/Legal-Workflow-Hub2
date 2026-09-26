@@ -5020,7 +5020,7 @@ export async function registerRoutes(
         } catch (error) {
           return res.status(400).json({ error: error instanceof Error ? error.message : "تعذر تغيير مسار القضية" });
         }
-        if (req.body.caseWorkflow !== undefined && (existing.caseWorkflow == null || req.body.caseWorkflow !== resolveCaseWorkflow(existing, await caseProcedureName(existing)))) {
+        if (req.body.caseWorkflow !== undefined && req.body.caseWorkflow !== resolveCaseWorkflow(existing, await caseProcedureName(existing))) {
           const nextCase = { ...existing, ...req.body };
           const memos = await storage.getMemosByCase(existing.id);
           for (const memo of memos.filter(isActiveMemo)) {
@@ -15774,9 +15774,6 @@ export async function registerRoutes(
       const settlementProbeCase = settlementProbeCaseId
         ? await storage.getCaseById(settlementProbeCaseId)
         : null;
-      if (data.result === HearingResult.JURISDICTION_DECLINED && settlementProbeCase?.caseWorkflow == null) {
-        return res.status(400).json({ error: "يجب اختيار مسار القضية القديمة صراحة قبل تغيير القسم" });
-      }
       const resultDepartment = settlementProbeCase?.departmentId
         ? await storage.getDepartmentById(settlementProbeCase.departmentId) : undefined;
       if (settlementProbeCase && !resolveCaseWorkflow(settlementProbeCase, resultDepartment?.name)) return res.status(400).json({ error: "يجب تحديد مسار القضية قبل تسجيل نتيجة الجلسة" });
@@ -16190,6 +16187,8 @@ export async function registerRoutes(
           await storage.updateCase(effectiveCaseId, {
             ...caseUpdate,
             departmentId: toDeptId,
+            ...(existingCase.caseWorkflow == null
+              ? { caseWorkflow: resolveCaseWorkflow(existingCase, await caseProcedureName(existingCase)) } : {}),
           });
           if (reqUser) {
             try {
