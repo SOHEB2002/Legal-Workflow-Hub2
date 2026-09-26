@@ -9,6 +9,7 @@ import * as schema from "../shared/schema";
 const read = (path: string) => ts.createSourceFile(path, readFileSync(new URL(path, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, path.endsWith("tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 const routes = read("./routes.ts");
 const ui = read("../client/src/pages/cases.tsx");
+const ownershipUi = read("../client/src/components/case-ownership-fields.tsx");
 function find(root: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node {
   const matches: ts.Node[] = [];
   function visit(node: ts.Node) { if (predicate(node)) matches.push(node); ts.forEachChild(node, visit); }
@@ -194,4 +195,51 @@ test("transfer dialog opens at an advanced stage with existing assignee and subm
   assert.equal(Object.hasOwn(payloads[1], "primaryLawyerId"), false);
   assert.equal(payloads[2].primaryLawyerId, null);
   for (const payload of payloads) for (const key of ["currentStage", "stageHistory", "caseWorkflow", "caseClassification"]) assert.equal(Object.hasOwn(payload, key), false);
+});
+
+function selectionCallback(file: ts.SourceFile, valueExpression: string, globals: Record<string, unknown>) {
+  const attribute = find(file, n => ts.isJsxAttribute(n) && n.name.getText(file) === "onValueChange"
+    && n.parent.getText(file).includes(`value={${valueExpression}}`)) as ts.JsxAttribute;
+  const initializer = attribute.initializer as ts.JsxExpression;
+  return compile(`(${initializer.expression!.getText(file)})`, globals) as (value: string) => void;
+}
+
+test("transfer and shared edit/assignment controls suggest destination workflow, allow overrides, and clear for no department", () => {
+  const departments = [{ id: "general", name: "عام" }, { id: "labor", name: "عمالي" }, { id: "administrative", name: "إداري" }];
+  for (const shared of [false, true]) for (const [source, destination, expected] of [["general", "labor", "labor"], ["administrative", "general", "general"]]) {
+    let form = { departmentId: source, toDepartmentId: source, primaryLawyerId: "old", caseWorkflow: source };
+    const original = { ...form };
+    const file = shared ? ownershipUi : ui;
+    const makeGlobals = () => ({
+      ...schema, departments, getDepartmentName: (id: string) => departments.find(d => d.id === id)?.name,
+      value: form, transferData: form, suggestWorkflow: false, manuallyChosen: { current: true },
+      onChange: (value: typeof form) => { form = value; }, setTransferData: (value: typeof form) => { form = value; },
+    });
+    const departmentField = shared ? "value.departmentId" : "transferData.toDepartmentId";
+    const workflowField = shared ? "value.caseWorkflow" : "transferData.caseWorkflow";
+    selectionCallback(file, departmentField, makeGlobals())(destination);
+    assert.equal(form.caseWorkflow, expected);
+    assert.equal(form.primaryLawyerId, original.primaryLawyerId);
+    selectionCallback(file, workflowField, makeGlobals())("commercial");
+    assert.equal(form.caseWorkflow, "commercial", "manual override remains selected");
+    selectionCallback(file, departmentField, makeGlobals())(schema.NO_CASE_DEPARTMENT);
+    assert.equal(form.caseWorkflow, "", "no-department clears even an earlier override");
+    assert.match(schema.caseOwnershipError({ departmentId: null, primaryLawyerId: form.primaryLawyerId, caseWorkflow: form.caseWorkflow })!, /مسار/);
+    selectionCallback(file, workflowField, makeGlobals())("labor");
+    assert.equal(schema.caseOwnershipError({ departmentId: null, primaryLawyerId: form.primaryLawyerId, caseWorkflow: form.caseWorkflow }), null);
+    assert.match(schema.caseOwnershipError({ departmentId: null, primaryLawyerId: "", caseWorkflow: form.caseWorkflow })!, /المسؤول/);
+  }
+});
+
+test("saving a destination suggestion or override persists the final selection without changing stage/history/classification/assignee", async () => {
+  for (const [source, destination, workflow] of [["general", "labor", "labor"], ["administrative", "general", "general"], ["general", "labor", "commercial"]]) {
+    const result = await patch({ departmentId: destination, caseWorkflow: workflow }, { departmentId: source, caseWorkflow: source, currentStage: "منظورة" });
+    assert.equal(result.status, 200, JSON.stringify(result.response));
+    assert.equal(result.row.departmentId, destination);
+    assert.equal(result.row.caseWorkflow, workflow);
+    assert.equal(result.row.currentStage, "منظورة");
+    assert.deepEqual(result.row.stageHistory, fixture().stageHistory);
+    assert.equal(result.row.caseClassification, fixture().caseClassification);
+    assert.equal(result.row.primaryLawyerId, "old");
+  }
 });

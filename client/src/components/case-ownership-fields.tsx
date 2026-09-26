@@ -19,7 +19,7 @@ export function CaseOwnershipFields({ value, onChange, suggestWorkflow = false, 
     <div><Label>القسم التنظيمي *</Label>
       <Select value={value.departmentId} onValueChange={departmentId => {
         const name = departments.find(d => d.id === departmentId)?.name;
-        const caseWorkflow = suggestWorkflow && !manuallyChosen.current
+        const caseWorkflow = !suggestWorkflow || !manuallyChosen.current
           ? suggestedCaseWorkflow(value.caseWorkflow, false, name) : value.caseWorkflow;
         onChange({ ...value, departmentId, caseWorkflow });
       }}><SelectTrigger><SelectValue placeholder="اختر القسم التنظيمي" /></SelectTrigger><SelectContent>
@@ -39,7 +39,7 @@ export function CaseOwnershipFields({ value, onChange, suggestWorkflow = false, 
         <SelectTrigger><SelectValue placeholder="اختر مسار القضية" /></SelectTrigger><SelectContent>
           {Object.entries(CaseWorkflowLabels).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
         </SelectContent></Select>
-      {!suggestWorkflow && <p className="text-sm text-muted-foreground">للقضية القديمة يُقترح المسار من قسمها الحالي ويُحفظ عند الحفظ. يمكنك تغييره. إذا لم يظهر مسار افتراضي، يجب اختياره.</p>}
+      {!suggestWorkflow && <p className="text-sm text-muted-foreground">عند تغيير القسم يُقترح مساره تلقائياً ويمكنك تغييره قبل الحفظ. بدون قسم يتطلب اختيار المسار يدوياً.</p>}
     </div>
   </div>;
 }

@@ -1,6 +1,6 @@
 import { matchesCaseFilters } from "@shared/case-filters";
 import { CaseOwnershipFields } from "@/components/case-ownership-fields";
-import { eligibleCaseAssignee, caseWorkflowSelectionPatch, CaseWorkflow, CaseWorkflowLabels, caseDepartmentLabel, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowName, caseOwnershipError, type CaseWorkflowValue } from "@shared/schema";
+import { workflowForDepartmentName, eligibleCaseAssignee, caseWorkflowSelectionPatch, CaseWorkflow, CaseWorkflowLabels, caseDepartmentLabel, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowName, caseOwnershipError, type CaseWorkflowValue } from "@shared/schema";
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { useLocation } from "wouter";
@@ -1083,6 +1083,8 @@ export default function CasesPage() {
 
   const handleEditCase = async () => {
     if (!editCaseId) return;
+    const ownershipError = caseOwnershipError({ ...editFormData, departmentId: editFormData.departmentId === NO_CASE_DEPARTMENT ? null : editFormData.departmentId });
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
     const original = cases.find(c => c.id === editCaseId);
     const lawyerChanged =
       (original?.primaryLawyerId || "") !== (editFormData.primaryLawyerId || "");
@@ -1148,6 +1150,8 @@ export default function CasesPage() {
 
   const handleReassignCase = async () => {
     if (!reassignCaseDialog) return;
+    const ownershipError = caseOwnershipError({ ...reassignOwnership, departmentId: reassignOwnership.departmentId === NO_CASE_DEPARTMENT ? null : reassignOwnership.departmentId });
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
     try {
       await updateCase(reassignCaseDialog.id, { primaryLawyerId: reassignOwnership.primaryLawyerId || null, departmentId: reassignOwnership.departmentId === NO_CASE_DEPARTMENT ? null : reassignOwnership.departmentId, ...caseWorkflowSelectionPatch(reassignOwnership.caseWorkflow) });
       toast({ title: "تم إسناد القضية لمحامي جديد" });
@@ -3603,14 +3607,14 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            تغيير القسم يحافظ على المرحلة والمسار والمسؤول، إلا إذا غيّرت المسار أو المسؤول صراحة. للقضية القديمة يُحفظ المسار الافتراضي المشتق من قسمها الحالي.
+            يُقترح المسار حسب القسم الجديد ويمكنك تغييره قبل الحفظ. بدون قسم يتطلب اختيار المسار والمسؤول. تُحفظ المرحلة والمسؤول الحالي ما لم تغيّره.
           </p>
           <div className="space-y-4">
             <div>
               <Label>القسم التنظيمي *</Label>
               <Select
                 value={transferData.toDepartmentId}
-                onValueChange={(value) => setTransferData({ ...transferData, toDepartmentId: value })}
+                onValueChange={(value) => setTransferData({ ...transferData, toDepartmentId: value, caseWorkflow: value === NO_CASE_DEPARTMENT ? "" : workflowForDepartmentName(getDepartmentName(value)) || "" })}
               >
                 <SelectTrigger data-testid="select-transfer-department">
                   <SelectValue placeholder="اختر القسم" />
