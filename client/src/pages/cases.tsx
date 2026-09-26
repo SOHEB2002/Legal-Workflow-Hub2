@@ -1,6 +1,6 @@
 import { matchesCaseFilters } from "@shared/case-filters";
 import { CaseOwnershipFields } from "@/components/case-ownership-fields";
-import { caseWorkflowSelectionPatch, CaseWorkflow, CaseWorkflowLabels, caseDepartmentLabel, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowName, caseOwnershipError, type CaseWorkflowValue } from "@shared/schema";
+import { eligibleCaseAssignee, caseWorkflowSelectionPatch, CaseWorkflow, CaseWorkflowLabels, caseDepartmentLabel, NO_CASE_DEPARTMENT, resolveCaseWorkflow, caseWorkflowName, caseOwnershipError, type CaseWorkflowValue } from "@shared/schema";
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { formatHijriDateFull, formatDualDate, arabicWeekday } from "@/lib/date-utils";
 import { useLocation } from "wouter";
@@ -946,7 +946,7 @@ export default function CasesPage() {
 
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [transferCaseId, setTransferCaseId] = useState<string | null>(null);
-  const [transferData, setTransferData] = useState({ toDepartmentId: "", reason: "" });
+  const [transferData, setTransferData] = useState({ toDepartmentId: "", primaryLawyerId: "", reason: "" });
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [caseToDelete, setCaseToDelete] = useState<any>(null);
   const [, setLocation] = useLocation();
@@ -1859,33 +1859,36 @@ export default function CasesPage() {
   };
 
   const openTransferDialog = (caseItem: LawCase) => {
-    const currentStageIndex = CaseStagesOrder.indexOf(caseItem.currentStage);
-    const reviewStageIndex = CaseStagesOrder.indexOf(CaseStage.REVIEW_COMMITTEE);
-    if (currentStageIndex >= reviewStageIndex) {
-      toast({ title: "لا يمكن تحويل القضية", description: "القضية في مرحلة متقدمة من المراجعة ولا يمكن تحويلها", variant: "destructive" });
-      return;
-    }
     setTransferCaseId(caseItem.id);
-    setTransferData({ toDepartmentId: "", reason: "" });
+    setTransferData({ toDepartmentId: "", primaryLawyerId: caseItem.primaryLawyerId || "", reason: "" });
     setShowTransferDialog(true);
   };
 
   const handleTransferRequest = async () => {
     const caseItem = transferCaseId ? getCaseById(transferCaseId) : null;
     if (!caseItem || !transferData.toDepartmentId || !transferData.reason.trim()) return;
+    const departmentId = transferData.toDepartmentId === NO_CASE_DEPARTMENT ? null : transferData.toDepartmentId;
+    const ownershipError = caseOwnershipError({ departmentId, primaryLawyerId: transferData.primaryLawyerId }, false);
+    if (ownershipError) { toast({ title: ownershipError, variant: "destructive" }); return; }
+    if (transferData.primaryLawyerId && !users.some(u => u.id === transferData.primaryLawyerId && eligibleCaseAssignee(u))) {
+      toast({ title: "اختر مسؤولاً نشطاً ومؤهلاً لإسناد القضايا", variant: "destructive" });
+      return;
+    }
     try {
       // Organizational transfer preserves procedure and assignments; the server audits it.
       await apiRequest("PATCH", `/api/cases/${caseItem.id}`, {
-        departmentId: transferData.toDepartmentId === NO_CASE_DEPARTMENT ? null : transferData.toDepartmentId,
+        departmentId,
+        ...((caseItem.primaryLawyerId || "") !== transferData.primaryLawyerId
+          ? { primaryLawyerId: transferData.primaryLawyerId || null } : {}),
         transferReason: transferData.reason,
       });
       await queryClient.invalidateQueries({ queryKey: ["/api/cases"] });
-      toast({ title: "تم تحويل القضية", description: "تم تغيير القسم التنظيمي مع الحفاظ على المسؤول والمسار والمرحلة" });
+      toast({ title: "تم تحويل القضية", description: "تم تحديث القسم التنظيمي والمسؤول حسب الاختيار مع الحفاظ على المسار والمرحلة" });
+      setShowTransferDialog(false);
+      setTransferCaseId(null);
     } catch (e: any) {
       toast({ title: "فشل تحويل القضية", description: e?.message || "حدث خطأ", variant: "destructive" });
     }
-    setShowTransferDialog(false);
-    setTransferCaseId(null);
   };
 
   const openRejectDialog = (caseItem: LawCase) => {
@@ -3599,11 +3602,11 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            سيتم تحديث القسم التنظيمي مع الحفاظ على المسؤول ومسار القضية ومرحلتها.
+            سيتم تحديث القسم التنظيمي مع الحفاظ على المسار والمرحلة. يبقى المسؤول الحالي ما لم تغيّره صراحة.
           </p>
           <div className="space-y-4">
             <div>
-              <Label>القسم المراد التحويل إليه</Label>
+              <Label>القسم التنظيمي *</Label>
               <Select
                 value={transferData.toDepartmentId}
                 onValueChange={(value) => setTransferData({ ...transferData, toDepartmentId: value })}
@@ -3618,6 +3621,16 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
                     .map((dept) => (
                       <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
                     ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>المسؤول عن القضية{transferData.toDepartmentId === NO_CASE_DEPARTMENT ? " *" : " (اختياري)"}</Label>
+              <Select value={transferData.primaryLawyerId || "__none__"} onValueChange={value => setTransferData({ ...transferData, primaryLawyerId: value === "__none__" ? "" : value })}>
+                <SelectTrigger data-testid="select-transfer-responsible"><SelectValue placeholder="اختر المسؤول" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">بدون مسؤول</SelectItem>
+                  {users.filter(eligibleCaseAssignee).map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -3638,7 +3651,7 @@ const defaultCreateDepartmentId = isDeptScopedCreator ? (user?.departmentId || "
             </Button>
             <Button
               onClick={handleTransferRequest}
-              disabled={!transferData.toDepartmentId || !transferData.reason.trim()}
+              disabled={!transferData.toDepartmentId || !transferData.reason.trim() || (transferData.toDepartmentId === NO_CASE_DEPARTMENT && !transferData.primaryLawyerId)}
               data-testid="button-submit-transfer"
             >
               <ArrowLeftRight className="w-4 h-4 ml-2" />
